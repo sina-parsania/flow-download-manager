@@ -1,0 +1,18 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Add Downloads…" : {
+      "comment" : "Menu item and toolbar action to open the Add sheet",
+      "extractionState" : "manual"
+    },
+    "Downloads" : {
+      "comment" : "Main window title",
+      "extractionState" : "manual"
+    },
+    "No downloads yet" : {
+      "comment" : "Empty library headline",
+      "extractionState" : "manual"
+    }
+  },
+  "version" : "1.0"
+}

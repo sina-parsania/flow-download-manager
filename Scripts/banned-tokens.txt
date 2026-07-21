@@ -1,0 +1,17 @@
+# Banned incomplete-work token patterns (extended regular expressions), one per line.
+# Lines starting with '#' are ignored. This is the reviewed policy data file for
+# `make incomplete-work-scan` (08-validation-commands.md §5); it is the single path
+# excluded from the scan so the token literals here do not self-match.
+TODO
+FIXME
+HACK
+TEMP
+PLACEHOLDER
+NOT_IMPLEMENTED
+fatalError\("Not implemented
+XCTSkip
+\.skip\(
+it\.skip
+describe\.skip
+test\.skip
+\.only\(

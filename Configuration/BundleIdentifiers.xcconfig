@@ -1,0 +1,16 @@
+// Bundle identifiers — REPOSITORY CONFIGURATION VALUES SUPPLIED BY THE OWNER.
+//
+// The `org.downloadmanager.local` prefix below is an explicitly NON-PUBLIC local
+// development identifier (see 06-licensing-security-privacy.md and the Phase 0
+// bootstrap prompt §1). It is NOT a real organization domain and MUST be replaced
+// by the release owner with their registered Developer ID team domain before any
+// signed/notarized public distribution. Agents must not invent a real domain.
+//
+// The LaunchAgent label MUST equal the agent bundle identifier so SMAppService and
+// launchd address the same service.
+
+DM_BUNDLE_ID_PREFIX = org.downloadmanager.local
+
+DM_APP_BUNDLE_ID = $(DM_BUNDLE_ID_PREFIX).DownloadManager
+DM_AGENT_BUNDLE_ID = $(DM_BUNDLE_ID_PREFIX).DownloadEngineAgent
+DM_LAUNCH_AGENT_LABEL = $(DM_BUNDLE_ID_PREFIX).DownloadEngineAgent

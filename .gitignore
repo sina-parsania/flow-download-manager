@@ -1,0 +1,34 @@
+# Build products
+.build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Generated project (source of truth is project.yml; regenerate with `make project`)
+DownloadManager.xcodeproj/
+
+# Evidence bundles are generated locally and not tracked (paths recorded in handoffs)
+Artifacts/validation/*/
+!Artifacts/validation/.gitkeep
+
+# Test service scratch state
+.build/test-services/
+
+# SwiftPM
+.swiftpm/
+Package.resolved.backup
+
+# Private planning / specification pack — intentionally NOT published.
+# These are the owner's internal plans (master plan, PRD, architecture,
+# phase prompts). Kept locally; referenced by AGENTS.md but not distributed.
+macos-download-manager-prompt-pack/
+
+# Local IDE state
+.vscode/
+
+# macOS
+.DS_Store
+
+# Tooling caches
+Scripts/.tool-cache/

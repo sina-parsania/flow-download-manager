@@ -1,0 +1,38 @@
+# SwiftLint configuration — syntax-aware safety rules for first-party code
+# (05-quality-testing-release-gates.md §6). Run strict via `make lint`.
+included:
+  - Sources
+  - Tests
+excluded:
+  - .build
+  - DerivedData
+  - macos-download-manager-prompt-pack
+  - Artifacts
+
+opt_in_rules:
+  - force_unwrapping
+  - empty_count
+  - fatal_error_message
+  - overridden_super_call
+  - prohibited_super_call
+  - unowned_variable_capture
+  - private_action
+  - private_outlet
+  - redundant_nil_coalescing
+  - toggle_bool
+  - yoda_condition
+
+disabled_rules:
+  # Width/formatting is owned by SwiftFormat (.swiftformat); avoid double-reporting.
+  - line_length
+  - trailing_comma
+  - opening_brace
+  # `todo` overlaps the dedicated banned-token scan (Scripts/banned-tokens.txt).
+  - todo
+
+analyzer_rules:
+  - unused_import
+
+force_cast: error
+force_try: error
+force_unwrapping: error

@@ -1,0 +1,22 @@
+# SwiftFormat configuration (pinned behavior for the format-check gate).
+--swiftversion 6.0
+--exclude .build,DerivedData,macos-download-manager-prompt-pack,Artifacts
+
+# Keep the SPDX license identifier as the first line of every file (otherwise
+# sortImports can push it below the imports).
+--header "// SPDX-License-Identifier: GPL-3.0-or-later"
+
+--indent 4
+--maxwidth 120
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--commas inline
+--trimwhitespace always
+--stripunusedargs closure-only
+--self remove
+--importgrouping testable-bottom
+--emptybraces no-space
+
+# Keep behavior conservative; these rules only reformat, never change semantics.
+--disable redundantReturn, wrapMultilineStatementBraces

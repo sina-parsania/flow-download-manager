@@ -1,0 +1,71 @@
+# Download Manager CI — stable gates across supported macOS lanes.
+# This workflow NEVER signs, notarizes, or uses production secrets (they are not
+# required for ordinary development — 00-master-plan.md §6, bootstrap prompt §7).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast-gate:
+    name: Fast gate (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Public stable OS lanes (00-master-plan.md §4). macOS 26 image name is
+        # provided by the runner owner once GitHub publishes it.
+        runner: [macos-14, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select stable Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.app || echo "Xcode 26 not on this image; using default"
+      - name: Bootstrap tools
+        run: make bootstrap-tools
+      - name: Doctor
+        run: make doctor
+      - name: Fast gate
+        run: make verify-fast
+
+  full-gate:
+    name: Full stable gate (macos-15)
+    runs-on: macos-15
+    needs: fast-gate
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select stable Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.app || echo "Xcode 26 not on this image; using default"
+      - name: Bootstrap tools
+        run: make bootstrap-tools
+      - name: Integration + recovery
+        run: |
+          make test-integration
+          make test-recovery
+      - name: Sanitizers (separate passes)
+        run: |
+          make test-asan
+          make test-tsan
+      - name: Static analysis
+        run: make analyze
+      - name: Dependency audit
+        run: make audit-dependencies
+      - name: Collect evidence
+        if: always()
+        run: make dependency-manifest && Scripts/incomplete-work-scan.sh
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase0-evidence-${{ github.run_id }}
+          path: Artifacts/validation/
+          if-no-files-found: ignore

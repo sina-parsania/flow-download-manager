@@ -1,0 +1,195 @@
+# XcodeGen project definition — the SINGLE SOURCE OF TRUTH for DownloadManager.xcodeproj.
+#
+# The .xcodeproj is generated (and gitignored); regenerate with `make project`
+# (xcodegen). Do not hand-edit. First-party modules live in the local SwiftPM
+# package (Package.swift, product set "DownloadKit"); this project hosts only the
+# app + agent executables and the test bundles. See Documentation/adr/0001-build-system.md.
+name: DownloadManager
+
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  minimumXcodeGenVersion: "2.44.0"
+  groupSortPosition: top
+
+configFiles:
+  Debug: Configuration/Shared.xcconfig
+  Release: Configuration/Shared.xcconfig
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+  configs:
+    Debug:
+      SWIFT_COMPILATION_MODE: incremental
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      GCC_OPTIMIZATION_LEVEL: "0"
+      ONLY_ACTIVE_ARCH: "YES"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      GCC_OPTIMIZATION_LEVEL: "s"
+
+packages:
+  DownloadKit:
+    path: .
+  # Same exact pin as the local package's dependency, referenced directly so
+  # database test targets can `import GRDB` (e.g. to build a deliberately-failing
+  # migrator for the interrupted-migration test).
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    exactVersion: 7.11.1
+
+targets:
+
+  # --- Per-user LaunchAgent executable (embedded in the app bundle) ---
+  DownloadEngineAgent:
+    type: tool
+    platform: macOS
+    sources: [Sources/EngineAgentMain]
+    dependencies:
+      - package: DownloadKit
+        product: EngineAgent
+      - package: DownloadKit
+        product: Domain
+      - package: DownloadKit
+        product: Persistence
+      - package: DownloadKit
+        product: XPCContracts
+      - package: DownloadKit
+        product: SharedObservability
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_AGENT_BUNDLE_ID)
+
+  # --- Main application (SwiftUI @main) ---
+  DownloadManager:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/App
+      - path: Resources/Localizable.xcstrings
+      # LaunchAgent plist embedded at Contents/Library/LaunchAgents/ for SMAppService.
+      - path: Resources/LaunchAgents/org.downloadmanager.local.DownloadEngineAgent.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
+    dependencies:
+      - package: DownloadKit
+        product: Presentation
+      - target: DownloadEngineAgent
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_APP_BUNDLE_ID)
+    info:
+      path: Configuration/DownloadManager-Info.plist
+      properties:
+        CFBundleDisplayName: Download Manager
+        CFBundleName: Download Manager
+        LSMinimumSystemVersion: "14.0"
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: "GPL-3.0-or-later"
+        NSPrincipalClass: NSApplication
+
+  # --- Tests ---
+  UnitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/Unit]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_BUNDLE_ID_PREFIX).UnitTests
+    dependencies:
+      - package: DownloadKit
+        product: Domain
+      - package: DownloadKit
+        product: EngineAgent
+      - package: DownloadKit
+        product: XPCContracts
+      - package: DownloadKit
+        product: Persistence
+      - package: DownloadKit
+        product: SharedObservability
+      - package: DownloadKit
+        product: SharedSecurity
+      - package: DownloadKit
+        product: Presentation
+      - package: GRDB
+        product: GRDB
+
+  IntegrationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/Integration]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_BUNDLE_ID_PREFIX).IntegrationTests
+    dependencies:
+      - package: DownloadKit
+        product: TestFaultService
+
+  RecoveryTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/Recovery]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_BUNDLE_ID_PREFIX).RecoveryTests
+    dependencies:
+      - package: DownloadKit
+        product: Persistence
+
+  PerformanceTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/Performance]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_BUNDLE_ID_PREFIX).PerformanceTests
+    dependencies:
+      - package: DownloadKit
+        product: Presentation
+
+  UITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [Tests/UI]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_BUNDLE_ID_PREFIX).UITests
+        TEST_TARGET_NAME: DownloadManager
+    dependencies:
+      - target: DownloadManager
+
+schemes:
+  DownloadManager:
+    build:
+      targets:
+        DownloadManager: all
+        DownloadEngineAgent: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - UnitTests
+        - IntegrationTests
+        - RecoveryTests
+        - PerformanceTests
+        - UITests

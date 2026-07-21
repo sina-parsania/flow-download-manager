@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd property list for the per-user DownloadEngineAgent, registered through
+  SMAppService and embedded at Contents/Library/LaunchAgents/ in the app bundle
+  (02-architecture.md §2, 09-research-decisions.md §3).
+
+  The `Label` and `MachServices` key MUST equal the agent bundle identifier /
+  EngineXPC.machServiceName so launchd on-demand launch and XPC addressing use one
+  identity. These are owner-supplied local development values
+  (Configuration/BundleIdentifiers.xcconfig); the release owner replaces the prefix
+  and keeps this file in sync.
+
+  launchd launches the agent on demand when the app connects to the Mach service;
+  no RunAtLoad is set.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.downloadmanager.local.DownloadEngineAgent</string>
+
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/DownloadEngineAgent</string>
+
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>org.downloadmanager.local.DownloadManager</string>
+    </array>
+
+    <key>MachServices</key>
+    <dict>
+        <key>org.downloadmanager.local.DownloadEngineAgent</key>
+        <true/>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Adaptive</string>
+</dict>
+</plist>

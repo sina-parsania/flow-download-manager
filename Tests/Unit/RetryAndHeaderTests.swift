@@ -47,4 +47,22 @@ final class HeaderValidatorTests: XCTestCase {
             XCTAssertEqual(error as? HeaderValidator.ParseError, .malformedJSON)
         }
     }
+
+    func testParseHeaderLinesAndEncode() throws {
+        let text = "X-Token: abc\nUser-Agent: DM/1\n"
+        let parsed = try HeaderValidator.parseHeaderLines(text)
+        XCTAssertEqual(parsed.count, 2)
+        XCTAssertEqual(parsed[0].name, "X-Token")
+        XCTAssertEqual(parsed[0].value, "abc")
+        let json = try HeaderValidator.encodeExtraHeadersJSON(parsed)
+        let fromJSON = try HeaderValidator.parseExtraHeadersJSON(json)
+        XCTAssertEqual(fromJSON.count, 2)
+
+        XCTAssertThrowsError(try HeaderValidator.parseHeaderLines("Host: evil.test")) { error in
+            XCTAssertEqual(error as? HeaderValidator.LineParseError, .invalidHeader(1))
+        }
+        XCTAssertThrowsError(try HeaderValidator.parseHeaderLines("not-a-header")) { error in
+            XCTAssertEqual(error as? HeaderValidator.LineParseError, .invalidLine(1))
+        }
+    }
 }

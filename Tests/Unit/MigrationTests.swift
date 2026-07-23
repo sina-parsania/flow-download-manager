@@ -24,7 +24,8 @@ final class MigrationTests: XCTestCase {
             "batches", "resources", "jobs", "attempts", "segments", "events",
             "categories", "category_rules", "projects", "tags", "job_tags",
             "destination_profiles", "credential_profiles", "proxy_profiles",
-            "cookie_profiles", "schedules", "post_processing_pipelines", "host_observations"
+            "cookie_profiles", "bandwidth_policies", "schedules",
+            "post_processing_pipelines", "host_observations"
         ]
         XCTAssertTrue(expected.isSubset(of: tables), "missing: \(expected.subtracting(tables))")
         XCTAssertTrue(try db.isAtCurrentSchemaVersion())
@@ -116,6 +117,18 @@ final class MigrationTests: XCTestCase {
             XCTAssertTrue(names.contains("cookieProfileID"))
             XCTAssertTrue(names.contains("customHeadersJSON"))
         }
+    }
+
+    func testV2ToV3MigrationAddsBandwidthPolicies() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let v2 = try EngineDatabase(url: url, migrator: SchemaMigrator.v2Only)
+        XCTAssertFalse(try v2.tableNames().contains("bandwidth_policies"))
+
+        let v3 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
+        XCTAssertTrue(try v3.isAtCurrentSchemaVersion())
+        XCTAssertTrue(try v3.tableNames().contains("bandwidth_policies"))
     }
 
     func testInterruptedMigrationRollsBack() throws {

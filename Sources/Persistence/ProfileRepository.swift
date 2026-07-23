@@ -208,7 +208,19 @@ public enum ProfileRepository {
         }
     }
 
+    public static func listCookieProfiles(
+        database: EngineDatabase
+    ) throws -> [(id: String, displayName: String, storageRelativePath: String)] {
+        try database.pool.read { db in
+            try CookieProfileRecord
+                .order(Column("displayName").asc)
+                .fetchAll(db)
+                .map { ($0.id, $0.displayName, $0.storageRelativePath) }
+        }
+    }
+
     /// Absolute cookie-jar path under Application Support for a cookie profile.
+    /// Creates the parent directory and an empty jar file when missing.
     public static func cookieJarPath(
         database: EngineDatabase,
         profileID: String,
@@ -221,7 +233,49 @@ public enum ProfileRepository {
         let url = applicationSupportRoot.appendingPathComponent(record.storageRelativePath)
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            let created = FileManager.default.createFile(atPath: url.path, contents: Data(), attributes: nil)
+            guard created else { throw ProfileRepositoryError.encodingFailed }
+        }
         return url.path
+    }
+
+    /// Well-known id for the single global bandwidth policy edited in Settings.
+    public static let globalBandwidthPolicyID = "00000000-0000-7000-8000-0000000000b1"
+
+    public static func upsertBandwidthPolicy(
+        database: EngineDatabase,
+        id: String,
+        name: String,
+        windowsJSON: String,
+        maxBytesPerSecond: Int64
+    ) throws {
+        guard maxBytesPerSecond >= 0 else {
+            throw ProfileRepositoryError.encodingFailed
+        }
+        try database.pool.write { db in
+            try BandwidthPolicyRecord(
+                id: id,
+                name: name,
+                windowsJSON: windowsJSON,
+                maxBytesPerSecond: maxBytesPerSecond
+            ).save(db)
+        }
+    }
+
+    public static func fetchBandwidthPolicy(
+        database: EngineDatabase,
+        id: String
+    ) throws -> BandwidthPolicyRecord? {
+        try database.pool.read { db in
+            try BandwidthPolicyRecord.fetchOne(db, key: id)
+        }
+    }
+
+    public static func fetchGlobalBandwidthPolicy(
+        database: EngineDatabase
+    ) throws -> BandwidthPolicyRecord? {
+        try fetchBandwidthPolicy(database: database, id: globalBandwidthPolicyID)
     }
 
     /// One-shot schedule: `constraints` holds ISO-8601 `startAt` instant.

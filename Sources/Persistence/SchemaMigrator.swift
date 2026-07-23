@@ -18,6 +18,7 @@ public enum SchemaMigrator {
         migrator.eraseDatabaseOnSchemaChange = false
         registerV1(&migrator)
         registerV2(&migrator)
+        registerV3(&migrator)
         return migrator
     }
 
@@ -26,6 +27,15 @@ public enum SchemaMigrator {
         var migrator = DatabaseMigrator()
         migrator.eraseDatabaseOnSchemaChange = false
         registerV1(&migrator)
+        return migrator
+    }
+
+    /// Migrator that stops after v2 — used by migration round-trip tests.
+    public static var v2Only: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = false
+        registerV1(&migrator)
+        registerV2(&migrator)
         return migrator
     }
 
@@ -38,6 +48,9 @@ public enum SchemaMigrator {
 
     /// Stable identifier for the v2 migration (job↔profile binding + cookie jars).
     public static let v2Identifier = "v2-transfer-profiles"
+
+    /// Stable identifier for the v3 migration (calendar bandwidth policies).
+    public static let v3Identifier = "v3-bandwidth-policies"
 
     private static func registerV1(_ migrator: inout DatabaseMigrator) {
         // CHECK domains sourced from the Domain enums so DB and code cannot drift.
@@ -244,6 +257,18 @@ public enum SchemaMigrator {
                 t.add(column: "cookieProfileID", .text)
                     .references("cookie_profiles", onDelete: .setNull)
                 t.add(column: "customHeadersJSON", .text)
+            }
+        }
+    }
+
+    private static func registerV3(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration(v3Identifier) { db in
+            try db.create(table: "bandwidth_policies") { t in
+                t.primaryKey("id", .text)
+                t.column("name", .text).notNull()
+                // JSON array of { weekday, startMinute, endMinute }; empty = always active.
+                t.column("windowsJSON", .text).notNull()
+                t.column("maxBytesPerSecond", .integer).notNull().check { $0 >= 0 }
             }
         }
     }

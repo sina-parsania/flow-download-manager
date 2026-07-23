@@ -82,6 +82,47 @@ public struct SettingsView: View {
                 }
             }
 
+            Section("Cookies") {
+                if model.cookies.isEmpty {
+                    Text("No cookie profiles yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.cookies, id: \.id) { profile in
+                        Text(profile.displayName)
+                    }
+                }
+                DisclosureGroup("Add cookie profile", isExpanded: $model.showAddCookie) {
+                    TextField("Display name", text: $model.cookieDisplayName)
+                    Button("Save cookie profile") {
+                        Task { await model.saveCookie() }
+                    }
+                    .disabled(!model.canSaveCookie || model.isBusy)
+                }
+                Text("Creates an empty cookie jar under Application Support. Values never enter SQLite.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Bandwidth") {
+                TextField("Max bytes/second (0 = unlimited)", text: $model.bandwidthMaxBytesText)
+                Toggle(
+                    "Only between 00:00 and 08:00 daily",
+                    isOn: $model.bandwidthNightWindowOnly
+                )
+                Text(
+                    "When the night window is on, new downloads start only in that local window "
+                        + "and use the max rate. Outside the window, queued jobs wait."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                Button("Save bandwidth policy") {
+                    Task { await model.saveBandwidth() }
+                }
+                .disabled(!model.canSaveBandwidth || model.isBusy)
+            }
+
             Section("Projects & Tags") {
                 if model.projects.isEmpty {
                     Text("No projects yet.")
@@ -170,11 +211,13 @@ public struct SettingsView: View {
 private final class SettingsModel: ObservableObject {
     @Published var credentials: [CredentialProfileSnapshot] = []
     @Published var proxies: [ProxyProfileSnapshot] = []
+    @Published var cookies: [CookieProfileSnapshot] = []
     @Published var projects: [ProjectSnapshot] = []
     @Published var tags: [TagSnapshot] = []
     @Published var categoryRules: [CategoryRuleSnapshot] = []
     @Published var showAddCredential = false
     @Published var showAddProxy = false
+    @Published var showAddCookie = false
     @Published var showAddProject = false
     @Published var showAddTag = false
     @Published var showAddRule = false
@@ -185,6 +228,9 @@ private final class SettingsModel: ObservableObject {
     @Published var proxyKind = "http"
     @Published var proxyHost = ""
     @Published var proxyPortText = "8080"
+    @Published var cookieDisplayName = ""
+    @Published var bandwidthMaxBytesText = "0"
+    @Published var bandwidthNightWindowOnly = false
     @Published var projectName = ""
     @Published var tagName = ""
     @Published var ruleExtension = ""
@@ -205,6 +251,15 @@ private final class SettingsModel: ObservableObject {
         !proxyDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !proxyHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && Int(proxyPortText).map { (1 ... 65535).contains($0) } == true
+    }
+
+    var canSaveCookie: Bool {
+        !cookieDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var canSaveBandwidth: Bool {
+        Int64(bandwidthMaxBytesText.trimmingCharacters(in: .whitespacesAndNewlines))
+            .map { $0 >= 0 } == true
     }
 
     var canSaveProject: Bool {
@@ -237,11 +292,22 @@ private final class SettingsModel: ObservableObject {
             let profiles = try await client.listProfiles()
             credentials = profiles.credentials
             proxies = profiles.proxies
+            cookies = profiles.cookies
             let organization = try await client.listOrganization()
             projects = organization.projects
             tags = organization.tags
             let rules = try await client.listCategoryRules()
             categoryRules = rules.rules
+            let bandwidth = try await client.getBandwidthPolicy()
+            if let policy = bandwidth.policy {
+                bandwidthMaxBytesText = String(policy.maxBytesPerSecond)
+                let windows = (try? BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)) ?? []
+                bandwidthNightWindowOnly =
+                    windows == [BandwidthWindowEvaluator.dailyMidnightToEightPreset]
+            } else {
+                bandwidthMaxBytesText = "0"
+                bandwidthNightWindowOnly = false
+            }
             statusMessage = nil
             statusIsError = false
         } catch {
@@ -294,6 +360,49 @@ private final class SettingsModel: ObservableObject {
             await reload()
         } catch {
             statusMessage = "Unable to save proxy profile."
+            statusIsError = true
+        }
+    }
+
+    func saveCookie() async {
+        guard canSaveCookie else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            _ = try await client.upsertCookieProfile(
+                displayName: cookieDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            cookieDisplayName = ""
+            showAddCookie = false
+            statusMessage = "Cookie profile saved."
+            statusIsError = false
+            await reload()
+        } catch {
+            statusMessage = "Unable to save cookie profile."
+            statusIsError = true
+        }
+    }
+
+    func saveBandwidth() async {
+        guard canSaveBandwidth,
+              let maxBytes = Int64(bandwidthMaxBytesText.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let windows: [BandwidthWindow] = bandwidthNightWindowOnly
+                ? [BandwidthWindowEvaluator.dailyMidnightToEightPreset]
+                : []
+            let windowsJSON = try BandwidthWindowEvaluator.encodeWindowsJSON(windows)
+            _ = try await client.upsertBandwidthPolicy(
+                windowsJSON: windowsJSON,
+                maxBytesPerSecond: maxBytes
+            )
+            statusMessage = "Bandwidth policy saved."
+            statusIsError = false
+            await reload()
+        } catch {
+            statusMessage = "Unable to save bandwidth policy."
             statusIsError = true
         }
     }

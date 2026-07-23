@@ -79,14 +79,46 @@ public enum EngineControlInterface {
         )
 
         interface.setClasses(
+            allowedClasses([UpsertCookieProfileRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertCookieProfile(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([UpsertCookieProfileResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertCookieProfile(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
             allowedClasses([
                 ListProfilesResponse.self,
                 CredentialProfileSnapshot.self,
                 ProxyProfileSnapshot.self,
+                CookieProfileSnapshot.self,
                 NSString.self,
                 NSArray.self
             ]),
             for: #selector(EngineControlProtocol.listProfiles(requestID:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
+            allowedClasses([UpsertBandwidthPolicyRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertBandwidthPolicy(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([UpsertBandwidthPolicyResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertBandwidthPolicy(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([
+                GetBandwidthPolicyResponse.self,
+                BandwidthPolicySnapshot.self,
+                NSString.self
+            ]),
+            for: #selector(EngineControlProtocol.getBandwidthPolicy(requestID:reply:)),
             argumentIndex: 0, ofReply: true
         )
 

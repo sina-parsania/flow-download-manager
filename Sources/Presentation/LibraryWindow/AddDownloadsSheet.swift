@@ -19,11 +19,15 @@ struct AddDownloadsSheet: View {
 
     @State private var credentials: [CredentialProfileSnapshot] = []
     @State private var proxies: [ProxyProfileSnapshot] = []
+    @State private var cookies: [CookieProfileSnapshot] = []
     @State private var projects: [ProjectSnapshot] = []
     @State private var classificationRules: [CategoryRulesEngine.Rule] = []
     @State private var selectedCredentialID = ""
     @State private var selectedProxyID = ""
+    @State private var selectedCookieID = ""
     @State private var selectedProjectID = ""
+    @State private var customHeadersText = ""
+    @State private var headersError: String?
     @State private var useStartAt = false
     @State private var startAt = Date().addingTimeInterval(3600)
 
@@ -72,10 +76,39 @@ struct AddDownloadsSheet: View {
                         Text(profile.displayName).tag(profile.id)
                     }
                 }
+                Picker("Cookie profile", selection: $selectedCookieID) {
+                    Text("None").tag("")
+                    ForEach(cookies, id: \.id) { profile in
+                        Text(profile.displayName).tag(profile.id)
+                    }
+                }
                 Picker("Project", selection: $selectedProjectID) {
                     Text("None").tag("")
                     ForEach(projects, id: \.id) { project in
                         Text(project.name).tag(project.id)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Custom headers")
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $customHeadersText)
+                        .font(.body.monospaced())
+                        .frame(minHeight: 56, maxHeight: 80)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                        )
+                        .accessibilityLabel("Custom headers")
+                        .onChange(of: customHeadersText) { _, _ in
+                            headersError = nil
+                        }
+                    Text("One Header-Name: value per line.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let headersError {
+                        Text(headersError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
                 Toggle("Start at", isOn: $useStartAt)
@@ -118,7 +151,7 @@ struct AddDownloadsSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 560, height: 580)
+        .frame(width: 560, height: 720)
         .task {
             if let pending = library.pendingClipboardText {
                 input = pending
@@ -158,6 +191,7 @@ struct AddDownloadsSheet: View {
             let profiles = try await library.engineClient.listProfiles()
             credentials = profiles.credentials
             proxies = profiles.proxies
+            cookies = profiles.cookies
             let organization = try await library.engineClient.listOrganization()
             projects = organization.projects
             let rulesResponse = try await library.engineClient.listCategoryRules()
@@ -274,6 +308,19 @@ struct AddDownloadsSheet: View {
             scheduleISO = formatter.string(from: startAt)
         }
 
+        var customHeadersJSON: String?
+        let trimmedHeaders = customHeadersText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedHeaders.isEmpty {
+            do {
+                let parsed = try HeaderValidator.parseHeaderLines(trimmedHeaders)
+                customHeadersJSON = try HeaderValidator.encodeExtraHeadersJSON(parsed)
+                headersError = nil
+            } catch {
+                headersError = "Invalid custom headers. Use Header-Name: value lines."
+                return
+            }
+        }
+
         do {
             let response = try await library.engineClient.enqueueBatch(
                 source: "paste",
@@ -281,6 +328,8 @@ struct AddDownloadsSheet: View {
                 items: items,
                 credentialProfileID: selectedCredentialID.isEmpty ? nil : selectedCredentialID,
                 proxyProfileID: selectedProxyID.isEmpty ? nil : selectedProxyID,
+                cookieProfileID: selectedCookieID.isEmpty ? nil : selectedCookieID,
+                customHeadersJSON: customHeadersJSON,
                 projectID: selectedProjectID.isEmpty ? nil : selectedProjectID,
                 scheduleStartAtISO8601: scheduleISO
             )

@@ -61,10 +61,28 @@ public protocol EngineControlProtocol {
         reply: @escaping @Sendable (UpsertProxyProfileResponse?, NSError?) -> Void
     )
 
-    /// List credential and proxy profiles for Settings.
+    /// Create or replace a cookie jar profile (path only).
+    func upsertCookieProfile(
+        _ request: UpsertCookieProfileRequest,
+        reply: @escaping @Sendable (UpsertCookieProfileResponse?, NSError?) -> Void
+    )
+
+    /// List credential, proxy, and cookie profiles for Settings.
     func listProfiles(
         requestID: String,
         reply: @escaping @Sendable (ListProfilesResponse?, NSError?) -> Void
+    )
+
+    /// Create or replace the global bandwidth calendar policy (FR-QUE).
+    func upsertBandwidthPolicy(
+        _ request: UpsertBandwidthPolicyRequest,
+        reply: @escaping @Sendable (UpsertBandwidthPolicyResponse?, NSError?) -> Void
+    )
+
+    /// Fetch the global bandwidth policy, if configured.
+    func getBandwidthPolicy(
+        requestID: String,
+        reply: @escaping @Sendable (GetBandwidthPolicyResponse?, NSError?) -> Void
     )
 
     /// List projects and tags (FR-ORG minimal).

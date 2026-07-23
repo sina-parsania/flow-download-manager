@@ -31,7 +31,8 @@ public final class EngineClient: ObservableObject {
             clientRole: .app,
             capabilities: [
                 "enqueueBatch", "listJobs", "controlJob",
-                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
+                "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
+                "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
                 "listCategoryRules", "upsertCategoryRule", "listEvents"
             ]
@@ -235,6 +236,90 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.upsertProxyProfile(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func upsertCookieProfile(
+        displayName: String,
+        profileID: String = UUID().uuidString.lowercased()
+    ) async throws -> UpsertCookieProfileResponse {
+        try await connect()
+        let request = UpsertCookieProfileRequest(
+            requestID: UUID().uuidString,
+            profileID: profileID,
+            displayName: displayName
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.upsertCookieProfile(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func upsertBandwidthPolicy(
+        name: String = "Global",
+        windowsJSON: String,
+        maxBytesPerSecond: Int64,
+        policyID: String = "00000000-0000-7000-8000-0000000000b1"
+    ) async throws -> UpsertBandwidthPolicyResponse {
+        try await connect()
+        let request = UpsertBandwidthPolicyRequest(
+            requestID: UUID().uuidString,
+            policyID: policyID,
+            name: name,
+            windowsJSON: windowsJSON,
+            maxBytesPerSecond: maxBytesPerSecond
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.upsertBandwidthPolicy(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func getBandwidthPolicy() async throws -> GetBandwidthPolicyResponse {
+        try await connect()
+        let requestID = UUID().uuidString
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.getBandwidthPolicy(requestID: requestID) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

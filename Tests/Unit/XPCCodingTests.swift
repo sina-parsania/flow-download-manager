@@ -148,4 +148,29 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertEqual(decoded?.type, "state.changed")
         XCTAssertEqual(decoded?.sanitizedPayload, #"{"state":"queued"}"#)
     }
+
+    func testCookieAndBandwidthDTORoundTrip() throws {
+        let cookie = CookieProfileSnapshot(id: UUID().uuidString, displayName: "Browser")
+        let decodedCookie = try roundTrip(cookie, as: CookieProfileSnapshot.self)
+        XCTAssertEqual(decodedCookie?.displayName, "Browser")
+
+        let policy = BandwidthPolicySnapshot(
+            id: "00000000-0000-7000-8000-0000000000b1",
+            name: "Global",
+            windowsJSON: #"[]"#,
+            maxBytesPerSecond: 1_000_000
+        )
+        let decodedPolicy = try roundTrip(policy, as: BandwidthPolicySnapshot.self)
+        XCTAssertEqual(decodedPolicy?.maxBytesPerSecond, 1_000_000)
+
+        let list = ListProfilesResponse(
+            requestID: UUID().uuidString,
+            credentials: [],
+            proxies: [],
+            cookies: [cookie]
+        )
+        let decodedList = try roundTrip(list, as: ListProfilesResponse.self)
+        XCTAssertEqual(decodedList?.cookies.count, 1)
+        XCTAssertEqual(decodedList?.cookies.first?.displayName, "Browser")
+    }
 }

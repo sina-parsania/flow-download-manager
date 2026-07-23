@@ -101,6 +101,17 @@ public actor TransferOrchestrator {
         while isRunning {
             do {
                 _ = try ProfileRepository.promoteDueScheduledJobs(database: database)
+                if let policy = try ProfileRepository.fetchGlobalBandwidthPolicy(database: database) {
+                    let windows = try BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)
+                    if !BandwidthWindowEvaluator.isActive(
+                        now: Date(),
+                        calendar: .current,
+                        windows: windows
+                    ) {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                        continue
+                    }
+                }
                 let ids = try JobRepository.fetchQueuedJobIDs(database: database, limit: 1)
                 if let jobID = ids.first {
                     await runJob(jobID)
@@ -357,6 +368,12 @@ public actor TransferOrchestrator {
         let parsedHeaders = try HeaderValidator.parseExtraHeadersJSON(details.customHeadersJSON)
         options.extraHeaders = parsedHeaders.map {
             TransferCore.HTTPHeader(name: $0.name, value: $0.value)
+        }
+        if let policy = try ProfileRepository.fetchGlobalBandwidthPolicy(database: database) {
+            let windows = try BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)
+            if BandwidthWindowEvaluator.isActive(now: Date(), calendar: .current, windows: windows) {
+                options.maxBytesPerSecond = policy.maxBytesPerSecond
+            }
         }
         return options
     }

@@ -165,6 +165,21 @@ public struct CookieProfileRecord: Codable, FetchableRecord, PersistableRecord, 
     }
 }
 
+public struct BandwidthPolicyRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "bandwidth_policies"
+    public var id: String
+    public var name: String
+    public var windowsJSON: String
+    public var maxBytesPerSecond: Int64
+
+    public init(id: String, name: String, windowsJSON: String, maxBytesPerSecond: Int64) {
+        self.id = id
+        self.name = name
+        self.windowsJSON = windowsJSON
+        self.maxBytesPerSecond = maxBytesPerSecond
+    }
+}
+
 public struct HostObservationRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "host_observations"
     public var host: String

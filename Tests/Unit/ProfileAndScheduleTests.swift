@@ -71,6 +71,8 @@ final class ProfileAndScheduleTests: XCTestCase {
         )
         XCTAssertTrue(path.hasSuffix("cookies/\(id).jar"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: (path as NSString).deletingLastPathComponent))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), Data())
     }
 
     func testListCredentialAndProxyProfiles() throws {
@@ -138,5 +140,23 @@ final class ProfileAndScheduleTests: XCTestCase {
         XCTAssertEqual(promoted, [jobID])
         let rows = try JobRepository.fetchJobRows(database: database)
         XCTAssertEqual(rows.first?.job.state, "queued")
+    }
+
+    func testGlobalBandwidthPolicyRoundTrip() throws {
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-bw-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        let database = try EngineDatabase(url: dbURL)
+        XCTAssertNil(try ProfileRepository.fetchGlobalBandwidthPolicy(database: database))
+        try ProfileRepository.upsertBandwidthPolicy(
+            database: database,
+            id: ProfileRepository.globalBandwidthPolicyID,
+            name: "Global",
+            windowsJSON: #"[{"weekday":null,"startMinute":0,"endMinute":480}]"#,
+            maxBytesPerSecond: 50000
+        )
+        let loaded = try XCTUnwrap(ProfileRepository.fetchGlobalBandwidthPolicy(database: database))
+        XCTAssertEqual(loaded.maxBytesPerSecond, 50000)
+        XCTAssertTrue(loaded.windowsJSON.contains("480"))
     }
 }

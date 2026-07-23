@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Application
 import Domain
 import Foundation
 import Persistence
@@ -53,7 +54,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var commandCache: [String: JobCommandResponse] = [:]
     private var credentialCache: [String: UpsertCredentialProfileResponse] = [:]
     private var proxyCache: [String: UpsertProxyProfileResponse] = [:]
+    private var cookieCache: [String: UpsertCookieProfileResponse] = [:]
     private var listProfilesCache: [String: ListProfilesResponse] = [:]
+    private var bandwidthUpsertCache: [String: UpsertBandwidthPolicyResponse] = [:]
+    private var bandwidthGetCache: [String: GetBandwidthPolicyResponse] = [:]
     private var listOrganizationCache: [String: ListOrganizationResponse] = [:]
     private var upsertProjectCache: [String: UpsertProjectResponse] = [:]
     private var upsertTagCache: [String: UpsertTagResponse] = [:]
@@ -84,7 +88,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             databaseVersion: services.databaseVersion,
             capabilities: [
                 "health", "enqueueBatch", "listJobs", "controlJob",
-                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
+                "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
+                "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
                 "listCategoryRules", "upsertCategoryRule", "listEvents"
             ]
@@ -156,6 +161,12 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     return
                 }
                 scheduleStartAt = parsed
+            }
+            do {
+                _ = try HeaderValidator.parseExtraHeadersJSON(request.customHeadersJSON)
+            } catch {
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid customHeadersJSON"))
+                return
             }
             let result = try JobRepository.insertBatch(
                 database: database,
@@ -466,10 +477,15 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                         port: meta.port
                     )
                 }
+            let cookies = try ProfileRepository.listCookieProfiles(database: database)
+                .map { id, displayName, _ in
+                    CookieProfileSnapshot(id: id, displayName: displayName)
+                }
             let response = ListProfilesResponse(
                 requestID: requestID,
                 credentials: credentials,
-                proxies: proxies
+                proxies: proxies,
+                cookies: cookies
             )
             lock.lock()
             listProfilesCache[requestID] = response
@@ -477,6 +493,152 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list profiles failed"))
+        }
+    }
+
+    func upsertCookieProfile(
+        _ request: UpsertCookieProfileRequest,
+        reply: @escaping @Sendable (UpsertCookieProfileResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = cookieCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try ProfileRepository.upsertCookieProfile(
+                database: database,
+                id: request.profileID,
+                displayName: request.displayName
+            )
+            _ = try ProfileRepository.cookieJarPath(
+                database: database,
+                profileID: request.profileID,
+                applicationSupportRoot: Self.applicationSupportRoot()
+            )
+            let response = UpsertCookieProfileResponse(
+                requestID: request.requestID,
+                profileID: request.profileID
+            )
+            lock.lock()
+            cookieCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "cookie profile upsert failed"))
+        }
+    }
+
+    func upsertBandwidthPolicy(
+        _ request: UpsertBandwidthPolicyRequest,
+        reply: @escaping @Sendable (UpsertBandwidthPolicyResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = bandwidthUpsertCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            _ = try BandwidthWindowEvaluator.parseWindowsJSON(request.windowsJSON)
+            try ProfileRepository.upsertBandwidthPolicy(
+                database: database,
+                id: request.policyID,
+                name: request.name,
+                windowsJSON: request.windowsJSON,
+                maxBytesPerSecond: request.maxBytesPerSecond
+            )
+            let response = UpsertBandwidthPolicyResponse(
+                requestID: request.requestID,
+                policyID: request.policyID
+            )
+            lock.lock()
+            bandwidthUpsertCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch is BandwidthWindowEvaluator.ParseError {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid windowsJSON"))
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "bandwidth policy upsert failed"))
+        }
+    }
+
+    func getBandwidthPolicy(
+        requestID: String,
+        reply: @escaping @Sendable (GetBandwidthPolicyResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = bandwidthGetCache[requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let record = try ProfileRepository.fetchGlobalBandwidthPolicy(database: database)
+            let snapshot = record.map {
+                BandwidthPolicySnapshot(
+                    id: $0.id,
+                    name: $0.name,
+                    windowsJSON: $0.windowsJSON,
+                    maxBytesPerSecond: $0.maxBytesPerSecond
+                )
+            }
+            let response = GetBandwidthPolicyResponse(requestID: requestID, policy: snapshot)
+            lock.lock()
+            bandwidthGetCache[requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "get bandwidth policy failed"))
         }
     }
 
@@ -820,6 +982,15 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
 
     private func isValidRequestID(_ requestID: String) -> Bool {
         requestID.count <= EngineXPC.maxPayloadStringLength && UUID(uuidString: requestID) != nil
+    }
+
+    private static func applicationSupportRoot() -> URL {
+        let base = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent(EngineXPC.machServiceName, isDirectory: true)
     }
 }
 

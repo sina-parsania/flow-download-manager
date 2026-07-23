@@ -58,6 +58,53 @@ public enum HeaderValidator {
         }
         return headers
     }
+
+    public enum LineParseError: Error, Equatable, Sendable {
+        case empty
+        case invalidLine(Int)
+        case invalidHeader(Int)
+    }
+
+    /// Parses `"Header-Name: value"` lines (one header per non-empty line) into validated pairs.
+    public static func parseHeaderLines(_ text: String) throws -> [(name: String, value: String)] {
+        let lines = text.split(whereSeparator: \.isNewline)
+        var headers: [(name: String, value: String)] = []
+        headers.reserveCapacity(lines.count)
+        for (index, rawLine) in lines.enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            guard let colon = line.firstIndex(of: ":") else {
+                throw LineParseError.invalidLine(index + 1)
+            }
+            let name = String(line[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            guard validate(name: name, value: value) else {
+                throw LineParseError.invalidHeader(index + 1)
+            }
+            headers.append((name, value))
+        }
+        return headers
+    }
+
+    /// Encodes validated headers as `[{ "name": "...", "value": "..." }, ...]`.
+    public static func encodeExtraHeadersJSON(
+        _ headers: [(name: String, value: String)]
+    ) throws -> String {
+        var array: [[String: String]] = []
+        array.reserveCapacity(headers.count)
+        for header in headers {
+            guard validate(name: header.name, value: header.value) else {
+                throw ParseError.invalidHeader
+            }
+            array.append(["name": header.name, "value": header.value])
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: array),
+              let string = String(data: data, encoding: .utf8)
+        else {
+            throw ParseError.malformedJSON
+        }
+        return string
+    }
 }
 
 /// Proxy profile kinds claimed by the UI must match runtime capability (FR-TRN-004).

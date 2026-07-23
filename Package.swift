@@ -10,11 +10,29 @@ import PackageDescription
 // Targets are added as their sources land per slice; SwiftPM requires each declared
 // target to contain at least one source file.
 
-// First-party targets build in Swift 6 language mode (complete strict concurrency)
-// with warnings as errors. `unsafeFlags` is permitted because this is a local
-// (path) package, never consumed by a versioned dependent.
+/// First-party targets build in Swift 6 language mode (complete strict concurrency)
+/// with warnings as errors. `unsafeFlags` is permitted because this is a local
+/// (path) package, never consumed by a versioned dependent.
 let strict: [SwiftSetting] = [
-    .unsafeFlags(["-warnings-as-errors"]),
+    .unsafeFlags(["-warnings-as-errors"])
+]
+
+// Pinned static libcurl stack produced by `make vendor-libcurl`
+// (VendorBuild/scripts/build-libcurl.sh). Relative to the package root.
+let vendorInclude = "VendorBuild/prefix/arm64/include"
+let vendorLib = "VendorBuild/prefix/arm64/lib"
+let vendorLinkFlags: [String] = [
+    "-L\(vendorLib)",
+    "-lcurl",
+    "-lnghttp2",
+    "-lssh2",
+    "-lssl",
+    "-lcrypto",
+    "-lz",
+    "-framework", "Security",
+    "-framework", "SystemConfiguration",
+    "-framework", "CoreFoundation",
+    "-framework", "CoreServices"
 ]
 
 let package = Package(
@@ -22,17 +40,20 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "Domain", targets: ["Domain"]),
+        .library(name: "Application", targets: ["Application"]),
         .library(name: "XPCContracts", targets: ["XPCContracts"]),
         .library(name: "Persistence", targets: ["Persistence"]),
         .library(name: "SharedObservability", targets: ["SharedObservability"]),
         .library(name: "SharedSecurity", targets: ["SharedSecurity"]),
+        .library(name: "TransferCurlBridge", targets: ["TransferCurlBridge"]),
+        .library(name: "TransferCore", targets: ["TransferCore"]),
         .library(name: "EngineAgent", targets: ["EngineAgent"]),
         .library(name: "Presentation", targets: ["Presentation"]),
         .library(name: "TestFaultService", targets: ["TestFaultService"]),
-        .executable(name: "test-services", targets: ["test-services"]),
+        .executable(name: "test-services", targets: ["test-services"])
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1"),
+        .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1")
     ],
     targets: [
         // Objective-C SPI shim isolating NSXPCConnection.auditToken.
@@ -42,11 +63,45 @@ let package = Package(
             publicHeadersPath: "include"
         ),
 
+        // Vendored libcurl headers + static link of the pinned arm64 stack.
+        .target(
+            name: "CCurl",
+            path: "Sources/CCurl",
+            publicHeadersPath: "include",
+            cSettings: [
+                .unsafeFlags(["-I\(vendorInclude)"])
+            ],
+            linkerSettings: [
+                .unsafeFlags(vendorLinkFlags)
+            ]
+        ),
+
         .target(name: "Domain", path: "Sources/Domain", swiftSettings: strict),
 
         .target(name: "SharedObservability", path: "Sources/SharedObservability", swiftSettings: strict),
 
         .target(name: "SharedSecurity", path: "Sources/SharedSecurity", swiftSettings: strict),
+
+        .target(
+            name: "TransferCurlBridge",
+            dependencies: ["CCurl"],
+            path: "Sources/TransferCurlBridge",
+            swiftSettings: strict
+        ),
+
+        .target(
+            name: "TransferCore",
+            dependencies: ["TransferCurlBridge", "CCurl"],
+            path: "Sources/TransferCore",
+            swiftSettings: strict
+        ),
+
+        .target(
+            name: "Application",
+            dependencies: ["Domain", "TransferCurlBridge"],
+            path: "Sources/Application",
+            swiftSettings: strict
+        ),
 
         .target(
             name: "XPCContracts",
@@ -57,7 +112,11 @@ let package = Package(
 
         .target(
             name: "Persistence",
-            dependencies: ["Domain", .product(name: "GRDB", package: "GRDB.swift")],
+            dependencies: [
+                "Domain",
+                "SharedSecurity",
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             path: "Sources/Persistence",
             swiftSettings: strict
         ),
@@ -67,6 +126,7 @@ let package = Package(
             dependencies: [
                 "Domain", "Persistence", "XPCContracts",
                 "SharedObservability", "XPCSecuritySupport",
+                "Application", "TransferCore"
             ],
             path: "Sources/EngineAgent",
             swiftSettings: strict
@@ -74,7 +134,7 @@ let package = Package(
 
         .target(
             name: "Presentation",
-            dependencies: ["Domain", "XPCContracts", "SharedObservability"],
+            dependencies: ["Domain", "XPCContracts", "SharedObservability", "Application"],
             path: "Sources/Presentation",
             swiftSettings: strict
         ),
@@ -86,6 +146,6 @@ let package = Package(
             dependencies: ["TestFaultService"],
             path: "Sources/TestServicesMain",
             swiftSettings: strict
-        ),
+        )
     ]
 )

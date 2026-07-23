@@ -51,6 +51,10 @@ resolve-dependencies: project ## Resolve pinned Swift package dependencies
 dependency-manifest: ## Regenerate the resolved dependency/license manifest
 	@Scripts/dependency-manifest.sh
 
+.PHONY: vendor-libcurl
+vendor-libcurl: ## Build pinned static arm64 libcurl stack into VendorBuild/prefix
+	@VendorBuild/scripts/build-libcurl.sh
+
 ## ----- Fast local gate -----
 
 .PHONY: format-check
@@ -66,7 +70,7 @@ lint: ## Lint + syntax-aware Swift safety scan
 	@Scripts/lint.sh
 
 .PHONY: build-debug
-build-debug: project ## Clean-warning Debug build of app + embedded agent
+build-debug: vendor-libcurl project ## Clean-warning Debug build of app + embedded agent
 	@mkdir -p $(ARTIFACTS)
 	@set -o pipefail; $(XCODEBUILD) -configuration $(CONFIG_DEBUG) build \
 		2>&1 | tee $(ARTIFACTS)/build.log

@@ -125,6 +125,12 @@ targets:
         product: SharedSecurity
       - package: DownloadKit
         product: Presentation
+      - package: DownloadKit
+        product: TransferCurlBridge
+      - package: DownloadKit
+        product: TransferCore
+      - package: DownloadKit
+        product: Application
       - package: GRDB
         product: GRDB
 
@@ -139,6 +145,14 @@ targets:
     dependencies:
       - package: DownloadKit
         product: TestFaultService
+      - package: DownloadKit
+        product: TransferCore
+      - package: DownloadKit
+        product: TransferCurlBridge
+      - package: DownloadKit
+        product: EngineAgent
+      - package: DownloadKit
+        product: Persistence
 
   RecoveryTests:
     type: bundle.unit-test

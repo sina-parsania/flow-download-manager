@@ -15,6 +15,7 @@ struct DownloadManagerApp: App {
 
     @StateObject private var launchAgent: LaunchAgentModel
     @StateObject private var library: LibraryModel
+    @StateObject private var menuBar = MenuBarController()
 
     init() {
         // Non-UI diagnostic path: report SMAppService status, then exit.
@@ -24,13 +25,23 @@ struct DownloadManagerApp: App {
         _launchAgent = StateObject(wrappedValue: LaunchAgentModel(
             manager: SMAppServiceLaunchAgent(plistName: Self.launchAgentPlistName)
         ))
-        _library = StateObject(wrappedValue: LibraryModel(rows: JobRowFixtures.make(count: 250)))
+        _library = StateObject(wrappedValue: LibraryModel(rows: []))
     }
 
     var body: some Scene {
         WindowGroup {
             RootView(model: library, launchAgent: launchAgent)
                 .frame(minWidth: 900, minHeight: 520)
+                .onAppear {
+                    menuBar.install(
+                        library: library,
+                        openHandler: {},
+                        addHandler: { library.addSheetPresented = true }
+                    )
+                }
+                .onChange(of: library.rows) { _, _ in
+                    menuBar.refreshMenu()
+                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {

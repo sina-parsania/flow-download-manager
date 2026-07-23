@@ -19,20 +19,30 @@ func runAgent() -> Never {
     do {
         let url = try EngineDatabase.defaultURL(agentIdentifier: EngineXPC.machServiceName)
         database = try EngineDatabase(url: url)
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("DownloadManager", isDirectory: true)
+        try JobRepository.ensureProductionSeed(
+            database: database,
+            defaultDestinationDirectory: downloads.appendingPathComponent("DownloadManager", isDirectory: true)
+        )
         log.info("engine database opened")
     } catch {
-        // Database corruption/open failure enters recovery rather than silently
-        // recreating history (`02-architecture.md` §17). Phase 0 surfaces the
-        // failure and exits non-zero so launchd records it.
         log.error("engine database open failed: \(EngineLog.redacted(error), privacy: .public)")
         exit(EXIT_FAILURE)
     }
+
+    let progressLedger = JobProgressLedger()
+    let orchestrator = TransferOrchestrator(database: database, progressLedger: progressLedger)
+    Task { await orchestrator.start() }
 
     let services = EngineServices(
         engineBuild: AgentBuild.version,
         databaseVersion: SchemaVersions.database,
         isDatabaseOpen: { true },
-        startDate: startDate
+        startDate: startDate,
+        database: database,
+        orchestrator: orchestrator,
+        progressLedger: progressLedger
     )
     let validator = CodeSigningIdentityValidator(
         allowedIdentifiers: [XPCClientIdentities.appBundleIdentifier]
@@ -44,9 +54,10 @@ func runAgent() -> Never {
     listener.resume()
     log.info("engine XPC listener resumed on \(EngineXPC.machServiceName, privacy: .public)")
 
-    // Keep the database alive for the process lifetime.
     withExtendedLifetime(database) {
-        dispatchMain()
+        withExtendedLifetime(orchestrator) {
+            dispatchMain()
+        }
     }
 }
 

@@ -32,3 +32,8 @@ macos-download-manager-prompt-pack/
 
 # Tooling caches
 Scripts/.tool-cache/
+
+# Vendored native build outputs (rebuilt by `make vendor-libcurl`)
+VendorBuild/.cache/
+VendorBuild/prefix/
+

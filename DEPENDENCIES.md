@@ -4,29 +4,34 @@ This document is the authoritative dependency manifest for **Download Manager**
 (native macOS 14.0+, Apple Silicon / arm64 only). It records every third-party
 component and the exact terms under which it is used.
 
-Project status: **Phase 0 — repository foundation.** No shipping user download
-features exist yet. The lists below reflect what is actually present in the
-Phase 0 build, not future intent.
+Project status: **Phase 1 in progress — Universal Transfer Release.** Phase 0
+foundation remains; this document now also covers the pinned libcurl stack
+introduced for transfer networking.
 
 Scope of "shipped runtime dependency": a component whose code is distributed to
 end users inside the signed, notarized product (linked, embedded, or bundled).
 Build-time and developer tooling is listed separately and is **not** distributed.
 
-## Shipped runtime dependencies (Phase 0)
-
-Phase 0 ships **exactly one** third-party runtime dependency.
+## Shipped runtime dependencies
 
 | Component | Version/commit | SPDX license | Source | Link relationship | Notes |
 | --- | --- | --- | --- | --- | --- |
-| GRDB.swift | 7.11.1 (exact pin) | MIT | https://github.com/groue/GRDB.swift | Static link via Swift Package Manager | Uses the system SQLite provided by macOS. No bundled native SQLite is included, and no additional transitive native libraries are introduced. Upstream maintainers own security/CVE review for this component. |
+| GRDB.swift | 7.11.1 (exact pin) | MIT | https://github.com/groue/GRDB.swift | Static link via Swift Package Manager | Uses the system SQLite provided by macOS. |
+| curl (libcurl) | 8.21.0 | curl | https://curl.se/download/curl-8.21.0.tar.xz | Static link (`VendorBuild/prefix/arm64`) | Built by `make vendor-libcurl`. SHA-256 `aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6`. |
+| OpenSSL | 3.5.1 | Apache-2.0 | https://github.com/openssl/openssl/releases/download/openssl-3.5.1/openssl-3.5.1.tar.gz | Static link into libcurl + libssh2 | TLS for libcurl; crypto for libssh2. Apple SecTrust enabled for OS trust store. SHA-256 `529043b15cffa5f36077a4d0af83f3de399807181d607441d734196d889b641f`. |
+| nghttp2 | 1.66.0 | MIT | https://github.com/nghttp2/nghttp2/releases/download/v1.66.0/nghttp2-1.66.0.tar.xz | Static link into libcurl | HTTP/2. SHA-256 `00ba1bdf0ba2c74b2a4fe6c8b1069dc9d82f82608af24442d430df97c6f9e631`. |
+| libssh2 | 1.11.1 | BSD-3-Clause | https://www.libssh2.org/download/libssh2-1.11.1.tar.gz | Static link into libcurl | SFTP. SHA-256 `d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7`. |
 
-Notes on the pin:
+Authoritative pin file: `VendorBuild/manifests/libcurl.json`. Rebuild with
+`make vendor-libcurl` (space-free cache under
+`~/Library/Caches/DownloadManager/vendor`, then published to
+`VendorBuild/prefix/arm64`). See ADR 0005.
 
-- The version is pinned exactly (`7.11.1`), not a range, so the shipped build is
-  reproducible.
-- GRDB links against the SQLite that ships with macOS; the product does not
-  vendor, compile, or bundle its own copy of SQLite or any other C library
-  through this dependency.
+Notes:
+
+- The product does **not** use `/usr/bin/curl`, Homebrew curl, or URLSession as a
+  transfer implementation.
+- System zlib is linked (`-lz`); it is part of the OS and not vendored.
 
 ## Developer-only tools (NOT shipped in the product)
 
@@ -43,26 +48,10 @@ They are installed via Homebrew by `make bootstrap-tools`.
 | SwiftFormat | Source code formatting | No — build-time only |
 | SwiftLint | Static lint / style enforcement | No — build-time only |
 
-Because these are developer tooling and not part of the shipped artifact, their
-versions are managed by the local Homebrew installation rather than pinned into
-the product's runtime manifest above.
+## Planned for later phases (NOT present yet)
 
-## Planned for later phases (NOT present in Phase 0)
-
-The following components are anticipated for later phases of the product. They
-are **absent from the current (Phase 0) build** — not linked, embedded, bundled,
-downloaded, or otherwise distributed today.
-
-Each will be introduced only in its respective phase, and only accompanied by a
-full manifest entry covering exact source, build/link relationship, exact version
-pin, and SPDX license terms. No version is asserted here, because none is fixed
-yet.
-
-- libcurl
 - libtorrent
-- yt-dlp
-- yt-dlp-ejs
-- Deno
+- yt-dlp / yt-dlp-ejs / Deno
 - FFmpeg
 - Sparkle
 

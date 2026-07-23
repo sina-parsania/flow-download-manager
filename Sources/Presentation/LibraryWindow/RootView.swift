@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import SwiftUI
+import XPCContracts
 
 /// The main library window: sidebar + AppKit-backed table + inspector
-/// (`03-design-system-ui-ux.md` §3). The inspector toggles with ⌥⌘I and its state
-/// is remembered per window. `Add` opens a Phase 0 informational sheet and never
-/// pretends to queue a download (`bootstrap prompt §5`).
+/// (`03-design-system-ui-ux.md` §3).
 public struct RootView: View {
     @ObservedObject private var model: LibraryModel
     @ObservedObject private var launchAgent: LaunchAgentModel
@@ -25,11 +24,24 @@ public struct RootView: View {
                 .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search downloads")
                 .toolbar { toolbarContent }
                 .inspector(isPresented: $model.inspectorVisible) {
-                    InspectorView(row: model.selectedRow)
-                        .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
+                    InspectorView(row: model.selectedRow, onCommand: { command in
+                        Task { await model.controlSelected(command) }
+                    })
+                    .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
                 }
         }
-        .sheet(isPresented: $model.addSheetPresented) { AddDownloadsSheet() }
+        .sheet(isPresented: $model.addSheetPresented) {
+            AddDownloadsSheet()
+                .environmentObject(model)
+        }
+        .task {
+            DownloadNotificationCenter.shared.requestAuthorizationIfNeeded()
+            model.startPolling()
+            await model.refreshFromEngine()
+        }
+        .onDisappear {
+            model.stopPolling()
+        }
     }
 
     @ViewBuilder
@@ -53,6 +65,38 @@ public struct RootView: View {
             .help("Add downloads")
 
             Button {
+                Task { await model.controlSelected(.pause) }
+            } label: {
+                Label("Pause", systemImage: "pause.fill")
+            }
+            .disabled(!canPause)
+            .help("Pause selected download")
+
+            Button {
+                Task { await model.controlSelected(.resume) }
+            } label: {
+                Label("Resume", systemImage: "play.fill")
+            }
+            .disabled(!canResume)
+            .help("Resume selected download")
+
+            Button {
+                Task { await model.controlSelected(.cancel) }
+            } label: {
+                Label("Cancel", systemImage: "xmark.circle")
+            }
+            .disabled(model.selectedRow == nil)
+            .help("Cancel selected download")
+
+            Button {
+                Task { await model.controlSelected(.retry) }
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+            }
+            .disabled(!canRetry)
+            .help("Retry selected download")
+
+            Button {
                 model.inspectorVisible.toggle()
             } label: {
                 Label("Inspector", systemImage: "sidebar.right")
@@ -60,6 +104,20 @@ public struct RootView: View {
             .keyboardShortcut("i", modifiers: [.command, .option])
             .help("Toggle inspector")
         }
+    }
+
+    private var canPause: Bool {
+        guard let state = model.selectedRow?.state else { return false }
+        return [.queued, .connecting, .downloading, .scheduled].contains(state)
+    }
+
+    private var canResume: Bool {
+        model.selectedRow?.state == .paused
+    }
+
+    private var canRetry: Bool {
+        guard let state = model.selectedRow?.state else { return false }
+        return state == .failed || state == .cancelled
     }
 }
 
@@ -86,7 +144,7 @@ private struct LibraryEmptyState: View {
 
     private var message: String {
         reason == .noDownloads
-            ? "Use Add to paste or drop links and preview them. Queuing and transfers arrive in a later release."
+            ? "Use Add to paste links, review them, and queue downloads to the background engine."
             : "No downloads match the current filter and search."
     }
 }

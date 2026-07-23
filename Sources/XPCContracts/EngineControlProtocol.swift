@@ -30,6 +30,24 @@ public protocol EngineControlProtocol {
         requestID: String,
         reply: @escaping @Sendable (EngineHealthSnapshot?, NSError?) -> Void
     )
+
+    /// Persist a reviewed batch and acknowledge before the UI dismisses (FR-ING).
+    func enqueueBatch(
+        _ request: EnqueueBatchRequest,
+        reply: @escaping @Sendable (EnqueueBatchResponse?, NSError?) -> Void
+    )
+
+    /// Library read model. Idempotent for a given requestID on one connection.
+    func listJobs(
+        requestID: String,
+        reply: @escaping @Sendable (JobListSnapshot?, NSError?) -> Void
+    )
+
+    /// Pause / resume / cancel / retry with expected revision.
+    func controlJob(
+        _ request: JobCommandRequest,
+        reply: @escaping @Sendable (JobCommandResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.

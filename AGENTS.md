@@ -9,9 +9,9 @@ file is the terse working summary.
 
 A native macOS (14.0+, arm64-only) download manager built as a main app plus a
 per-user `DownloadEngineAgent` LaunchAgent that talk over versioned, authenticated
-XPC. Distribution is direct Developer ID (signed + notarized). License:
-`GPL-3.0-or-later`. Current state: **Phase 0 — repository foundation** (no user
-download features yet).
+XPC. Distribution is direct Developer ID (signed + notarized). License: `GPL-3.0-or-later`. Current state: **Phase 1 in progress — Universal
+Transfer Release** (pinned libcurl stack + Application URL ingestion started;
+full transfer/queue/UI gates not yet complete).
 
 ## Build & test commands
 

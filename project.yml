@@ -148,6 +148,8 @@ targets:
       properties:
         CFBundleDisplayName: Flow Download Manager
         CFBundleName: Flow Download Manager
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "2"
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.utilities

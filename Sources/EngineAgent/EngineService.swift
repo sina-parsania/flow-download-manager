@@ -62,6 +62,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var upsertProjectCache: [String: UpsertProjectResponse] = [:]
     private var upsertTagCache: [String: UpsertTagResponse] = [:]
     private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
+    private var setJobPriorityCache: [String: SetJobPriorityResponse] = [:]
     private var listCategoryRulesCache: [String: ListCategoryRulesResponse] = [:]
     private var upsertCategoryRuleCache: [String: UpsertCategoryRuleResponse] = [:]
     private var listEventsCache: [String: ListEventsResponse] = [:]
@@ -91,7 +92,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
                 "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
-                "listCategoryRules", "upsertCategoryRule", "listEvents"
+                "listCategoryRules", "upsertCategoryRule", "listEvents", "setJobPriority"
             ]
         ), nil)
     }
@@ -246,7 +247,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     speedBytesPerSecond: speed,
                     categoryKey: category.stableKey,
                     projectName: projectName,
-                    tagNames: tagNames
+                    tagNames: tagNames,
+                    priority: job.priority
                 )
             }
             lock.lock()
@@ -329,6 +331,53 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "control failed"))
+        }
+    }
+
+    func setJobPriority(
+        _ request: SetJobPriorityRequest,
+        reply: @escaping @Sendable (SetJobPriorityResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = setJobPriorityCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let revision = try JobRepository.setPriority(
+                database: database,
+                id: request.jobID,
+                priority: request.priority
+            )
+            let response = SetJobPriorityResponse(
+                requestID: request.requestID,
+                jobID: request.jobID,
+                priority: request.priority,
+                revision: revision
+            )
+            lock.lock()
+            setJobPriorityCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "set job priority failed"))
         }
     }
 

@@ -29,6 +29,9 @@ public struct RootView: View {
                         engineClient: model.engineClient,
                         onCommand: { command in
                             Task { await model.controlSelected(command) }
+                        },
+                        onPriorityBump: { delta in
+                            Task { await model.bumpSelectedPriority(by: delta) }
                         }
                     )
                     .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
@@ -99,6 +102,20 @@ public struct RootView: View {
             }
             .disabled(!canRetry)
             .help("Retry selected download")
+
+            Button {
+                Task { await model.pauseAll() }
+            } label: {
+                Label("Pause All", systemImage: "pause.circle")
+            }
+            .help("Pause all active and queued downloads")
+
+            Button {
+                Task { await model.resumeAll() }
+            } label: {
+                Label("Resume All", systemImage: "play.circle")
+            }
+            .help("Resume all paused downloads")
 
             Button {
                 model.inspectorVisible.toggle()

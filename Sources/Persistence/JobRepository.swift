@@ -465,6 +465,57 @@ public enum JobRepository {
             try resource.update(db)
         }
     }
+
+    /// Sets absolute queue priority (`ORDER BY priority DESC`). Bumps revision.
+    @discardableResult
+    public static func setPriority(
+        database: EngineDatabase,
+        id: String,
+        priority: Int
+    ) throws -> Int {
+        try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: id) else {
+                throw JobRepositoryError.jobNotFound(id)
+            }
+            job.priority = priority
+            job.updatedAt = Date()
+            job.revision += 1
+            try job.update(db)
+            try EventRecord(
+                jobID: id,
+                occurredAt: job.updatedAt,
+                type: "queue.priorityChanged",
+                sanitizedPayload: "{\"priority\":\(priority),\"revision\":\(job.revision)}"
+            ).insert(db)
+            return job.revision
+        }
+    }
+
+    /// Moves a job to an absolute `queuePosition` (lower = earlier among equal priority).
+    /// Bumps revision; does not renumber siblings.
+    @discardableResult
+    public static func moveQueuePosition(
+        database: EngineDatabase,
+        id: String,
+        queuePosition: Int
+    ) throws -> Int {
+        try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: id) else {
+                throw JobRepositoryError.jobNotFound(id)
+            }
+            job.queuePosition = queuePosition
+            job.updatedAt = Date()
+            job.revision += 1
+            try job.update(db)
+            try EventRecord(
+                jobID: id,
+                occurredAt: job.updatedAt,
+                type: "queue.positionChanged",
+                sanitizedPayload: "{\"queuePosition\":\(queuePosition),\"revision\":\(job.revision)}"
+            ).insert(db)
+            return job.revision
+        }
+    }
 }
 
 public enum JobRepositoryError: Error, Equatable, Sendable {

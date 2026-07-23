@@ -52,6 +52,10 @@ struct DownloadManagerApp: App {
                 )) { _ in
                     clipboardMonitor.syncWithPreference()
                 }
+                .onOpenURL { url in
+                    // Local-dev `downloadmanager://` handoff — prefills Add sheet only.
+                    library.handleOpenURL(url)
+                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -63,6 +67,15 @@ struct DownloadManagerApp: App {
                     library.inspectorVisible.toggle()
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
+                Divider()
+                Button("Pause All") {
+                    Task { await library.pauseAll() }
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                Button("Resume All") {
+                    Task { await library.resumeAll() }
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option])
                 Divider()
                 Button("Refresh Engine Status") { launchAgent.refresh() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])

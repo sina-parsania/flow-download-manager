@@ -102,6 +102,12 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: "GPL-3.0-or-later"
         NSPrincipalClass: NSApplication
+        # Local-dev URL scheme only (FR-ING dock / URL handoff). Not for production distribution.
+        CFBundleURLTypes:
+          - CFBundleURLName: org.downloadmanager.local.dev-scheme
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes:
+              - downloadmanager
 
   # --- Tests ---
   UnitTests:

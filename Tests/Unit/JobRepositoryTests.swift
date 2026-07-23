@@ -310,6 +310,37 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: partial.path))
     }
 
+    func testSetPriorityAndMoveQueuePositionReorderQueuedJobs() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://example.test/a.bin", categoryStableKey: "other"),
+                (url: "https://example.test/b.bin", categoryStableKey: "other"),
+                (url: "https://example.test/c.bin", categoryStableKey: "other")
+            ]
+        )
+        XCTAssertEqual(result.jobIDs.count, 3)
+
+        _ = try JobRepository.setPriority(database: database, id: result.jobIDs[2], priority: 10)
+        _ = try JobRepository.moveQueuePosition(database: database, id: result.jobIDs[1], queuePosition: 50)
+
+        let queued = try JobRepository.fetchQueuedJobIDs(database: database, limit: 10)
+        // Higher priority first; among remaining, lower queuePosition wins.
+        XCTAssertEqual(queued.first, result.jobIDs[2])
+        XCTAssertEqual(queued[1], result.jobIDs[0])
+        XCTAssertEqual(queued[2], result.jobIDs[1])
+
+        let rows = try JobRepository.fetchJobRows(database: database)
+        let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.job.id, $0.job) })
+        XCTAssertEqual(byID[result.jobIDs[2]]?.priority, 10)
+        XCTAssertEqual(byID[result.jobIDs[1]]?.queuePosition, 50)
+    }
+
     func testRequeueInterruptedTransfersIgnoresQueuedAndTerminal() throws {
         let (database, root, _) = try openTempDatabase()
         defer { try? FileManager.default.removeItem(at: root) }

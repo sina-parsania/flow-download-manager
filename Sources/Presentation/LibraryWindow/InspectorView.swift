@@ -8,6 +8,7 @@ struct InspectorView: View {
     let row: JobRowModel?
     let engineClient: EngineClient
     let onCommand: (JobCommandKind) -> Void
+    let onPriorityBump: (Int) -> Void
     @State private var events: [EventSnapshot] = []
     @State private var eventsError: String?
 
@@ -68,6 +69,13 @@ struct InspectorView: View {
                             Button("Cancel") { onCommand(.cancel) }
                             Button("Retry") { onCommand(.retry) }
                                 .disabled(!(row.state == .failed || row.state == .cancelled))
+                        }
+                        HStack {
+                            Text("Priority \(row.priority)")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Priority Down") { onPriorityBump(-1) }
+                            Button("Priority Up") { onPriorityBump(1) }
                         }
                         if row.state == .completed {
                             Button("Show in Finder") {

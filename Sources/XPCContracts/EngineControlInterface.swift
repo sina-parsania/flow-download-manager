@@ -55,6 +55,17 @@ public enum EngineControlInterface {
         )
 
         interface.setClasses(
+            allowedClasses([SetJobPriorityRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobPriority(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([SetJobPriorityResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobPriority(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
             allowedClasses([
                 UpsertCredentialProfileRequest.self, NSString.self, NSData.self
             ]),

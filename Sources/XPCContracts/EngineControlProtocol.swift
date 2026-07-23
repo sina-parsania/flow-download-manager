@@ -49,6 +49,12 @@ public protocol EngineControlProtocol {
         reply: @escaping @Sendable (JobCommandResponse?, NSError?) -> Void
     )
 
+    /// Set absolute queue priority for a job (`priority DESC` ordering).
+    func setJobPriority(
+        _ request: SetJobPriorityRequest,
+        reply: @escaping @Sendable (SetJobPriorityResponse?, NSError?) -> Void
+    )
+
     /// Create or replace a credential profile (password → Keychain only).
     func upsertCredentialProfile(
         _ request: UpsertCredentialProfileRequest,

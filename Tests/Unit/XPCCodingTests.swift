@@ -173,4 +173,39 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertEqual(decodedList?.cookies.count, 1)
         XCTAssertEqual(decodedList?.cookies.first?.displayName, "Browser")
     }
+
+    func testSetJobPriorityDTORoundTrip() throws {
+        let request = SetJobPriorityRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            priority: 7
+        )
+        let decodedRequest = try roundTrip(request, as: SetJobPriorityRequest.self)
+        XCTAssertEqual(decodedRequest?.priority, 7)
+
+        let response = SetJobPriorityResponse(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            priority: 7,
+            revision: 3
+        )
+        let decodedResponse = try roundTrip(response, as: SetJobPriorityResponse.self)
+        XCTAssertEqual(decodedResponse?.priority, 7)
+        XCTAssertEqual(decodedResponse?.revision, 3)
+
+        let snapshot = JobSnapshot(
+            id: UUID().uuidString,
+            name: "a.bin",
+            sourceHost: "cdn.example.test",
+            state: "queued",
+            progressFraction: nil,
+            bytesTransferred: 0,
+            totalBytes: nil,
+            speedBytesPerSecond: 0,
+            categoryKey: "other",
+            priority: 4
+        )
+        let decodedSnapshot = try roundTrip(snapshot, as: JobSnapshot.self)
+        XCTAssertEqual(decodedSnapshot?.priority, 4)
+    }
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Application
 import Domain
 import Foundation
 import XPCContracts
@@ -80,6 +81,69 @@ public final class LibraryModel: ObservableObject {
         addSheetPresented = true
     }
 
+    public func presentOpenURLLinks(_ urls: [String]) {
+        guard !urls.isEmpty else { return }
+        presentClipboardLinks(urls.joined(separator: "\n"))
+    }
+
+    public func handleOpenURL(_ url: URL) {
+        presentOpenURLLinks(OpenURLIngest.parse(url))
+    }
+
+    public func controlSelected(_ command: JobCommandKind) async {
+        guard let row = selectedRow else { return }
+        do {
+            _ = try await engineClient.controlJob(jobID: row.id.uuidString.lowercased(), command: command)
+            await refreshFromEngine()
+        } catch {
+            lastErrorMessage = "Could not \(String(describing: command)) the selected download."
+        }
+    }
+
+    public func pauseAll() async {
+        let targets = rows.filter { BulkJobCommandFilter.shouldReceivePause($0.state) }
+        for row in targets {
+            do {
+                _ = try await engineClient.controlJob(
+                    jobID: row.id.uuidString.lowercased(),
+                    command: .pause
+                )
+            } catch {
+                lastErrorMessage = "Could not pause all downloads."
+            }
+        }
+        await refreshFromEngine()
+    }
+
+    public func resumeAll() async {
+        let targets = rows.filter { BulkJobCommandFilter.shouldReceiveResume($0.state) }
+        for row in targets {
+            do {
+                _ = try await engineClient.controlJob(
+                    jobID: row.id.uuidString.lowercased(),
+                    command: .resume
+                )
+            } catch {
+                lastErrorMessage = "Could not resume all downloads."
+            }
+        }
+        await refreshFromEngine()
+    }
+
+    public func bumpSelectedPriority(by delta: Int) async {
+        guard let row = selectedRow else { return }
+        let next = row.priority + delta
+        do {
+            _ = try await engineClient.setJobPriority(
+                jobID: row.id.uuidString.lowercased(),
+                priority: next
+            )
+            await refreshFromEngine()
+        } catch {
+            lastErrorMessage = "Could not change priority."
+        }
+    }
+
     public func startPolling() {
         guard refreshTask == nil else { return }
         refreshTask = Task { [weak self] in
@@ -115,7 +179,8 @@ public final class LibraryModel: ObservableObject {
                     etaSeconds: nil,
                     categoryKey: job.categoryKey,
                     projectName: job.projectName,
-                    tagNames: job.tagNames
+                    tagNames: job.tagNames,
+                    priority: job.priority
                 )
             }
             notifyTerminalTransitions(from: rows, to: mapped)
@@ -123,16 +188,6 @@ public final class LibraryModel: ObservableObject {
             lastErrorMessage = nil
         } catch {
             // Keep existing rows when the engine is unavailable (ad-hoc / not registered).
-        }
-    }
-
-    public func controlSelected(_ command: JobCommandKind) async {
-        guard let row = selectedRow else { return }
-        do {
-            _ = try await engineClient.controlJob(jobID: row.id.uuidString.lowercased(), command: command)
-            await refreshFromEngine()
-        } catch {
-            lastErrorMessage = "Could not \(String(describing: command)) the selected download."
         }
     }
 

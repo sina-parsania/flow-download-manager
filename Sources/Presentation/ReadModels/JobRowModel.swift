@@ -21,12 +21,13 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
     public let categoryKey: String
     public let projectName: String?
     public let tagNames: [String]
+    public let priority: Int
 
     public init(
         id: UUID, name: String, sourceHost: String, state: JobState,
         progressFraction: Double?, bytesTransferred: Int64, totalBytes: Int64?,
         speedBytesPerSecond: Int64, etaSeconds: Int?, categoryKey: String,
-        projectName: String?, tagNames: [String]
+        projectName: String?, tagNames: [String], priority: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -40,6 +41,7 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
         self.categoryKey = categoryKey
         self.projectName = projectName
         self.tagNames = tagNames
+        self.priority = priority
     }
 
     /// A stable status role used to pick supplemental colour/symbol (colour is

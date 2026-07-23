@@ -30,7 +30,7 @@ public final class EngineClient: ObservableObject {
             clientBuild: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
             clientRole: .app,
             capabilities: [
-                "enqueueBatch", "listJobs", "controlJob",
+                "enqueueBatch", "listJobs", "controlJob", "setJobPriority",
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
                 "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
@@ -143,6 +143,32 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.controlJob(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func setJobPriority(jobID: String, priority: Int) async throws -> SetJobPriorityResponse {
+        try await connect()
+        let request = SetJobPriorityRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID,
+            priority: priority
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.setJobPriority(request) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

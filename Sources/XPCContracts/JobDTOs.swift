@@ -228,6 +228,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
     public let categoryKey: String
     public let projectName: String?
     public let tagNames: [String]
+    public let priority: Int
 
     public init(
         id: String,
@@ -240,7 +241,8 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         speedBytesPerSecond: Int64,
         categoryKey: String,
         projectName: String? = nil,
-        tagNames: [String] = []
+        tagNames: [String] = [],
+        priority: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -255,6 +257,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         self.categoryKey = categoryKey
         self.projectName = projectName
         self.tagNames = tagNames
+        self.priority = priority
     }
 
     public required init?(coder: NSCoder) {
@@ -289,6 +292,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         totalBytes = coder.decodeInt64(forKey: "totalBytes")
         hasTotalBytes = coder.decodeBool(forKey: "hasTotalBytes")
         speedBytesPerSecond = coder.decodeInt64(forKey: "speedBytesPerSecond")
+        priority = coder.decodeInteger(forKey: "priority")
     }
 
     public func encode(with coder: NSCoder) {
@@ -307,6 +311,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
             coder.encode(projectName as NSString, forKey: "projectName")
         }
         coder.encode(tagNames as NSArray, forKey: "tagNames")
+        coder.encode(priority, forKey: "priority")
     }
 }
 
@@ -429,6 +434,80 @@ public final class JobCommandResponse: NSObject, NSSecureCoding, @unchecked Send
         coder.encode(requestID as NSString, forKey: "requestID")
         coder.encode(jobID as NSString, forKey: "jobID")
         coder.encode(state as NSString, forKey: "state")
+        coder.encode(revision, forKey: "revision")
+    }
+}
+
+@objc(DMSetJobPriorityRequest)
+public final class SetJobPriorityRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let priority: Int
+
+    public init(requestID: String, jobID: String, priority: Int) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.priority = priority
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        guard let requestID, let jobID,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        priority = coder.decodeInteger(forKey: "priority")
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(priority, forKey: "priority")
+    }
+}
+
+@objc(DMSetJobPriorityResponse)
+public final class SetJobPriorityResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let priority: Int
+    public let revision: Int
+
+    public init(requestID: String, jobID: String, priority: Int, revision: Int) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.priority = priority
+        self.revision = revision
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        guard let requestID, let jobID,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        priority = coder.decodeInteger(forKey: "priority")
+        revision = coder.decodeInteger(forKey: "revision")
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(priority, forKey: "priority")
         coder.encode(revision, forKey: "revision")
     }
 }

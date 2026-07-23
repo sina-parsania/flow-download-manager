@@ -36,8 +36,30 @@ final class CurlBridgeTests: XCTestCase {
         XCTAssertTrue(https.isPhase1Supported)
         XCTAssertEqual(https.normalizationKey, "https://example.com/path?q=1")
 
+        let ftp = try CurlURLParser.parse("ftp://files.example/a.bin")
+        XCTAssertEqual(ftp.scheme, "ftp")
+        XCTAssertTrue(ftp.isPhase1Supported)
+
+        let ftps = try CurlURLParser.parse("ftps://files.example/a.bin")
+        XCTAssertEqual(ftps.scheme, "ftps")
+        XCTAssertTrue(ftps.isPhase1Supported)
+
         let sftp = try CurlURLParser.parse("sftp://files.example/a.bin")
         XCTAssertTrue(sftp.isPhase1Supported)
+    }
+
+    func testURLParserRejectsUnsupportedSchemes() throws {
+        let file = try CurlURLParser.parse("file:///tmp/a.bin")
+        XCTAssertEqual(file.scheme, "file")
+        XCTAssertFalse(file.isPhase1Supported)
+
+        let gopher = try CurlURLParser.parse("gopher://example/1")
+        XCTAssertEqual(gopher.scheme, "gopher")
+        XCTAssertFalse(gopher.isPhase1Supported)
+
+        let dict = try CurlURLParser.parse("dict://example/d:hello")
+        XCTAssertEqual(dict.scheme, "dict")
+        XCTAssertFalse(dict.isPhase1Supported)
     }
 
     func testURLParserRejectsEmpty() {

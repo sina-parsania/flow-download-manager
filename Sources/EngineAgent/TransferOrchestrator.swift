@@ -166,9 +166,28 @@ public actor TransferOrchestrator {
 
             let filename = FilenameSanitizer.sanitize(details.suggestedFilename)
             let partial = details.destinationDirectory.appendingPathComponent("\(filename).partial")
-            let final = uniquifiedURL(
-                details.destinationDirectory.appendingPathComponent(filename)
+            let preferredFinal = details.destinationDirectory.appendingPathComponent(filename)
+            let conflictPolicy = DestinationConflictPolicy.parse(details.conflictPolicy)
+            let destinationExists = FileManager.default.fileExists(atPath: preferredFinal.path)
+            let conflictAction = DestinationConflictResolver.action(
+                policy: conflictPolicy,
+                destinationExists: destinationExists
             )
+            let final: URL
+            switch conflictAction {
+            case .usePreferred, .overwrite:
+                final = preferredFinal
+            case .uniquify:
+                final = uniquifiedURL(preferredFinal)
+            case .fail:
+                _ = try JobRepository.updateJobState(
+                    database: database, id: jobID, state: "failed",
+                    terminalReason: "destinationExists", expectedRevision: nil
+                )
+                progressLedger.remove(jobID)
+                attemptByJob[jobID] = nil
+                return
+            }
 
             let host = URL(string: details.canonicalURL)?.host ?? "unknown"
             guard await budget.tryAcquireSocket(host: host) else {

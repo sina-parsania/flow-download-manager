@@ -132,4 +132,20 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertEqual(decoded?.categoryStableKey, "documents")
         XCTAssertEqual(decoded?.predicateJSON, #"{"extension":"mp4"}"#)
     }
+
+    func testEventSnapshotRoundTrip() throws {
+        let jobID = UUID().uuidString
+        let snapshot = EventSnapshot(
+            sequence: 42,
+            jobID: jobID,
+            occurredAtISO8601: "2026-07-23T08:00:00Z",
+            type: "state.changed",
+            sanitizedPayload: #"{"state":"queued"}"#
+        )
+        let decoded = try roundTrip(snapshot, as: EventSnapshot.self)
+        XCTAssertEqual(decoded?.sequence, 42)
+        XCTAssertEqual(decoded?.jobID, jobID)
+        XCTAssertEqual(decoded?.type, "state.changed")
+        XCTAssertEqual(decoded?.sanitizedPayload, #"{"state":"queued"}"#)
+    }
 }

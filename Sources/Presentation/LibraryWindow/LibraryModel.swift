@@ -39,6 +39,7 @@ public final class LibraryModel: ObservableObject {
     @Published public var filter: LibraryFilter = .all
     @Published public var inspectorVisible: Bool = true
     @Published public var addSheetPresented: Bool = false
+    @Published public var pendingClipboardText: String?
     @Published public var lastErrorMessage: String?
 
     public let engineClient: EngineClient
@@ -72,6 +73,11 @@ public final class LibraryModel: ObservableObject {
     public var emptyReason: EmptyReason? {
         guard visibleRows.isEmpty else { return nil }
         return (rows.isEmpty && searchText.isEmpty && filter == .all) ? .noDownloads : .noMatches
+    }
+
+    public func presentClipboardLinks(_ text: String) {
+        pendingClipboardText = text
+        addSheetPresented = true
     }
 
     public func startPolling() {

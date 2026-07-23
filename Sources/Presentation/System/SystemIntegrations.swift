@@ -57,6 +57,25 @@ public final class DownloadNotificationCenter {
         )
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
+
+    /// Clipboard monitoring found Phase-1-valid links (never auto-enqueues).
+    public func postLinksDetected() {
+        guard authorized else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastPostedAt) >= 1.0 else { return }
+        lastPostedAt = now
+
+        let content = UNMutableNotificationContent()
+        content.title = "Links detected"
+        content.body = "Clipboard contains downloadable links. Review them in Add Downloads."
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
 }
 
 private final class NotificationPresentationDelegate: NSObject, UNUserNotificationCenterDelegate,

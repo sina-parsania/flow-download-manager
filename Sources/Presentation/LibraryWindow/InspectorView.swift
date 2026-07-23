@@ -6,7 +6,10 @@ import XPCContracts
 /// Inspector Overview for the selected job (`03-design-system-ui-ux.md` §7).
 struct InspectorView: View {
     let row: JobRowModel?
+    let engineClient: EngineClient
     let onCommand: (JobCommandKind) -> Void
+    @State private var events: [EventSnapshot] = []
+    @State private var eventsError: String?
 
     var body: some View {
         Group {
@@ -27,6 +30,34 @@ struct InspectorView: View {
                         labeled("Speed", JobRowFormatting.speed(row.speedBytesPerSecond))
                         labeled("Time remaining", JobRowFormatting.eta(row.etaSeconds))
                         labeled("Size", JobRowFormatting.size(row.totalBytes))
+                    }
+                    Section("Events") {
+                        if let eventsError {
+                            Text(eventsError)
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        } else if events.isEmpty {
+                            Text("No events yet.")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(events, id: \.sequence) { event in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(event.type)
+                                        .font(.body.monospaced())
+                                    Text(event.occurredAtISO8601)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    if let payload = event.sanitizedPayload, !payload.isEmpty {
+                                        Text(payload)
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                }
+                                .accessibilityElement(children: .combine)
+                                .accessibilityLabel("\(event.type) at \(event.occurredAtISO8601)")
+                            }
+                        }
                     }
                     Section("Actions") {
                         HStack {
@@ -55,6 +86,9 @@ struct InspectorView: View {
                     }
                 }
                 .formStyle(.grouped)
+                .task(id: row.id) {
+                    await loadEvents(for: row.id)
+                }
             } else {
                 ContentUnavailableView(
                     "No selection",
@@ -74,5 +108,20 @@ struct InspectorView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label): \(value)")
+    }
+
+    @MainActor
+    private func loadEvents(for jobID: UUID) async {
+        eventsError = nil
+        do {
+            let response = try await engineClient.listEvents(
+                jobID: jobID.uuidString.lowercased(),
+                limit: 40
+            )
+            events = response.events
+        } catch {
+            events = []
+            eventsError = "Unable to load events."
+        }
     }
 }

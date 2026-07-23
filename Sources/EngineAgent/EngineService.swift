@@ -60,6 +60,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
     private var listCategoryRulesCache: [String: ListCategoryRulesResponse] = [:]
     private var upsertCategoryRuleCache: [String: UpsertCategoryRuleResponse] = [:]
+    private var listEventsCache: [String: ListEventsResponse] = [:]
     private var snapshotSequence: Int64 = 0
 
     init(services: EngineServices) {
@@ -85,7 +86,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 "health", "enqueueBatch", "listJobs", "controlJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
-                "listCategoryRules", "upsertCategoryRule"
+                "listCategoryRules", "upsertCategoryRule", "listEvents"
             ]
         ), nil)
     }
@@ -752,6 +753,68 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "category rule upsert failed"))
+        }
+    }
+
+    func listEvents(
+        _ request: ListEventsRequest,
+        reply: @escaping @Sendable (ListEventsResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        if let jobID = request.jobID, UUID(uuidString: jobID) == nil {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed jobID"))
+            return
+        }
+        guard request.limit > 0, request.limit <= EngineXPC.maxCollectionCount else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid limit"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = listEventsCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            let records = try JobRepository.listEvents(
+                database: database,
+                jobID: request.jobID,
+                limit: request.limit
+            )
+            let events = records.compactMap { record -> EventSnapshot? in
+                guard let sequence = record.sequence else { return nil }
+                return EventSnapshot(
+                    sequence: sequence,
+                    jobID: record.jobID,
+                    occurredAtISO8601: formatter.string(from: record.occurredAt),
+                    type: record.type,
+                    sanitizedPayload: record.sanitizedPayload
+                )
+            }
+            let response = ListEventsResponse(requestID: request.requestID, events: events)
+            lock.lock()
+            listEventsCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "list events failed"))
         }
     }
 

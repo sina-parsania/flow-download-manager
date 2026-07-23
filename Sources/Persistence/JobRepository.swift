@@ -25,6 +25,7 @@ public struct TransferJobDetails: Sendable {
     public let canonicalURL: String
     public let destinationDirectory: URL
     public let suggestedFilename: String
+    public let conflictPolicy: String
     public let expectedChecksum: String?
     public let credentialProfileID: String?
     public let proxyProfileID: String?
@@ -368,6 +369,22 @@ public enum JobRepository {
         }
     }
 
+    /// Newest-first event journal read (optional job filter). `limit` is clamped to 1…4096.
+    public static func listEvents(
+        database: EngineDatabase,
+        jobID: String?,
+        limit: Int
+    ) throws -> [EventRecord] {
+        let capped = min(max(limit, 1), 4096)
+        return try database.pool.read { db in
+            var request = EventRecord.order(Column("sequence").desc).limit(capped)
+            if let jobID {
+                request = request.filter(Column("jobID") == jobID)
+            }
+            return try request.fetchAll(db)
+        }
+    }
+
     private static func sanitizedStatePayload(
         state: String,
         terminalReason: String?,
@@ -416,6 +433,7 @@ public enum JobRepository {
                 canonicalURL: resource.canonicalURL,
                 destinationDirectory: destination,
                 suggestedFilename: suggested,
+                conflictPolicy: profile.conflictPolicy,
                 expectedChecksum: resource.checksum,
                 credentialProfileID: job.credentialProfileID,
                 proxyProfileID: job.proxyProfileID,

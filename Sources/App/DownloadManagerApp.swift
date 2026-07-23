@@ -16,6 +16,7 @@ struct DownloadManagerApp: App {
     @StateObject private var launchAgent: LaunchAgentModel
     @StateObject private var library: LibraryModel
     @StateObject private var menuBar = MenuBarController()
+    @StateObject private var clipboardMonitor = ClipboardMonitor()
 
     init() {
         // Non-UI diagnostic path: report SMAppService status, then exit.
@@ -38,9 +39,18 @@ struct DownloadManagerApp: App {
                         openHandler: {},
                         addHandler: { library.addSheetPresented = true }
                     )
+                    clipboardMonitor.setHandler { text in
+                        library.presentClipboardLinks(text)
+                    }
+                    clipboardMonitor.syncWithPreference()
                 }
                 .onChange(of: library.rows) { _, _ in
                     menuBar.refreshMenu()
+                }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: UserDefaults.didChangeNotification
+                )) { _ in
+                    clipboardMonitor.syncWithPreference()
                 }
         }
         .commands {

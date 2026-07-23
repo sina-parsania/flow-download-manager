@@ -7,11 +7,26 @@ import XPCContracts
 /// Minimal Settings surface for credential/proxy profiles, projects/tags, and About.
 public struct SettingsView: View {
     @StateObject private var model = SettingsModel()
+    @AppStorage(ClipboardMonitor.userDefaultsKey) private var clipboardMonitoringEnabled = false
 
     public init() {}
 
     public var body: some View {
         Form {
+            Section("Clipboard") {
+                Toggle(
+                    "Monitor clipboard for links",
+                    isOn: $clipboardMonitoringEnabled
+                )
+                Text(
+                    "When enabled, new pasteboard text with valid links opens Add Downloads "
+                        + "prefilled. Downloads are never queued automatically."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Credentials") {
                 if model.credentials.isEmpty {
                     Text("No credential profiles yet.")

@@ -24,9 +24,13 @@ public struct RootView: View {
                 .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search downloads")
                 .toolbar { toolbarContent }
                 .inspector(isPresented: $model.inspectorVisible) {
-                    InspectorView(row: model.selectedRow, onCommand: { command in
-                        Task { await model.controlSelected(command) }
-                    })
+                    InspectorView(
+                        row: model.selectedRow,
+                        engineClient: model.engineClient,
+                        onCommand: { command in
+                            Task { await model.controlSelected(command) }
+                        }
+                    )
                     .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
                 }
         }

@@ -102,6 +102,12 @@ public protocol EngineControlProtocol {
         _ request: UpsertCategoryRuleRequest,
         reply: @escaping @Sendable (UpsertCategoryRuleResponse?, NSError?) -> Void
     )
+
+    /// Recent event-journal rows (optional job filter, newest first).
+    func listEvents(
+        _ request: ListEventsRequest,
+        reply: @escaping @Sendable (ListEventsResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.

@@ -152,6 +152,22 @@ public enum EngineControlInterface {
             for: #selector(EngineControlProtocol.upsertCategoryRule(_:reply:)),
             argumentIndex: 0, ofReply: true
         )
+
+        interface.setClasses(
+            allowedClasses([ListEventsRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.listEvents(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([
+                ListEventsResponse.self,
+                EventSnapshot.self,
+                NSString.self,
+                NSArray.self
+            ]),
+            for: #selector(EngineControlProtocol.listEvents(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
         return interface
     }
 

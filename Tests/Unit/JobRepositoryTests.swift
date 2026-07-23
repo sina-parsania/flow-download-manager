@@ -176,6 +176,44 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertEqual(count, 1)
     }
 
+    func testAppendAndListEventsFiltersByJobAndLimit() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://example.test/a.bin", categoryStableKey: "other"),
+                (url: "https://example.test/b.bin", categoryStableKey: "other")
+            ]
+        )
+        let jobA = try XCTUnwrap(result.jobIDs.first)
+        let jobB = try XCTUnwrap(result.jobIDs.last)
+
+        try JobRepository.appendEvent(
+            database: database, jobID: jobA, type: "note.a1", sanitizedPayload: "{\"n\":1}"
+        )
+        try JobRepository.appendEvent(
+            database: database, jobID: jobA, type: "note.a2", sanitizedPayload: "{\"n\":2}"
+        )
+        try JobRepository.appendEvent(
+            database: database, jobID: jobB, type: "note.b1", sanitizedPayload: "{\"n\":3}"
+        )
+
+        let forA = try JobRepository.listEvents(database: database, jobID: jobA, limit: 10)
+        XCTAssertEqual(forA.count, 2)
+        XCTAssertEqual(forA.map(\.type), ["note.a2", "note.a1"])
+
+        let limited = try JobRepository.listEvents(database: database, jobID: jobA, limit: 1)
+        XCTAssertEqual(limited.count, 1)
+        XCTAssertEqual(limited[0].type, "note.a2")
+
+        let all = try JobRepository.listEvents(database: database, jobID: nil, limit: 50)
+        XCTAssertEqual(all.count, 3)
+    }
+
     func testUpdateJobStateRevisionCheck() throws {
         let (database, root, _) = try openTempDatabase()
         defer { try? FileManager.default.removeItem(at: root) }

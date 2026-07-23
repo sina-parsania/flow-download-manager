@@ -33,7 +33,7 @@ public final class EngineClient: ObservableObject {
                 "enqueueBatch", "listJobs", "controlJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
-                "listCategoryRules", "upsertCategoryRule"
+                "listCategoryRules", "upsertCategoryRule", "listEvents"
             ]
         )
         let server: ServerHello = try await withCheckedThrowingContinuation { cont in
@@ -400,6 +400,32 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.upsertCategoryRule(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func listEvents(jobID: String? = nil, limit: Int = 50) async throws -> ListEventsResponse {
+        try await connect()
+        let request = ListEventsRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID,
+            limit: min(max(limit, 1), EngineXPC.maxCollectionCount)
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.listEvents(request) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

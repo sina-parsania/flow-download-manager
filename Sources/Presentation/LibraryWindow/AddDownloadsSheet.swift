@@ -119,7 +119,14 @@ struct AddDownloadsSheet: View {
         }
         .padding(24)
         .frame(width: 560, height: 580)
-        .task { await loadBindingOptions() }
+        .task {
+            if let pending = library.pendingClipboardText {
+                input = pending
+                extraction = URLTextExtractor.extract(from: pending)
+                library.pendingClipboardText = nil
+            }
+            await loadBindingOptions()
+        }
         .fileImporter(
             isPresented: $isImportPresented,
             allowedContentTypes: [.plainText, .commaSeparatedText, .utf8PlainText],

@@ -29,7 +29,10 @@ public final class EngineClient: ObservableObject {
             protocolVersion: SchemaVersions.xpcProtocol,
             clientBuild: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
             clientRole: .app,
-            capabilities: ["enqueueBatch", "listJobs", "controlJob"]
+            capabilities: [
+                "enqueueBatch", "listJobs", "controlJob",
+                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles"
+            ]
         )
         let server: ServerHello = try await withCheckedThrowingContinuation { cont in
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
@@ -125,6 +128,99 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.controlJob(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func listProfiles() async throws -> ListProfilesResponse {
+        try await connect()
+        let requestID = UUID().uuidString
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.listProfiles(requestID: requestID) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func upsertCredentialProfile(
+        displayName: String,
+        username: String,
+        password: String,
+        profileID: String = UUID().uuidString.lowercased()
+    ) async throws -> UpsertCredentialProfileResponse {
+        try await connect()
+        guard let passwordData = password.data(using: .utf8), !passwordData.isEmpty else {
+            throw ClientError.decoding
+        }
+        let request = UpsertCredentialProfileRequest(
+            requestID: UUID().uuidString,
+            profileID: profileID,
+            displayName: displayName,
+            username: username,
+            passwordUTF8: passwordData
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.upsertCredentialProfile(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func upsertProxyProfile(
+        displayName: String,
+        kind: String,
+        host: String,
+        port: Int,
+        profileID: String = UUID().uuidString.lowercased()
+    ) async throws -> UpsertProxyProfileResponse {
+        try await connect()
+        let request = UpsertProxyProfileRequest(
+            requestID: UUID().uuidString,
+            profileID: profileID,
+            displayName: displayName,
+            kind: kind,
+            host: host,
+            port: port
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.upsertProxyProfile(request) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

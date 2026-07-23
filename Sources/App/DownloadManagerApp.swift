@@ -58,5 +58,9 @@ struct DownloadManagerApp: App {
                     .keyboardShortcut("r", modifiers: [.command, .shift])
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 }

@@ -4,7 +4,7 @@ import GRDB
 import Persistence
 import XCTest
 
-/// Migration v1 round-trip and interrupted-migration atomicity
+/// Migration v1→v2 round-trip and interrupted-migration atomicity
 /// (`04-domain-and-data-contracts.md` §13, `08-validation-commands.md` §10).
 final class MigrationTests: XCTestCase {
     private func tempURL() -> URL {
@@ -24,7 +24,7 @@ final class MigrationTests: XCTestCase {
             "batches", "resources", "jobs", "attempts", "segments", "events",
             "categories", "category_rules", "projects", "tags", "job_tags",
             "destination_profiles", "credential_profiles", "proxy_profiles",
-            "schedules", "post_processing_pipelines", "host_observations"
+            "cookie_profiles", "schedules", "post_processing_pipelines", "host_observations"
         ]
         XCTAssertTrue(expected.isSubset(of: tables), "missing: \(expected.subtracting(tables))")
         XCTAssertTrue(try db.isAtCurrentSchemaVersion())
@@ -50,6 +50,72 @@ final class MigrationTests: XCTestCase {
         let second = try EngineDatabase(url: url)
         XCTAssertTrue(try second.isAtCurrentSchemaVersion())
         XCTAssertEqual(try second.count(JobRecord.self), 1)
+    }
+
+    func testV1ToV2MigrationRoundTripPreservesJobs() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let v1 = try EngineDatabase(url: url, migrator: SchemaMigrator.v1Only)
+        let jobID = "00000000-0000-7000-8000-000000000001"
+        let profileID = "00000000-0000-7000-8000-0000000000d1"
+        let categoryID = "00000000-0000-7000-8000-0000000000c1"
+        let resourceID = "00000000-0000-7000-8000-0000000000a1"
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // Seed with raw SQL so JobRecord's v2 columns are not referenced on a v1 schema.
+        try v1.pool.write { db in
+            try DestinationProfileRecord(
+                id: profileID, name: "Downloads",
+                bookmarkData: Data([0x00]), volumeIdentity: nil, conflictPolicy: "rename"
+            ).insert(db)
+            try CategoryRecord(
+                id: categoryID, stableKey: "documents", displayNameKey: "category.documents",
+                systemSymbol: "doc", destinationProfileID: profileID
+            ).insert(db)
+            try ResourceRecord(
+                id: resourceID, originalURL: "https://example.test/file.bin",
+                canonicalURL: "https://example.test/file.bin", finalURL: nil,
+                protocolKind: "https", filenameEvidence: "file.bin",
+                mimeEvidence: "application/octet-stream",
+                expectedSize: 1024, strongETag: nil, lastModified: nil, checksum: nil,
+                identityRevision: 1
+            ).insert(db)
+            try db.execute(
+                sql: """
+                INSERT INTO jobs (
+                    id, batchID, resourceID, state, priority, queuePosition,
+                    categoryID, projectID, destinationProfileID, scheduleID,
+                    createdAt, updatedAt, revision, terminalReason
+                ) VALUES (?, NULL, ?, 'queued', 0, 0, ?, NULL, ?, NULL, ?, ?, 1, NULL)
+                """,
+                arguments: [jobID, resourceID, categoryID, profileID, now, now]
+            )
+        }
+        XCTAssertFalse(try v1.tableNames().contains("cookie_profiles"))
+
+        let v2 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
+        XCTAssertTrue(try v2.isAtCurrentSchemaVersion())
+        XCTAssertTrue(try v2.tableNames().contains("cookie_profiles"))
+        XCTAssertEqual(try v2.count(JobRecord.self), 1)
+
+        let job = try v2.pool.read { db in
+            try JobRecord.fetchOne(db, key: jobID)
+        }
+        XCTAssertEqual(job?.id, jobID)
+        XCTAssertNil(job?.credentialProfileID)
+        XCTAssertNil(job?.proxyProfileID)
+        XCTAssertNil(job?.cookieProfileID)
+        XCTAssertNil(job?.customHeadersJSON)
+
+        try v2.pool.read { db in
+            let names = try Row.fetchAll(db, sql: "PRAGMA table_info(jobs)").map { row -> String in
+                row["name"]
+            }
+            XCTAssertTrue(names.contains("credentialProfileID"))
+            XCTAssertTrue(names.contains("proxyProfileID"))
+            XCTAssertTrue(names.contains("cookieProfileID"))
+            XCTAssertTrue(names.contains("customHeadersJSON"))
+        }
     }
 
     func testInterruptedMigrationRollsBack() throws {

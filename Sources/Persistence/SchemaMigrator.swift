@@ -17,6 +17,15 @@ public enum SchemaMigrator {
         var migrator = DatabaseMigrator()
         migrator.eraseDatabaseOnSchemaChange = false
         registerV1(&migrator)
+        registerV2(&migrator)
+        return migrator
+    }
+
+    /// Migrator that stops after v1 — used by migration round-trip tests.
+    public static var v1Only: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = false
+        registerV1(&migrator)
         return migrator
     }
 
@@ -26,6 +35,9 @@ public enum SchemaMigrator {
     /// itself as `grdb_migrations` (which records applied migration identifiers);
     /// this migrator does not create a separate table for it.
     public static let v1Identifier = "v1-foundation"
+
+    /// Stable identifier for the v2 migration (job↔profile binding + cookie jars).
+    public static let v2Identifier = "v2-transfer-profiles"
 
     private static func registerV1(_ migrator: inout DatabaseMigrator) {
         // CHECK domains sourced from the Domain enums so DB and code cannot drift.
@@ -212,6 +224,27 @@ public enum SchemaMigrator {
                 t.column("sanitizedPayload", .text)
             }
             try db.create(index: "idx_events_job", on: "events", columns: ["jobID"])
+        }
+    }
+
+    private static func registerV2(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration(v2Identifier) { db in
+            // Cookie jar paths only — never cookie values — live under Application Support.
+            try db.create(table: "cookie_profiles") { t in
+                t.primaryKey("id", .text)
+                t.column("displayName", .text).notNull()
+                t.column("storageRelativePath", .text).notNull()
+            }
+
+            try db.alter(table: "jobs") { t in
+                t.add(column: "credentialProfileID", .text)
+                    .references("credential_profiles", onDelete: .setNull)
+                t.add(column: "proxyProfileID", .text)
+                    .references("proxy_profiles", onDelete: .setNull)
+                t.add(column: "cookieProfileID", .text)
+                    .references("cookie_profiles", onDelete: .setNull)
+                t.add(column: "customHeadersJSON", .text)
+            }
         }
     }
 }

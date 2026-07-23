@@ -53,6 +53,42 @@ public enum EngineControlInterface {
             for: #selector(EngineControlProtocol.controlJob(_:reply:)),
             argumentIndex: 0, ofReply: true
         )
+
+        interface.setClasses(
+            allowedClasses([
+                UpsertCredentialProfileRequest.self, NSString.self, NSData.self
+            ]),
+            for: #selector(EngineControlProtocol.upsertCredentialProfile(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([UpsertCredentialProfileResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertCredentialProfile(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
+            allowedClasses([UpsertProxyProfileRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertProxyProfile(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([UpsertProxyProfileResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertProxyProfile(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
+            allowedClasses([
+                ListProfilesResponse.self,
+                CredentialProfileSnapshot.self,
+                ProxyProfileSnapshot.self,
+                NSString.self,
+                NSArray.self
+            ]),
+            for: #selector(EngineControlProtocol.listProfiles(requestID:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
         return interface
     }
 

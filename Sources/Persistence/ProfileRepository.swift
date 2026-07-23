@@ -158,6 +158,72 @@ public enum ProfileRepository {
         return meta.proxyURL
     }
 
+    public static func listCredentialProfiles(
+        database: EngineDatabase
+    ) throws -> [(id: String, metadata: CredentialProfileMetadata)] {
+        try database.pool.read { db in
+            let rows = try CredentialProfileRecord
+                .order(Column("id").asc)
+                .fetchAll(db)
+            return try rows.map { row in
+                let meta = try JSONDecoder().decode(
+                    CredentialProfileMetadata.self,
+                    from: Data(row.metadata.utf8)
+                )
+                return (row.id, meta)
+            }
+        }
+    }
+
+    public static func listProxyProfiles(
+        database: EngineDatabase
+    ) throws -> [(id: String, metadata: ProxyProfileMetadata)] {
+        try database.pool.read { db in
+            let rows = try ProxyProfileRecord
+                .order(Column("id").asc)
+                .fetchAll(db)
+            return try rows.map { row in
+                let meta = try JSONDecoder().decode(
+                    ProxyProfileMetadata.self,
+                    from: Data(row.metadata.utf8)
+                )
+                return (row.id, meta)
+            }
+        }
+    }
+
+    public static func upsertCookieProfile(
+        database: EngineDatabase,
+        id: String,
+        displayName: String,
+        storageRelativePath: String? = nil
+    ) throws {
+        let path = storageRelativePath ?? "cookies/\(id).jar"
+        try database.pool.write { db in
+            try CookieProfileRecord(
+                id: id,
+                displayName: displayName,
+                storageRelativePath: path
+            ).save(db)
+        }
+    }
+
+    /// Absolute cookie-jar path under Application Support for a cookie profile.
+    public static func cookieJarPath(
+        database: EngineDatabase,
+        profileID: String,
+        applicationSupportRoot: URL
+    ) throws -> String {
+        let record = try database.pool.read { db in
+            try CookieProfileRecord.fetchOne(db, key: profileID)
+        }
+        guard let record else { throw ProfileRepositoryError.notFound(profileID) }
+        let url = applicationSupportRoot.appendingPathComponent(record.storageRelativePath)
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return url.path
+    }
+
     /// One-shot schedule: `constraints` holds ISO-8601 `startAt` instant.
     public static func createOneShotSchedule(
         database: EngineDatabase,

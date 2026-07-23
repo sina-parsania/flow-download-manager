@@ -13,6 +13,21 @@ final class SegmentPolicyAndIntegrityTests: XCTestCase {
         XCTAssertLessThanOrEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 200_000_000), 8)
     }
 
+    func testPreferredSegmentCountHonorsHostMaxHint() {
+        XCTAssertEqual(
+            SegmentedTransfer.preferredSegmentCount(totalBytes: 20_000_000, hostMaxSegments: 2),
+            2
+        )
+        XCTAssertEqual(
+            SegmentedTransfer.preferredSegmentCount(totalBytes: 100, hostMaxSegments: 8),
+            1
+        )
+        XCTAssertEqual(
+            SegmentedTransfer.preferredSegmentCount(totalBytes: 20_000_000, hostMaxSegments: nil),
+            4
+        )
+    }
+
     func testSHA256RoundTrip() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("dm-hash-\(UUID().uuidString).bin")

@@ -125,7 +125,7 @@ let package = Package(
             name: "EngineAgent",
             dependencies: [
                 "Domain", "Persistence", "XPCContracts",
-                "SharedObservability", "XPCSecuritySupport",
+                "SharedObservability", "SharedSecurity", "XPCSecuritySupport",
                 "Application", "TransferCore"
             ],
             path: "Sources/EngineAgent",

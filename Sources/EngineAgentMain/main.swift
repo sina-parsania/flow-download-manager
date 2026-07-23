@@ -5,6 +5,7 @@ import EngineAgent
 import Foundation
 import Persistence
 import SharedObservability
+import SharedSecurity
 import XPCContracts
 
 // Entry point for the per-user LaunchAgent. launchd launches this on demand when
@@ -32,7 +33,12 @@ func runAgent() -> Never {
     }
 
     let progressLedger = JobProgressLedger()
-    let orchestrator = TransferOrchestrator(database: database, progressLedger: progressLedger)
+    let secretStore = KeychainSecretStore(service: EngineXPC.machServiceName)
+    let orchestrator = TransferOrchestrator(
+        database: database,
+        progressLedger: progressLedger,
+        secretStore: secretStore
+    )
     Task { await orchestrator.start() }
 
     let services = EngineServices(
@@ -42,7 +48,8 @@ func runAgent() -> Never {
         startDate: startDate,
         database: database,
         orchestrator: orchestrator,
-        progressLedger: progressLedger
+        progressLedger: progressLedger,
+        secretStore: secretStore
     )
     let validator = CodeSigningIdentityValidator(
         allowedIdentifiers: [XPCClientIdentities.appBundleIdentifier]

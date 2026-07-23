@@ -3,6 +3,7 @@
 import EngineAgent
 import Foundation
 import Persistence
+import SharedSecurity
 import TestFaultService
 import XCTest
 
@@ -32,7 +33,10 @@ final class OrchestratorIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(inserted.jobIDs.count, 1)
 
-        let orchestrator = TransferOrchestrator(database: database)
+        let orchestrator = TransferOrchestrator(
+            database: database,
+            secretStore: InMemorySecretStore()
+        )
         await orchestrator.start()
         defer {
             let orch = orchestrator

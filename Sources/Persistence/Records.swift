@@ -117,11 +117,17 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
     public var updatedAt: Date
     public var revision: Int
     public var terminalReason: String?
+    public var credentialProfileID: String?
+    public var proxyProfileID: String?
+    public var cookieProfileID: String?
+    public var customHeadersJSON: String?
 
     public init(
         id: String, batchID: String?, resourceID: String, state: String, priority: Int,
         queuePosition: Int, categoryID: String, projectID: String?, destinationProfileID: String,
-        scheduleID: String?, createdAt: Date, updatedAt: Date, revision: Int, terminalReason: String?
+        scheduleID: String?, createdAt: Date, updatedAt: Date, revision: Int, terminalReason: String?,
+        credentialProfileID: String? = nil, proxyProfileID: String? = nil,
+        cookieProfileID: String? = nil, customHeadersJSON: String? = nil
     ) {
         self.id = id
         self.batchID = batchID
@@ -137,6 +143,61 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.updatedAt = updatedAt
         self.revision = revision
         self.terminalReason = terminalReason
+        self.credentialProfileID = credentialProfileID
+        self.proxyProfileID = proxyProfileID
+        self.cookieProfileID = cookieProfileID
+        self.customHeadersJSON = customHeadersJSON
+    }
+}
+
+public struct CookieProfileRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "cookie_profiles"
+    public var id: String
+    public var displayName: String
+    /// Relative path under agent Application Support (e.g. `cookies/<id>.jar`).
+    /// Cookie values never enter SQLite.
+    public var storageRelativePath: String
+
+    public init(id: String, displayName: String, storageRelativePath: String) {
+        self.id = id
+        self.displayName = displayName
+        self.storageRelativePath = storageRelativePath
+    }
+}
+
+public struct HostObservationRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "host_observations"
+    public var host: String
+    public var observation: String
+    public var expiresAt: Date
+
+    public init(host: String, observation: String, expiresAt: Date) {
+        self.host = host
+        self.observation = observation
+        self.expiresAt = expiresAt
+    }
+}
+
+public struct EventRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "events"
+    public var sequence: Int64?
+    public var jobID: String?
+    public var occurredAt: Date
+    public var type: String
+    public var sanitizedPayload: String?
+
+    public init(
+        sequence: Int64? = nil,
+        jobID: String?,
+        occurredAt: Date,
+        type: String,
+        sanitizedPayload: String?
+    ) {
+        self.sequence = sequence
+        self.jobID = jobID
+        self.occurredAt = occurredAt
+        self.type = type
+        self.sanitizedPayload = sanitizedPayload
     }
 }
 

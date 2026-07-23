@@ -63,6 +63,8 @@ targets:
         product: XPCContracts
       - package: DownloadKit
         product: SharedObservability
+      - package: DownloadKit
+        product: SharedSecurity
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(DM_AGENT_BUNDLE_ID)
@@ -153,6 +155,8 @@ targets:
         product: EngineAgent
       - package: DownloadKit
         product: Persistence
+      - package: DownloadKit
+        product: SharedSecurity
 
   RecoveryTests:
     type: bundle.unit-test

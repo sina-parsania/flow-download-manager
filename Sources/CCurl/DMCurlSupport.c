@@ -216,6 +216,7 @@ CURLcode DMCurlEasyDownloadToFD(
     void *progressUserdata,
     const char *userpwd,
     const char *proxyURL,
+    const char *cookieJarPath,
     DMCurlDownloadResult *out
 ) {
     if (url == NULL || fd < 0 || out == NULL) {
@@ -269,6 +270,10 @@ CURLcode DMCurlEasyDownloadToFD(
     }
     if (proxyURL != NULL && proxyURL[0] != '\0') {
         curl_easy_setopt(easy, CURLOPT_PROXY, proxyURL);
+    }
+    if (cookieJarPath != NULL && cookieJarPath[0] != '\0') {
+        curl_easy_setopt(easy, CURLOPT_COOKIEFILE, cookieJarPath);
+        curl_easy_setopt(easy, CURLOPT_COOKIEJAR, cookieJarPath);
     }
 
     CURLcode code = curl_easy_perform(easy);

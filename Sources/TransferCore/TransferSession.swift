@@ -16,19 +16,23 @@ public enum TransferCore {
         public var userpwd: String?
         /// Proxy URL such as `http://host:8080` or `socks5://host:1080`.
         public var proxyURL: String?
+        /// Netscape cookie jar path for CURLOPT_COOKIEFILE / CURLOPT_COOKIEJAR.
+        public var cookieJarPath: String?
 
         public init(
             connectTimeoutMilliseconds: Int = 15000,
             transferTimeoutMilliseconds: Int = 0,
             maxRedirects: Int = 10,
             userpwd: String? = nil,
-            proxyURL: String? = nil
+            proxyURL: String? = nil,
+            cookieJarPath: String? = nil
         ) {
             self.connectTimeoutMilliseconds = connectTimeoutMilliseconds
             self.transferTimeoutMilliseconds = transferTimeoutMilliseconds
             self.maxRedirects = maxRedirects
             self.userpwd = userpwd
             self.proxyURL = proxyURL
+            self.cookieJarPath = cookieJarPath
         }
     }
 
@@ -262,40 +266,44 @@ public enum TransferCore {
             url.withCString { urlC in
                 withOptionalCString(options.userpwd) { userpwdC in
                     withOptionalCString(options.proxyURL) { proxyC in
-                        if let rangeHeader {
-                            return rangeHeader.withCString { rangeC in
-                                DMCurlEasyDownloadToFD(
-                                    urlC,
-                                    fd,
-                                    curl_off_t(fileOffset),
-                                    rangeC,
-                                    connect,
-                                    transfer,
-                                    redirects,
-                                    abortPtr,
-                                    progressCtx.callback,
-                                    progressCtx.userdata,
-                                    userpwdC,
-                                    proxyC,
-                                    &result
-                                )
+                        withOptionalCString(options.cookieJarPath) { cookieC in
+                            if let rangeHeader {
+                                return rangeHeader.withCString { rangeC in
+                                    DMCurlEasyDownloadToFD(
+                                        urlC,
+                                        fd,
+                                        curl_off_t(fileOffset),
+                                        rangeC,
+                                        connect,
+                                        transfer,
+                                        redirects,
+                                        abortPtr,
+                                        progressCtx.callback,
+                                        progressCtx.userdata,
+                                        userpwdC,
+                                        proxyC,
+                                        cookieC,
+                                        &result
+                                    )
+                                }
                             }
+                            return DMCurlEasyDownloadToFD(
+                                urlC,
+                                fd,
+                                curl_off_t(fileOffset),
+                                nil,
+                                connect,
+                                transfer,
+                                redirects,
+                                abortPtr,
+                                progressCtx.callback,
+                                progressCtx.userdata,
+                                userpwdC,
+                                proxyC,
+                                cookieC,
+                                &result
+                            )
                         }
-                        return DMCurlEasyDownloadToFD(
-                            urlC,
-                            fd,
-                            curl_off_t(fileOffset),
-                            nil,
-                            connect,
-                            transfer,
-                            redirects,
-                            abortPtr,
-                            progressCtx.callback,
-                            progressCtx.userdata,
-                            userpwdC,
-                            proxyC,
-                            &result
-                        )
                     }
                 }
             }

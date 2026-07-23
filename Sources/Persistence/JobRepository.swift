@@ -26,6 +26,10 @@ public struct TransferJobDetails: Sendable {
     public let destinationDirectory: URL
     public let suggestedFilename: String
     public let expectedChecksum: String?
+    public let credentialProfileID: String?
+    public let proxyProfileID: String?
+    public let cookieProfileID: String?
+    public let customHeadersJSON: String?
 }
 
 /// Agent-only persistence helpers for jobs/batches (sole writer).
@@ -213,8 +217,58 @@ public enum JobRepository {
             job.updatedAt = Date()
             job.revision += 1
             try job.update(db)
+
+            let payload = Self.sanitizedStatePayload(
+                state: state,
+                terminalReason: terminalReason,
+                revision: job.revision
+            )
+            try EventRecord(
+                jobID: id,
+                occurredAt: job.updatedAt,
+                type: "state.changed",
+                sanitizedPayload: payload
+            ).insert(db)
             return job.revision
         }
+    }
+
+    /// Append an event-journal row. Payload must already be sanitized (no secrets,
+    /// no URLs with query strings).
+    public static func appendEvent(
+        database: EngineDatabase,
+        jobID: String?,
+        type: String,
+        sanitizedPayload: String?
+    ) throws {
+        try database.pool.write { db in
+            try EventRecord(
+                jobID: jobID,
+                occurredAt: Date(),
+                type: type,
+                sanitizedPayload: sanitizedPayload
+            ).insert(db)
+        }
+    }
+
+    private static func sanitizedStatePayload(
+        state: String,
+        terminalReason: String?,
+        revision: Int
+    ) -> String {
+        var object: [String: Any] = [
+            "state": state,
+            "revision": revision
+        ]
+        if let terminalReason {
+            object["terminalReason"] = terminalReason
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let string = String(data: data, encoding: .utf8)
+        else {
+            return "{\"state\":\"\(state)\",\"revision\":\(revision)}"
+        }
+        return string
     }
 
     public static func loadJobForTransfer(
@@ -245,7 +299,11 @@ public enum JobRepository {
                 canonicalURL: resource.canonicalURL,
                 destinationDirectory: destination,
                 suggestedFilename: suggested,
-                expectedChecksum: resource.checksum
+                expectedChecksum: resource.checksum,
+                credentialProfileID: job.credentialProfileID,
+                proxyProfileID: job.proxyProfileID,
+                cookieProfileID: job.cookieProfileID,
+                customHeadersJSON: job.customHeadersJSON
             )
         }
     }

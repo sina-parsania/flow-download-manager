@@ -42,6 +42,7 @@ typedef int (*DMCurlProgressCallback)(curl_off_t written, void *userdata);
 /// When @c abortFlag is non-NULL and becomes non-zero, the transfer aborts with
 /// @c CURLE_ABORTED_BY_CALLBACK.
 /// @c userpwd may be "user:password" or NULL. @c proxyURL may be a proxy URL or NULL.
+/// @c cookieJarPath may be a Netscape cookie-jar path (COOKIEFILE + COOKIEJAR) or NULL.
 CURLcode DMCurlEasyDownloadToFD(
     const char *url,
     int fd,
@@ -55,6 +56,7 @@ CURLcode DMCurlEasyDownloadToFD(
     void *progressUserdata,
     const char *userpwd,
     const char *proxyURL,
+    const char *cookieJarPath,
     DMCurlDownloadResult *out
 );
 

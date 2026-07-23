@@ -48,6 +48,24 @@ public protocol EngineControlProtocol {
         _ request: JobCommandRequest,
         reply: @escaping @Sendable (JobCommandResponse?, NSError?) -> Void
     )
+
+    /// Create or replace a credential profile (password → Keychain only).
+    func upsertCredentialProfile(
+        _ request: UpsertCredentialProfileRequest,
+        reply: @escaping @Sendable (UpsertCredentialProfileResponse?, NSError?) -> Void
+    )
+
+    /// Create or replace a proxy profile (non-secret metadata in SQLite).
+    func upsertProxyProfile(
+        _ request: UpsertProxyProfileRequest,
+        reply: @escaping @Sendable (UpsertProxyProfileResponse?, NSError?) -> Void
+    )
+
+    /// List credential and proxy profiles for Settings.
+    func listProfiles(
+        requestID: String,
+        reply: @escaping @Sendable (ListProfilesResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.

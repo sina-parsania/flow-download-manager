@@ -3,6 +3,7 @@
 import Domain
 import Foundation
 import Persistence
+import SharedSecurity
 import XPCContracts
 
 /// Runtime facts the engine reports over the control interface. Injected so tests
@@ -16,6 +17,7 @@ public struct EngineServices: Sendable {
     public let database: EngineDatabase?
     public let orchestrator: TransferOrchestrator?
     public let progressLedger: JobProgressLedger?
+    public let secretStore: (any SecretStore)?
 
     public init(
         engineBuild: String,
@@ -25,7 +27,8 @@ public struct EngineServices: Sendable {
         now: @escaping @Sendable () -> Date = { Date() },
         database: EngineDatabase? = nil,
         orchestrator: TransferOrchestrator? = nil,
-        progressLedger: JobProgressLedger? = nil
+        progressLedger: JobProgressLedger? = nil,
+        secretStore: (any SecretStore)? = nil
     ) {
         self.engineBuild = engineBuild
         self.databaseVersion = databaseVersion
@@ -35,6 +38,7 @@ public struct EngineServices: Sendable {
         self.database = database
         self.orchestrator = orchestrator
         self.progressLedger = progressLedger
+        self.secretStore = secretStore
     }
 }
 
@@ -47,6 +51,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var enqueueCache: [String: EnqueueBatchResponse] = [:]
     private var listCache: [String: JobListSnapshot] = [:]
     private var commandCache: [String: JobCommandResponse] = [:]
+    private var credentialCache: [String: UpsertCredentialProfileResponse] = [:]
+    private var proxyCache: [String: UpsertProxyProfileResponse] = [:]
+    private var listProfilesCache: [String: ListProfilesResponse] = [:]
     private var snapshotSequence: Int64 = 0
 
     init(services: EngineServices) {
@@ -68,7 +75,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             acceptedVersion: SchemaVersions.xpcProtocol,
             engineBuild: services.engineBuild,
             databaseVersion: services.databaseVersion,
-            capabilities: ["health", "enqueueBatch", "listJobs", "controlJob"]
+            capabilities: [
+                "health", "enqueueBatch", "listJobs", "controlJob",
+                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles"
+            ]
         ), nil)
     }
 
@@ -281,6 +291,165 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "control failed"))
+        }
+    }
+
+    func upsertCredentialProfile(
+        _ request: UpsertCredentialProfileRequest,
+        reply: @escaping @Sendable (UpsertCredentialProfileResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = credentialCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database, let secretStore = services.secretStore else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try ProfileRepository.upsertCredentialProfile(
+                database: database,
+                id: request.profileID,
+                metadata: CredentialProfileMetadata(
+                    displayName: request.displayName,
+                    username: request.username
+                ),
+                passwordUTF8: request.passwordUTF8,
+                secretStore: secretStore
+            )
+            let response = UpsertCredentialProfileResponse(
+                requestID: request.requestID,
+                profileID: request.profileID
+            )
+            lock.lock()
+            credentialCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "credential upsert failed"))
+        }
+    }
+
+    func upsertProxyProfile(
+        _ request: UpsertProxyProfileRequest,
+        reply: @escaping @Sendable (UpsertProxyProfileResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = proxyCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try ProfileRepository.upsertProxyProfile(
+                database: database,
+                id: request.profileID,
+                metadata: ProxyProfileMetadata(
+                    displayName: request.displayName,
+                    kind: request.kind,
+                    host: request.host,
+                    port: request.port
+                )
+            )
+            let response = UpsertProxyProfileResponse(
+                requestID: request.requestID,
+                profileID: request.profileID
+            )
+            lock.lock()
+            proxyCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "proxy upsert failed"))
+        }
+    }
+
+    func listProfiles(
+        requestID: String,
+        reply: @escaping @Sendable (ListProfilesResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = listProfilesCache[requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let credentials = try ProfileRepository.listCredentialProfiles(database: database)
+                .map { id, meta in
+                    CredentialProfileSnapshot(
+                        id: id,
+                        displayName: meta.displayName,
+                        username: meta.username
+                    )
+                }
+            let proxies = try ProfileRepository.listProxyProfiles(database: database)
+                .map { id, meta in
+                    ProxyProfileSnapshot(
+                        id: id,
+                        displayName: meta.displayName,
+                        kind: meta.kind,
+                        host: meta.host,
+                        port: meta.port
+                    )
+                }
+            let response = ListProfilesResponse(
+                requestID: requestID,
+                credentials: credentials,
+                proxies: proxies
+            )
+            lock.lock()
+            listProfilesCache[requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "list profiles failed"))
         }
     }
 

@@ -48,6 +48,59 @@ final class ProfileAndScheduleTests: XCTestCase {
         XCTAssertEqual(url, "socks5://127.0.0.1:1080")
     }
 
+    func testCookieProfileJarPathUnderApplicationSupport() throws {
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-cookie-\(UUID().uuidString).sqlite")
+        let support = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-cookie-support-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: dbURL)
+            try? FileManager.default.removeItem(at: support)
+        }
+        let database = try EngineDatabase(url: dbURL)
+        let id = UUID().uuidString.lowercased()
+        try ProfileRepository.upsertCookieProfile(
+            database: database,
+            id: id,
+            displayName: "Session"
+        )
+        let path = try ProfileRepository.cookieJarPath(
+            database: database,
+            profileID: id,
+            applicationSupportRoot: support
+        )
+        XCTAssertTrue(path.hasSuffix("cookies/\(id).jar"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (path as NSString).deletingLastPathComponent))
+    }
+
+    func testListCredentialAndProxyProfiles() throws {
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-listprof-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        let database = try EngineDatabase(url: dbURL)
+        let store = InMemorySecretStore()
+        let credID = UUID().uuidString.lowercased()
+        let proxyID = UUID().uuidString.lowercased()
+        try ProfileRepository.upsertCredentialProfile(
+            database: database,
+            id: credID,
+            metadata: CredentialProfileMetadata(displayName: "A", username: "u"),
+            passwordUTF8: Data("p".utf8),
+            secretStore: store
+        )
+        try ProfileRepository.upsertProxyProfile(
+            database: database,
+            id: proxyID,
+            metadata: ProxyProfileMetadata(
+                displayName: "P", kind: "http", host: "127.0.0.1", port: 8080
+            )
+        )
+        let credentials = try ProfileRepository.listCredentialProfiles(database: database)
+        let proxies = try ProfileRepository.listProxyProfiles(database: database)
+        XCTAssertEqual(credentials.map(\.id), [credID])
+        XCTAssertEqual(proxies.map(\.id), [proxyID])
+    }
+
     func testOneShotSchedulePromotion() throws {
         let dbURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("dm-sched-\(UUID().uuidString).sqlite")

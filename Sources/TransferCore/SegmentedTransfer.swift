@@ -13,18 +13,23 @@ public enum SegmentedTransfer {
     }
 
     /// Chooses segment count from content size. Small bodies stay single-stream.
-    public static func preferredSegmentCount(totalBytes: Int64) -> Int {
+    /// When `hostMaxSegments` is present (from a prior host observation), the
+    /// size-based preference is clamped to that upper bound.
+    public static func preferredSegmentCount(totalBytes: Int64, hostMaxSegments: Int? = nil) -> Int {
+        let bySize: Int
         switch totalBytes {
         case ..<2048:
-            return 1
+            bySize = 1
         case ..<16_777_216:
-            return 2
+            bySize = 2
         case ..<67_108_864:
-            return 4
+            bySize = 4
         default:
-            let bySize = Int(totalBytes / (8 * 1024 * 1024))
-            return min(8, max(4, bySize))
+            let scaled = Int(totalBytes / (8 * 1024 * 1024))
+            bySize = min(8, max(4, scaled))
         }
+        guard let hostMaxSegments, hostMaxSegments > 0 else { return bySize }
+        return min(bySize, hostMaxSegments)
     }
 
     public static func downloadHTTP(
@@ -33,7 +38,8 @@ public enum SegmentedTransfer {
         options: TransferCore.DownloadOptions = TransferCore.DownloadOptions(),
         abortFlag: TransferAbortFlag? = nil,
         onProgress: TransferCore.ProgressHandler? = nil,
-        preferResume: Bool = true
+        preferResume: Bool = true,
+        hostMaxSegments: Int? = nil
     ) throws -> Outcome {
         if preferResume,
            let existing = (try? partialURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
@@ -61,7 +67,7 @@ public enum SegmentedTransfer {
             )
         }
 
-        let segments = preferredSegmentCount(totalBytes: total)
+        let segments = preferredSegmentCount(totalBytes: total, hostMaxSegments: hostMaxSegments)
         guard segments > 1, total > 1 else {
             return try singleOutcome(
                 url: url, partialURL: partialURL, options: options,

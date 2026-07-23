@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Foundation
+import GRDB
 import Persistence
 import XCTest
 
@@ -56,6 +57,69 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertEqual(details.canonicalURL, "https://example.test/a.mp4")
         XCTAssertEqual(details.suggestedFilename, "a.mp4")
         XCTAssertFalse(details.destinationDirectory.path.isEmpty)
+        XCTAssertNil(details.credentialProfileID)
+        XCTAssertNil(details.proxyProfileID)
+        XCTAssertNil(details.cookieProfileID)
+        XCTAssertNil(details.customHeadersJSON)
+    }
+
+    func testUpdateJobStateWritesEventJournal() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://example.test/file.bin", categoryStableKey: "other")
+            ]
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: jobID,
+            state: "connecting",
+            terminalReason: nil,
+            expectedRevision: 1
+        )
+
+        let events = try database.pool.read { db in
+            try EventRecord
+                .filter(Column("jobID") == jobID)
+                .order(Column("sequence").asc)
+                .fetchAll(db)
+        }
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events[0].type, "state.changed")
+        let payload = try XCTUnwrap(events[0].sanitizedPayload)
+        XCTAssertTrue(payload.contains("\"state\":\"connecting\""))
+        XCTAssertFalse(payload.contains("example.test"))
+        XCTAssertFalse(payload.lowercased().contains("password"))
+    }
+
+    func testAppendEventWritesSanitizedRow() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://example.test/file.bin", categoryStableKey: "other")
+            ]
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+        try JobRepository.appendEvent(
+            database: database,
+            jobID: jobID,
+            type: "transfer.note",
+            sanitizedPayload: "{\"segmentCount\":2}"
+        )
+        let count = try database.count(EventRecord.self)
+        XCTAssertEqual(count, 1)
     }
 
     func testUpdateJobStateRevisionCheck() throws {

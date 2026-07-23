@@ -4,7 +4,9 @@ import Application
 import Foundation
 import Persistence
 import SharedObservability
+import SharedSecurity
 import TransferCore
+import XPCContracts
 
 /// Runs queued jobs through TransferCore and finalization. Agent-owned.
 public actor TransferOrchestrator {
@@ -12,6 +14,8 @@ public actor TransferOrchestrator {
     private let budget: TransferBudgetLedger
     private let retryPolicy: RetryPolicy
     private let progressLedger: JobProgressLedger
+    private let secretStore: any SecretStore
+    private let applicationSupportRoot: URL
     private let log = EngineLog.agent
     private var isRunning = false
     private var cancelledJobIDs: Set<String> = []
@@ -23,12 +27,28 @@ public actor TransferOrchestrator {
         database: EngineDatabase,
         budget: TransferBudgetLedger = TransferBudgetLedger(),
         retryPolicy: RetryPolicy = RetryPolicy(),
-        progressLedger: JobProgressLedger = JobProgressLedger()
+        progressLedger: JobProgressLedger = JobProgressLedger(),
+        secretStore: any SecretStore = KeychainSecretStore(service: EngineXPC.machServiceName),
+        applicationSupportRoot: URL? = nil
     ) {
         self.database = database
         self.budget = budget
         self.retryPolicy = retryPolicy
         self.progressLedger = progressLedger
+        self.secretStore = secretStore
+        if let applicationSupportRoot {
+            self.applicationSupportRoot = applicationSupportRoot
+        } else {
+            let base = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first
+                ?? FileManager.default.temporaryDirectory
+            self.applicationSupportRoot = base.appendingPathComponent(
+                EngineXPC.machServiceName,
+                isDirectory: true
+            )
+        }
     }
 
     public func start() {
@@ -140,14 +160,19 @@ public actor TransferOrchestrator {
             }
             defer { Task { await budget.releaseSocket(host: host) } }
 
+            let options = try buildDownloadOptions(from: details)
+            let hostHint = try? HostObservationRepository.get(database: database, host: host)
+
             let outcome = try SegmentedTransfer.downloadHTTP(
                 url: details.canonicalURL,
                 partialURL: partial,
+                options: options,
                 abortFlag: abort,
                 onProgress: { bytes in
                     Task { await self.recordProgress(jobID: jobID, bytes: bytes, total: nil) }
                 },
-                preferResume: true
+                preferResume: true,
+                hostMaxSegments: hostHint?.maxSegments
             )
 
             if cancelledJobIDs.contains(jobID) || abort.isSet && cancelledJobIDs.contains(jobID) {
@@ -174,6 +199,18 @@ public actor TransferOrchestrator {
                     for: jobID
                 )
                 return
+            }
+
+            if outcome.segmentCount > 1 {
+                try? HostObservationRepository.set(
+                    database: database,
+                    host: host,
+                    observation: HostObservationRepository.Observation(
+                        maxSegments: outcome.segmentCount,
+                        rangeOK: true
+                    ),
+                    expiresAt: Date().addingTimeInterval(7 * 24 * 60 * 60)
+                )
             }
 
             try JobRepository.updateResourceIdentity(
@@ -220,6 +257,31 @@ public actor TransferOrchestrator {
         } catch {
             await handleFailure(jobID: jobID, error: error)
         }
+    }
+
+    private func buildDownloadOptions(from details: TransferJobDetails) throws -> TransferCore.DownloadOptions {
+        var options = TransferCore.DownloadOptions()
+        if let credentialID = details.credentialProfileID {
+            options.userpwd = try ProfileRepository.loadUserpwd(
+                database: database,
+                profileID: credentialID,
+                secretStore: secretStore
+            )
+        }
+        if let proxyID = details.proxyProfileID {
+            options.proxyURL = try ProfileRepository.loadProxyURL(
+                database: database,
+                profileID: proxyID
+            )
+        }
+        if let cookieID = details.cookieProfileID {
+            options.cookieJarPath = try ProfileRepository.cookieJarPath(
+                database: database,
+                profileID: cookieID,
+                applicationSupportRoot: applicationSupportRoot
+            )
+        }
+        return options
     }
 
     private func recordProgress(jobID: String, bytes: Int64, total: Int64?) {

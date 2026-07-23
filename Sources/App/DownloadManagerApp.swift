@@ -19,8 +19,10 @@ struct DownloadManagerApp: App {
     @StateObject private var clipboardMonitor = ClipboardMonitor()
 
     init() {
-        // Non-UI diagnostic path: report SMAppService status, then exit.
-        if CommandLine.arguments.contains(LaunchAgentProbe.launchArgument) {
+        // Non-UI diagnostic path: report / re-register SMAppService, then exit.
+        if CommandLine.arguments.contains(LaunchAgentProbe.launchArgument)
+            || CommandLine.arguments.contains(LaunchAgentProbe.reregisterArgument)
+        {
             LaunchAgentProbe.runAndExit(plistName: Self.launchAgentPlistName)
         }
         _launchAgent = StateObject(wrappedValue: LaunchAgentModel(

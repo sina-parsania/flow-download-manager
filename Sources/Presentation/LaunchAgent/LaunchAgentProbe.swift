@@ -14,9 +14,26 @@ import Foundation
 /// is unit-tested via the `LaunchAgentManaging` seam.
 public enum LaunchAgentProbe {
     public static let launchArgument = "--smappservice-probe"
+    public static let reregisterArgument = "--smappservice-reregister"
 
     public static func runAndExit(plistName: String) -> Never {
         let agent = SMAppServiceLaunchAgent(plistName: plistName)
+        if CommandLine.arguments.contains(reregisterArgument) {
+            do {
+                try agent.unregister()
+                emit("unregistered status=\(agent.currentStatus())")
+            } catch {
+                emit("unregister-failed status=\(agent.currentStatus()) error=\(error)")
+            }
+            do {
+                try agent.register()
+                emit("registered status=\(agent.currentStatus())")
+                exit(EXIT_SUCCESS)
+            } catch {
+                emit("register-failed status=\(agent.currentStatus()) error=\(error)")
+                exit(EXIT_FAILURE)
+            }
+        }
         emit("plist=\(plistName) status=\(agent.currentStatus())")
         exit(EXIT_SUCCESS)
     }

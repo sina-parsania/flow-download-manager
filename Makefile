@@ -109,6 +109,10 @@ release-dmg-unsigned: ## Build unsigned Release DMG (no signing/notarization)
 release-notarize: ## Notarize a signed DMG (BLOCKED without credentials)
 	@Scripts/release/notarize.sh
 
+.PHONY: install-chrome-native-host
+install-chrome-native-host: ## Register Chrome Native Messaging host (needs DM_CHROME_EXTENSION_ID)
+	@Scripts/install-chrome-native-host.sh
+
 ## ----- Complete stable gate -----
 
 .PHONY: test-integration

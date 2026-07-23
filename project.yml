@@ -121,6 +121,19 @@ targets:
               - txt
               - csv
 
+  # --- Chrome Native Messaging host (Phase 2) ---
+  ChromeNativeHost:
+    type: tool
+    platform: macOS
+    sources: [Sources/ChromeNativeHostMain]
+    dependencies:
+      - package: DownloadKit
+        product: NativeMessaging
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DM_NATIVE_HOST_BUNDLE_ID)
+        PRODUCT_NAME: ChromeNativeHost
+
   # --- Tests ---
   UnitTests:
     type: bundle.unit-test
@@ -153,6 +166,8 @@ targets:
         product: TorrentCore
       - package: DownloadKit
         product: MediaIsolation
+      - package: DownloadKit
+        product: NativeMessaging
       - package: DownloadKit
         product: Application
       - package: GRDB

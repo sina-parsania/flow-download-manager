@@ -1,0 +1,9 @@
+{
+  "name": "org.downloadmanager.local.ChromeNativeHost",
+  "description": "Download Manager Chrome Native Messaging host",
+  "path": "REPLACE_WITH_ABSOLUTE_HOST_PATH",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_EXTENSION_ID/"
+  ]
+}

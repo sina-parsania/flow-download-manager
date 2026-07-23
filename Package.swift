@@ -49,10 +49,12 @@ let package = Package(
         .library(name: "TransferCore", targets: ["TransferCore"]),
         .library(name: "TorrentCore", targets: ["TorrentCore"]),
         .library(name: "MediaIsolation", targets: ["MediaIsolation"]),
+        .library(name: "NativeMessaging", targets: ["NativeMessaging"]),
         .library(name: "EngineAgent", targets: ["EngineAgent"]),
         .library(name: "Presentation", targets: ["Presentation"]),
         .library(name: "TestFaultService", targets: ["TestFaultService"]),
-        .executable(name: "test-services", targets: ["test-services"])
+        .executable(name: "test-services", targets: ["test-services"]),
+        .executable(name: "ChromeNativeHost", targets: ["ChromeNativeHostMain"])
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1")
@@ -107,6 +109,20 @@ let package = Package(
         .target(
             name: "MediaIsolation",
             path: "Sources/MediaIsolation",
+            swiftSettings: strict
+        ),
+
+        .target(
+            name: "NativeMessaging",
+            dependencies: ["Domain", "Application", "XPCContracts"],
+            path: "Sources/NativeMessaging",
+            swiftSettings: strict
+        ),
+
+        .executableTarget(
+            name: "ChromeNativeHostMain",
+            dependencies: ["NativeMessaging"],
+            path: "Sources/ChromeNativeHostMain",
             swiftSettings: strict
         ),
 

@@ -52,7 +52,10 @@ func runAgent() -> Never {
         secretStore: secretStore
     )
     let validator = CodeSigningIdentityValidator(
-        allowedIdentifiers: [XPCClientIdentities.appBundleIdentifier]
+        allowedIdentifiers: [
+            XPCClientIdentities.appBundleIdentifier,
+            XPCClientIdentities.nativeHostBundleIdentifier
+        ]
     )
     let delegate = EngineServiceListener(validator: validator, services: services)
 

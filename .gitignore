@@ -27,6 +27,9 @@ macos-download-manager-prompt-pack/
 # Local IDE state
 .vscode/
 
+# Xcode target build/ (used when building ChromeNativeHost without DerivedData)
+build/
+
 # macOS
 .DS_Store
 

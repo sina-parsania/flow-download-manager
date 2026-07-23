@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Download Manager</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 12px;
+        min-width: 260px;
+      }
+      button {
+        width: 100%;
+        padding: 8px;
+      }
+      #status {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #444;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="send">Send current tab URL</button>
+    <div id="status"></div>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

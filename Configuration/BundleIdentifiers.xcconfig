@@ -13,4 +13,5 @@ DM_BUNDLE_ID_PREFIX = org.downloadmanager.local
 
 DM_APP_BUNDLE_ID = $(DM_BUNDLE_ID_PREFIX).DownloadManager
 DM_AGENT_BUNDLE_ID = $(DM_BUNDLE_ID_PREFIX).DownloadEngineAgent
+DM_NATIVE_HOST_BUNDLE_ID = $(DM_BUNDLE_ID_PREFIX).ChromeNativeHost
 DM_LAUNCH_AGENT_LABEL = $(DM_BUNDLE_ID_PREFIX).DownloadEngineAgent

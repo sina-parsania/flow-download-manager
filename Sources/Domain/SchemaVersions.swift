@@ -16,6 +16,6 @@ public enum SchemaVersions {
     /// before payload decoding (`04-domain-and-data-contracts.md` §9).
     public static let xpcProtocol = 1
 
-    /// Native Messaging envelope `protocolVersion`. Declared, not yet exposed.
+    /// Native Messaging envelope `protocolVersion`. Phase 2 Chrome host/extension.
     public static let nativeMessaging = 1
 }

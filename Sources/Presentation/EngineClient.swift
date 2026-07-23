@@ -38,24 +38,9 @@ public final class EngineClient: ObservableObject {
                 "listCategoryRules", "upsertCategoryRule", "listEvents"
             ]
         )
-        let server: ServerHello = try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.handshake(hello) { serverHello, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let serverHello {
-                    cont.resume(returning: serverHello)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
-        }
-        _ = server
+        _ = try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.handshake(hello, reply: reply)
+        } as ServerHello
         didHandshake = true
     }
 
@@ -83,44 +68,16 @@ public final class EngineClient: ObservableObject {
             projectID: projectID,
             scheduleStartAtISO8601: scheduleStartAtISO8601
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.enqueueBatch(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.enqueueBatch(request, reply: reply)
         }
     }
 
     public func listJobs() async throws -> JobListSnapshot {
         try await connect()
         let requestID = UUID().uuidString
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.listJobs(requestID: requestID) { snapshot, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let snapshot {
-                    cont.resume(returning: snapshot)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.listJobs(requestID: requestID, reply: reply)
         }
     }
 
@@ -136,22 +93,8 @@ public final class EngineClient: ObservableObject {
             command: command,
             expectedRevision: expectedRevision
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.controlJob(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.controlJob(request, reply: reply)
         }
     }
 
@@ -162,44 +105,16 @@ public final class EngineClient: ObservableObject {
             jobID: jobID,
             priority: priority
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.setJobPriority(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.setJobPriority(request, reply: reply)
         }
     }
 
     public func listProfiles() async throws -> ListProfilesResponse {
         try await connect()
         let requestID = UUID().uuidString
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.listProfiles(requestID: requestID) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.listProfiles(requestID: requestID, reply: reply)
         }
     }
 
@@ -209,22 +124,8 @@ public final class EngineClient: ObservableObject {
             requestID: UUID().uuidString,
             jobID: jobID
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.deleteJob(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.deleteJob(request, reply: reply)
         }
     }
 
@@ -245,22 +146,8 @@ public final class EngineClient: ObservableObject {
             username: username,
             passwordUTF8: passwordData
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.upsertCredentialProfile(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.upsertCredentialProfile(request, reply: reply)
         }
     }
 
@@ -280,22 +167,8 @@ public final class EngineClient: ObservableObject {
             host: host,
             port: port
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.upsertProxyProfile(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.upsertProxyProfile(request, reply: reply)
         }
     }
 
@@ -309,22 +182,8 @@ public final class EngineClient: ObservableObject {
             profileID: profileID,
             displayName: displayName
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.upsertCookieProfile(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.upsertCookieProfile(request, reply: reply)
         }
     }
 
@@ -342,66 +201,24 @@ public final class EngineClient: ObservableObject {
             windowsJSON: windowsJSON,
             maxBytesPerSecond: maxBytesPerSecond
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.upsertBandwidthPolicy(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.upsertBandwidthPolicy(request, reply: reply)
         }
     }
 
     public func getBandwidthPolicy() async throws -> GetBandwidthPolicyResponse {
         try await connect()
         let requestID = UUID().uuidString
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.getBandwidthPolicy(requestID: requestID) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.getBandwidthPolicy(requestID: requestID, reply: reply)
         }
     }
 
     public func listOrganization() async throws -> ListOrganizationResponse {
         try await connect()
         let requestID = UUID().uuidString
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.listOrganization(requestID: requestID) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.listOrganization(requestID: requestID, reply: reply)
         }
     }
 
@@ -417,22 +234,8 @@ public final class EngineClient: ObservableObject {
             name: name,
             colorRole: colorRole
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.upsertProject(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.upsertProject(request, reply: reply)
         }
     }
 
@@ -446,22 +249,8 @@ public final class EngineClient: ObservableObject {
             tagID: tagID,
             name: name
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.upsertTag(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.upsertTag(request, reply: reply)
         }
     }
 
@@ -472,22 +261,8 @@ public final class EngineClient: ObservableObject {
             jobID: jobID,
             tagIDs: tagIDs
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.setJobTags(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.setJobTags(request, reply: reply)
         }
     }
 
@@ -498,44 +273,16 @@ public final class EngineClient: ObservableObject {
             jobID: jobID,
             projectID: projectID
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.setJobProject(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.setJobProject(request, reply: reply)
         }
     }
 
     public func getBoolSetting(key: String) async throws -> GetBoolSettingResponse {
         try await connect()
         let request = GetBoolSettingRequest(requestID: UUID().uuidString, key: key)
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.getBoolSetting(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.getBoolSetting(request, reply: reply)
         }
     }
 
@@ -546,44 +293,16 @@ public final class EngineClient: ObservableObject {
             key: key,
             value: value
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.setBoolSetting(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.setBoolSetting(request, reply: reply)
         }
     }
 
     public func listCategoryRules() async throws -> ListCategoryRulesResponse {
         try await connect()
         let requestID = UUID().uuidString
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.listCategoryRules(requestID: requestID) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.listCategoryRules(requestID: requestID, reply: reply)
         }
     }
 
@@ -603,22 +322,8 @@ public final class EngineClient: ObservableObject {
             predicateJSON: predicateJSON,
             categoryStableKey: categoryStableKey
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
-                cont.resume(throwing: ClientError.notConnected)
-                return
-            }
-            proxy.upsertCategoryRule(request) { response, error in
-                if let error {
-                    cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
-                } else {
-                    cont.resume(throwing: ClientError.decoding)
-                }
-            }
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.upsertCategoryRule(request, reply: reply)
         }
     }
 
@@ -629,18 +334,45 @@ public final class EngineClient: ObservableObject {
             jobID: jobID,
             limit: min(max(limit, 1), EngineXPC.maxCollectionCount)
         )
-        return try await withCheckedThrowingContinuation { cont in
-            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
-                cont.resume(throwing: ClientError.remote(error as NSError))
-            }) as? EngineControlProtocol else {
+        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+            proxy.listEvents(request, reply: reply)
+        }
+    }
+
+    private final class ConnectionBox: @unchecked Sendable {
+        let connection: NSXPCConnection
+        init(_ connection: NSXPCConnection) {
+            self.connection = connection
+        }
+    }
+
+    private static func box(_ connection: NSXPCConnection?) -> ConnectionBox? {
+        connection.map(ConnectionBox.init)
+    }
+
+    /// XPC replies arrive on a connection queue — keep this helper `nonisolated`
+    /// so continuation resumes are not incorrectly MainActor-isolated (SIGTRAP).
+    private nonisolated static func invoke<T: AnyObject & Sendable>(
+        _ box: ConnectionBox?,
+        _ call: @escaping @Sendable (
+            EngineControlProtocol,
+            @escaping @Sendable (T?, NSError?) -> Void
+        ) -> Void
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { cont in
+            guard let connection = box?.connection,
+                  let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
+                      cont.resume(throwing: ClientError.remote(error as NSError))
+                  }) as? EngineControlProtocol
+            else {
                 cont.resume(throwing: ClientError.notConnected)
                 return
             }
-            proxy.listEvents(request) { response, error in
+            call(proxy) { value, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
-                } else if let response {
-                    cont.resume(returning: response)
+                } else if let value {
+                    cont.resume(returning: value)
                 } else {
                     cont.resume(throwing: ClientError.decoding)
                 }

@@ -5,13 +5,14 @@ set -euo pipefail
 
 if [[ -z "${DM_NOTARY_PROFILE:-}" && -z "${APPLE_API_KEY:-}" ]]; then
   cat >&2 <<'EOF'
-BLOCKED — notarization requires release owner credentials.
+Notarization is optional (ADR 0008). Community GitHub releases use unsigned DMGs.
 
-Provide one of:
+This script only runs when you already have Apple credentials:
   DM_NOTARY_PROFILE   # notarytool keychain profile name
-  APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER
+  or APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER
 
-Then re-run: Scripts/release/notarize.sh <path-to-dmg>
+For free distribution: make release-dmg-unsigned
+  and Documentation/install-from-github.md
 EOF
   exit 2
 fi

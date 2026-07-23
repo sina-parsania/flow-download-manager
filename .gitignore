@@ -40,3 +40,7 @@ Scripts/.tool-cache/
 VendorBuild/.cache/
 VendorBuild/prefix/
 
+
+# Generated release binaries (attach to GitHub Releases, do not commit)
+Artifacts/release/*.dmg
+Artifacts/release/dmg-stage/

@@ -170,4 +170,76 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertEqual(rows.first?.job.state, "downloading")
         XCTAssertEqual(rows.first?.job.revision, 3)
     }
+
+    func testRequeueInterruptedTransfersMovesDownloadingToQueued() throws {
+        let (database, root, downloads) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://example.test/interrupted.bin", categoryStableKey: "other")
+            ]
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+
+        // Optional partial file on disk (resume path); recovery does not require it.
+        let partial = downloads.appendingPathComponent("interrupted.bin.partial")
+        try Data("partial".utf8).write(to: partial)
+
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: jobID,
+            state: "downloading",
+            terminalReason: "networkUnavailable",
+            expectedRevision: nil
+        )
+
+        let requeued = try JobRepository.requeueInterruptedTransfers(database: database)
+        XCTAssertEqual(requeued, [jobID])
+
+        let rows = try JobRepository.fetchJobRows(database: database)
+        let job = try XCTUnwrap(rows.first?.job)
+        XCTAssertEqual(job.state, "queued")
+        XCTAssertNil(job.terminalReason)
+        XCTAssertEqual(job.revision, 3)
+
+        let events = try database.pool.read { db in
+            try EventRecord
+                .filter(Column("jobID") == jobID)
+                .filter(Column("type") == "recovery.requeued")
+                .fetchAll(db)
+        }
+        XCTAssertEqual(events.count, 1)
+        let payload = try XCTUnwrap(events[0].sanitizedPayload)
+        XCTAssertTrue(payload.contains("\"previousState\":\"downloading\""))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: partial.path))
+    }
+
+    func testRequeueInterruptedTransfersIgnoresQueuedAndTerminal() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://example.test/a.bin", categoryStableKey: "other"),
+                (url: "https://example.test/b.bin", categoryStableKey: "other")
+            ]
+        )
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: result.jobIDs[1],
+            state: "failed",
+            terminalReason: "notFound",
+            expectedRevision: nil
+        )
+
+        let requeued = try JobRepository.requeueInterruptedTransfers(database: database)
+        XCTAssertTrue(requeued.isEmpty)
+    }
 }

@@ -54,7 +54,22 @@ public actor TransferOrchestrator {
     public func start() {
         guard !isRunning else { return }
         isRunning = true
-        Task { await self.pump() }
+        Task {
+            await self.recoverInterruptedTransfers()
+            await self.pump()
+        }
+    }
+
+    /// Crash / relaunch recovery: active transfer states become `queued`.
+    private func recoverInterruptedTransfers() async {
+        do {
+            let ids = try JobRepository.requeueInterruptedTransfers(database: database)
+            if !ids.isEmpty {
+                log.info("recovery requeued count=\(ids.count, privacy: .public)")
+            }
+        } catch {
+            log.error("recovery requeue failed: \(EngineLog.redacted(error), privacy: .public)")
+        }
     }
 
     public func stop() {
@@ -238,6 +253,31 @@ public actor TransferOrchestrator {
                 database: database, id: jobID, state: "postProcessing",
                 terminalReason: nil, expectedRevision: nil
             )
+            if Self.shouldExtractZip(
+                filename: filename,
+                mimeEvidence: outcome.identity.contentType
+            ) {
+                do {
+                    let basename = final.deletingPathExtension().lastPathComponent
+                    let extractDir = final.deletingLastPathComponent()
+                        .appendingPathComponent("\(basename)-extracted", isDirectory: true)
+                    try SafeZipExtractor.extract(
+                        archiveURL: final,
+                        destinationDirectory: extractDir
+                    )
+                } catch {
+                    _ = try JobRepository.updateJobState(
+                        database: database, id: jobID, state: "failed",
+                        terminalReason: "postProcessingFailed", expectedRevision: nil
+                    )
+                    progressLedger.remove(jobID)
+                    attemptByJob[jobID] = nil
+                    log.error(
+                        "zip post-process failed id=\(jobID, privacy: .public) err=\(EngineLog.redacted(error), privacy: .public)"
+                    )
+                    return
+                }
+            }
             _ = try JobRepository.updateJobState(
                 database: database, id: jobID, state: "completed",
                 terminalReason: nil, expectedRevision: nil
@@ -369,6 +409,10 @@ public actor TransferOrchestrator {
             "rangeProtocolViolation"
         } else if case IntegrityVerifier.VerifyError.checksumMismatch = error {
             "checksumMismatch"
+        } else if case SafeZipExtractor.ExtractError.unsafePath = error {
+            "unsafePath"
+        } else if error is SafeZipExtractor.ExtractError {
+            "postProcessingFailed"
         } else {
             "networkUnavailable"
         }
@@ -393,5 +437,12 @@ public actor TransferOrchestrator {
             }
         }
         return dir.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
+    }
+
+    /// ZIP post-process when filename ends with `.zip` or MIME evidence mentions zip.
+    static func shouldExtractZip(filename: String, mimeEvidence: String?) -> Bool {
+        if filename.lowercased().hasSuffix(".zip") { return true }
+        if let mimeEvidence, mimeEvidence.lowercased().contains("zip") { return true }
+        return false
     }
 }

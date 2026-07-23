@@ -2,6 +2,7 @@
 
 import Darwin
 import Foundation
+import TransferCurlBridge
 
 /// Adaptive segmented HTTP download with verified single-stream fallback (FR-TRN-009).
 public enum SegmentedTransfer {
@@ -39,7 +40,8 @@ public enum SegmentedTransfer {
         abortFlag: TransferAbortFlag? = nil,
         onProgress: TransferCore.ProgressHandler? = nil,
         preferResume: Bool = true,
-        hostMaxSegments: Int? = nil
+        hostMaxSegments: Int? = nil,
+        useCurlMulti: Bool = false
     ) throws -> Outcome {
         if preferResume,
            let existing = (try? partialURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
@@ -78,6 +80,51 @@ public enum SegmentedTransfer {
         try preallocate(partialURL: partialURL, size: total)
 
         let segmentSize = total / Int64(segments)
+        var rangeRequests: [CurlMultiLoop.RangeRequest] = []
+        rangeRequests.reserveCapacity(segments)
+        for index in 0 ..< segments {
+            let start = Int64(index) * segmentSize
+            let end = index == segments - 1 ? total - 1 : start + segmentSize - 1
+            rangeRequests.append(
+                CurlMultiLoop.RangeRequest(
+                    rangeHeader: "\(start)-\(end)",
+                    fileOffset: start,
+                    expectedBytes: end - start + 1
+                )
+            )
+        }
+
+        if useCurlMulti {
+            _ = try TransferCore.downloadRangesViaMulti(
+                url: url,
+                partialURL: partialURL,
+                ranges: rangeRequests,
+                options: options,
+                abortFlag: abortFlag
+            )
+            let attrs = try FileManager.default.attributesOfItem(atPath: partialURL.path)
+            let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+            guard size == total else {
+                throw TransferCore.TransferError.incompleteWrite(expected: total, wrote: size)
+            }
+            return Outcome(
+                identity: TransferCore.ResourceIdentity(
+                    finalURL: probe.finalURL,
+                    contentLength: total,
+                    contentType: probe.contentType,
+                    etag: probe.etag,
+                    lastModified: probe.lastModified,
+                    acceptRanges: probe.acceptRanges,
+                    contentDisposition: probe.contentDisposition,
+                    contentRange: nil,
+                    httpStatus: 206
+                ),
+                bytesWritten: size,
+                segmentCount: segments,
+                partialURL: partialURL
+            )
+        }
+
         let state = ConcurrentSegmentState(probe: probe, segmentCount: segments)
         let group = DispatchGroup()
 

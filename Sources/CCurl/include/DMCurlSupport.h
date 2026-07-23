@@ -60,4 +60,44 @@ CURLcode DMCurlEasyDownloadToFD(
     DMCurlDownloadResult *out
 );
 
+/// Opaque easy download handle for use with curl_multi (heap-owned write context).
+typedef struct DMCurlEasyDownload DMCurlEasyDownload;
+
+/// Creates a configured easy handle that writes to @c fd. Does not perform.
+/// Caller must eventually call @c DMCurlEasyDownloadFinish (after multi remove).
+DMCurlEasyDownload *DMCurlEasyDownloadCreate(
+    const char *url,
+    int fd,
+    curl_off_t fileOffset,
+    const char *rangeHeader,
+    long connectTimeoutMS,
+    long transferTimeoutMS,
+    long maxRedirects,
+    volatile int32_t *abortFlag,
+    DMCurlProgressCallback progressCallback,
+    void *progressUserdata,
+    const char *userpwd,
+    const char *proxyURL,
+    const char *cookieJarPath
+);
+
+CURL *DMCurlEasyDownloadGetHandle(DMCurlEasyDownload *download);
+
+/// Fills @c out using @c performCode from multi (or easy_perform), then frees @c download.
+void DMCurlEasyDownloadFinish(
+    DMCurlEasyDownload *download,
+    CURLcode performCode,
+    DMCurlDownloadResult *out
+);
+
+/// curl_multi wrappers (FR-TRN-009 foundation).
+CURLM *DMCurlMultiCreate(void);
+CURLMcode DMCurlMultiAddEasy(CURLM *multi, CURL *easy);
+CURLMcode DMCurlMultiRemoveEasy(CURLM *multi, CURL *easy);
+CURLMcode DMCurlMultiPerform(CURLM *multi, int *runningHandles);
+/// Wait up to @c timeoutMS for activity. @c numfds may be NULL.
+CURLMcode DMCurlMultiWait(CURLM *multi, int timeoutMS, int *numfds);
+CURLMsg *DMCurlMultiInfoRead(CURLM *multi, int *msgsLeft);
+void DMCurlMultiCleanup(CURLM *multi);
+
 #endif /* DM_CURL_SUPPORT_H */

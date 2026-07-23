@@ -198,6 +198,65 @@ public enum JobRepository {
         }
     }
 
+    /// Active transfer states that cannot survive an agent crash mid-flight.
+    /// On relaunch these are moved back to `queued` so the pump can resume
+    /// (FR-TRN recovery).
+    public static let interruptedTransferStates: Set<String> = [
+        "connecting", "downloading", "verifying", "merging", "postProcessing"
+    ]
+
+    /// Requeue jobs left in active transfer states after a crash/relaunch.
+    /// Clears `terminalReason`, appends `recovery.requeued`, bumps revision.
+    /// Returns the requeued job IDs (stable order by queuePosition, createdAt).
+    public static func requeueInterruptedTransfers(database: EngineDatabase) throws -> [String] {
+        try database.pool.write { db in
+            let states = Array(interruptedTransferStates).sorted()
+            let placeholders = states.map { _ in "?" }.joined(separator: ", ")
+            let interrupted = try JobRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM jobs
+                WHERE state IN (\(placeholders))
+                ORDER BY queuePosition ASC, createdAt ASC
+                """,
+                arguments: StatementArguments(states)
+            )
+            guard !interrupted.isEmpty else { return [] }
+
+            var requeued: [String] = []
+            requeued.reserveCapacity(interrupted.count)
+            let now = Date()
+            for var job in interrupted {
+                let previousState = job.state
+                job.state = "queued"
+                job.terminalReason = nil
+                job.updatedAt = now
+                job.revision += 1
+                try job.update(db)
+
+                let payload: String = if let data = try? JSONSerialization.data(
+                    withJSONObject: [
+                        "previousState": previousState,
+                        "revision": job.revision
+                    ] as [String: Any],
+                    options: [.sortedKeys]
+                ), let string = String(data: data, encoding: .utf8) {
+                    string
+                } else {
+                    "{\"previousState\":\"\(previousState)\",\"revision\":\(job.revision)}"
+                }
+                try EventRecord(
+                    jobID: job.id,
+                    occurredAt: now,
+                    type: "recovery.requeued",
+                    sanitizedPayload: payload
+                ).insert(db)
+                requeued.append(job.id)
+            }
+            return requeued
+        }
+    }
+
     public static func updateJobState(
         database: EngineDatabase,
         id: String,

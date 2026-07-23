@@ -85,6 +85,18 @@ public protocol EngineControlProtocol {
         reply: @escaping @Sendable (ListProfilesResponse?, NSError?) -> Void
     )
 
+    /// Read the default download folder (path display only — never logs full URLs with query).
+    func getDefaultDestination(
+        requestID: String,
+        reply: @escaping @Sendable (GetDefaultDestinationResponse?, NSError?) -> Void
+    )
+
+    /// Set or reset the default download folder (bookmark from the app, or nil to reset).
+    func setDefaultDestination(
+        _ request: SetDefaultDestinationRequest,
+        reply: @escaping @Sendable (SetDefaultDestinationResponse?, NSError?) -> Void
+    )
+
     /// Create or replace the global bandwidth calendar policy (FR-QUE).
     func upsertBandwidthPolicy(
         _ request: UpsertBandwidthPolicyRequest,
@@ -127,6 +139,18 @@ public protocol EngineControlProtocol {
         reply: @escaping @Sendable (SetJobProjectResponse?, NSError?) -> Void
     )
 
+    /// Change the category for a job (built-in stable key).
+    func setJobCategory(
+        _ request: SetJobCategoryRequest,
+        reply: @escaping @Sendable (SetJobCategoryResponse?, NSError?) -> Void
+    )
+
+    /// Rename the job’s display / destination filename.
+    func setJobFilename(
+        _ request: SetJobFilenameRequest,
+        reply: @escaping @Sendable (SetJobFilenameResponse?, NSError?) -> Void
+    )
+
     /// Read an allowlisted agent boolean preference (e.g. `zipAutoExtractEnabled`).
     func getBoolSetting(
         _ request: GetBoolSettingRequest,
@@ -156,6 +180,12 @@ public protocol EngineControlProtocol {
         _ request: ListEventsRequest,
         reply: @escaping @Sendable (ListEventsResponse?, NSError?) -> Void
     )
+
+    /// Delete event-journal rows for one job (inspector “Clean all”).
+    func clearEvents(
+        _ request: ClearEventsRequest,
+        reply: @escaping @Sendable (ClearEventsResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.
@@ -166,6 +196,11 @@ public protocol EngineControlProtocol {
 /// in sync.
 public enum EngineXPC {
     public static let machServiceName = "org.downloadmanager.local.DownloadEngineAgent"
+
+    /// Bundle name (without `.xpc`) of the app-scoped XPC service used when
+    /// launchd refuses the ad-hoc LaunchAgent (`Launch Constraint Violation` /
+    /// `EX_CONFIG`). Must match `PRODUCT_NAME` of `DownloadEngineAgentXPC`.
+    public static let bundledXPCServiceName = "DownloadEngineAgent"
 
     /// Hard cap on any single decoded XPC payload string/collection to bound
     /// interprocess DoS (`06-licensing-security-privacy.md` §4). Larger transfers

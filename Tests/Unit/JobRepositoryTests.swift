@@ -212,6 +212,13 @@ final class JobRepositoryTests: XCTestCase {
 
         let all = try JobRepository.listEvents(database: database, jobID: nil, limit: 50)
         XCTAssertEqual(all.count, 3)
+
+        let deleted = try JobRepository.clearEvents(database: database, jobID: jobA)
+        XCTAssertEqual(deleted, 2)
+        let remainingA = try JobRepository.listEvents(database: database, jobID: jobA, limit: 10)
+        XCTAssertTrue(remainingA.isEmpty)
+        let remainingB = try JobRepository.listEvents(database: database, jobID: jobB, limit: 10)
+        XCTAssertEqual(remainingB.count, 1)
     }
 
     func testUpdateJobStateRevisionCheck() throws {
@@ -451,5 +458,82 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertNil(cleared.1)
         XCTAssertNil(cleared.2)
         XCTAssertGreaterThanOrEqual(cleared.3, 2)
+    }
+
+    func testUpgradeCategoryFromOtherOnlyWhenOther() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://cdn.example/stream/watch/ep1", categoryStableKey: "other"),
+                (url: "https://cdn.example/doc.pdf", categoryStableKey: "documents")
+            ]
+        )
+        let otherID = try XCTUnwrap(result.jobIDs.first)
+        let docsID = try XCTUnwrap(result.jobIDs.last)
+
+        XCTAssertTrue(
+            try JobRepository.upgradeCategoryFromOther(
+                database: database,
+                jobID: otherID,
+                categoryStableKey: "videos"
+            )
+        )
+        XCTAssertFalse(
+            try JobRepository.upgradeCategoryFromOther(
+                database: database,
+                jobID: docsID,
+                categoryStableKey: "videos"
+            )
+        )
+
+        let rows = try JobRepository.fetchJobRows(database: database)
+        let byID = Dictionary(uniqueKeysWithValues: rows.map { ($0.job.id, $0.category.stableKey) })
+        XCTAssertEqual(byID[otherID], "videos")
+        XCTAssertEqual(byID[docsID], "documents")
+    }
+
+    func testSetJobFilenameUpdatesEvidenceAndRefusesActive() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [(url: "https://cdn.example/film.mkv", categoryStableKey: "videos")]
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+
+        let renamed = try JobRepository.setJobFilename(
+            database: database,
+            jobID: jobID,
+            filename: "My Film.mkv"
+        )
+        XCTAssertEqual(renamed, "My Film.mkv")
+
+        let details = try JobRepository.loadJobForTransfer(database: database, id: jobID)
+        XCTAssertEqual(details.suggestedFilename, "My Film.mkv")
+
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: jobID,
+            state: "downloading",
+            terminalReason: nil,
+            expectedRevision: nil
+        )
+        XCTAssertThrowsError(
+            try JobRepository.setJobFilename(
+                database: database,
+                jobID: jobID,
+                filename: "Nope.mkv"
+            )
+        ) { error in
+            XCTAssertEqual(error as? JobRepositoryError, .renameWhileActive("downloading"))
+        }
     }
 }

@@ -11,7 +11,8 @@ public extension TransferCore {
         ranges: [CurlMultiLoop.RangeRequest],
         options: DownloadOptions = DownloadOptions(),
         abortFlag: TransferAbortFlag? = nil,
-        onProgress: ProgressHandler? = nil
+        onProgress: ProgressHandler? = nil,
+        onSegmentProgress: (@Sendable (Int, Int64) -> Void)? = nil
     ) throws -> [CurlMultiLoop.Outcome] {
         let parsed = try CurlURLParser.parse(url)
         guard parsed.isPhase1Supported else {
@@ -30,7 +31,8 @@ public extension TransferCore {
                 proxyURL: options.proxyURL,
                 cookieJarPath: options.cookieJarPath,
                 extraHeadersPayload: options.extraHeadersCurlPayload,
-                onProgress: onProgress
+                onProgress: onProgress,
+                onSegmentProgress: onSegmentProgress
             )
         } catch let error as CurlMultiLoop.MultiError {
             switch error {

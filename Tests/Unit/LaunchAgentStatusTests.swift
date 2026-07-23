@@ -45,7 +45,7 @@ final class LaunchAgentStatusTests: XCTestCase {
     }
 
     @MainActor
-    func testModelRegisterSuccess() {
+    func testModelRegisterSuccess() async {
         let stub = StubLaunchAgent(status: .notRegistered)
         let model = LaunchAgentModel(manager: stub)
         XCTAssertEqual(model.status, .notRegistered)
@@ -53,6 +53,10 @@ final class LaunchAgentStatusTests: XCTestCase {
         XCTAssertEqual(model.status, .enabled)
         XCTAssertNil(model.lastErrorMessage)
         XCTAssertEqual(stub.registerCount, 1)
+        // Registration alone is not readiness — ensureRunning marks ready without a probe client.
+        XCTAssertFalse(model.isEngineReady)
+        await model.ensureRunning()
+        XCTAssertTrue(model.isOperational)
     }
 
     @MainActor
@@ -68,11 +72,47 @@ final class LaunchAgentStatusTests: XCTestCase {
     }
 
     @MainActor
-    func testModelUnregister() {
+    func testEnsureRunningRegistersWhenOff() async throws {
+        let stub = StubLaunchAgent(status: .notRegistered)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "test.engine.ensure.\(UUID().uuidString)"))
+        let model = LaunchAgentModel(manager: stub, defaults: defaults)
+        await model.ensureRunning()
+        XCTAssertEqual(stub.registerCount, 1)
+        XCTAssertEqual(model.status, .enabled)
+        XCTAssertTrue(model.isOperational)
+    }
+
+    @MainActor
+    func testEnsureRunningNoopWhenAlreadyEnabledSamePath() async throws {
         let stub = StubLaunchAgent(status: .enabled)
-        let model = LaunchAgentModel(manager: stub)
-        model.unregister()
-        XCTAssertEqual(model.status, .notRegistered)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "test.engine.ensure2.\(UUID().uuidString)"))
+        defaults.set(Bundle.main.bundleURL.path, forKey: "engine.lastRegisteredBundlePath")
+        let model = LaunchAgentModel(manager: stub, defaults: defaults)
+        await model.ensureRunning()
+        XCTAssertEqual(stub.registerCount, 0)
+        XCTAssertTrue(model.isOperational)
+    }
+
+    @MainActor
+    func testRepairUnregistersBrokenSMService() async throws {
+        let stub = StubLaunchAgent(status: .enabled)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "test.engine.repair.\(UUID().uuidString)"))
+        let model = LaunchAgentModel(manager: stub, defaults: defaults)
+        await model.repair()
         XCTAssertEqual(stub.unregisterCount, 1)
+        XCTAssertEqual(stub.status, .notRegistered)
+        XCTAssertEqual(model.runtimeMode, .directChild)
+        XCTAssertTrue(model.isEngineReady)
+    }
+
+    @MainActor
+    func testEnsureRunningMarksReadyWithoutProbeWhenEnabled() async throws {
+        let stub = StubLaunchAgent(status: .enabled)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "test.engine.ensure3.\(UUID().uuidString)"))
+        defaults.set(Bundle.main.bundleURL.path, forKey: "engine.lastRegisteredBundlePath")
+        let model = LaunchAgentModel(manager: stub, defaults: defaults)
+        await model.ensureRunning()
+        XCTAssertTrue(model.isEngineReady)
+        XCTAssertEqual(model.runtimeMode, .smAppService)
     }
 }

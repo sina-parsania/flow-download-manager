@@ -58,16 +58,8 @@ public enum JobRepository {
                 volumeIdentity: nil,
                 conflictPolicy: "uniquify"
             ).insert(db)
-        } else {
-            try db.execute(
-                sql: """
-                UPDATE destination_profiles
-                SET bookmarkData = ?, name = 'Downloads', conflictPolicy = 'uniquify'
-                WHERE id = ?
-                """,
-                arguments: [bookmark, ProductionSeedIDs.destinationDownloads]
-            )
         }
+        // Existing destination bookmarks are user-owned — never overwrite on launch.
 
         for entry in ProductionSeedIDs.categories {
             if try CategoryRecord.fetchOne(db, key: entry.id) == nil {
@@ -99,6 +91,149 @@ public enum JobRepository {
             throw JobRepositoryError.unknownCategory(key)
         }
         return row.id
+    }
+
+    /// Reassign a job to a built-in category by stable key.
+    public static func setJobCategory(
+        database: EngineDatabase,
+        jobID: String,
+        categoryStableKey: String
+    ) throws {
+        let trimmed = categoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw JobRepositoryError.unknownCategory(categoryStableKey)
+        }
+        try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: jobID) else {
+                throw JobRepositoryError.jobNotFound(jobID)
+            }
+            let categoryID = try categoryID(forStableKey: trimmed, db: db)
+            guard job.categoryID != categoryID else { return }
+            job.categoryID = categoryID
+            job.updatedAt = Date()
+            job.revision += 1
+            try job.update(db)
+        }
+    }
+
+    /// Upgrades a job from the `other` category when stronger evidence appears
+    /// (MIME / Content-Disposition / final URL). Never overrides a non-`other`
+    /// category — that would stomp a user choice.
+    @discardableResult
+    public static func upgradeCategoryFromOther(
+        database: EngineDatabase,
+        jobID: String,
+        categoryStableKey: String
+    ) throws -> Bool {
+        let trimmed = categoryStableKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "other" else { return false }
+        return try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: jobID),
+                  let current = try CategoryRecord.fetchOne(db, key: job.categoryID)
+            else {
+                throw JobRepositoryError.jobNotFound(jobID)
+            }
+            guard current.stableKey == "other" else { return false }
+            let categoryID = try categoryID(forStableKey: trimmed, db: db)
+            guard job.categoryID != categoryID else { return false }
+            job.categoryID = categoryID
+            job.updatedAt = Date()
+            job.revision += 1
+            try job.update(db)
+            return true
+        }
+    }
+
+    /// Renames the job’s destination / display filename. Refuses while a transfer
+    /// is actively writing. Renames on-disk `.partial` / completed files when present.
+    @discardableResult
+    public static func setJobFilename(
+        database: EngineDatabase,
+        jobID: String,
+        filename: String
+    ) throws -> String {
+        let sanitized = FilenameSanitizer.sanitize(filename)
+        guard !sanitized.isEmpty else {
+            throw JobRepositoryError.invalidFilename(filename)
+        }
+
+        return try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: jobID),
+                  var resource = try ResourceRecord.fetchOne(db, key: job.resourceID),
+                  let profile = try DestinationProfileRecord.fetchOne(db, key: job.destinationProfileID)
+            else {
+                throw JobRepositoryError.jobNotFound(jobID)
+            }
+
+            let active: Set<String> = [
+                "connecting", "downloading", "verifying", "merging", "postProcessing"
+            ]
+            if active.contains(job.state) {
+                throw JobRepositoryError.renameWhileActive(job.state)
+            }
+
+            let previous = FilenameSanitizer.preferredFilename(
+                contentDisposition: nil,
+                urlString: resource.finalURL ?? resource.canonicalURL,
+                existingEvidence: resource.filenameEvidence
+            )
+            guard previous != sanitized else { return sanitized }
+
+            var isStale = false
+            let destination: URL
+            do {
+                destination = try URL(
+                    resolvingBookmarkData: profile.bookmarkData,
+                    options: [.withSecurityScope, .withoutUI],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+            } catch {
+                destination = try URL(
+                    resolvingBookmarkData: profile.bookmarkData,
+                    options: [.withoutUI],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+            }
+
+            let accessed = destination.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { destination.stopAccessingSecurityScopedResource() }
+            }
+
+            let oldPartial = destination.appendingPathComponent("\(previous).partial")
+            let newPartial = destination.appendingPathComponent("\(sanitized).partial")
+            let oldFinal = destination.appendingPathComponent(previous)
+            let newFinal = destination.appendingPathComponent(sanitized)
+
+            if FileManager.default.fileExists(atPath: oldPartial.path) {
+                if FileManager.default.fileExists(atPath: newPartial.path) {
+                    throw JobRepositoryError.renameTargetExists(sanitized)
+                }
+                try FileManager.default.moveItem(at: oldPartial, to: newPartial)
+                let oldMap = URL(fileURLWithPath: oldPartial.path + ".segmap")
+                let newMap = URL(fileURLWithPath: newPartial.path + ".segmap")
+                if FileManager.default.fileExists(atPath: oldMap.path) {
+                    try? FileManager.default.removeItem(at: newMap)
+                    try FileManager.default.moveItem(at: oldMap, to: newMap)
+                }
+            }
+            if FileManager.default.fileExists(atPath: oldFinal.path) {
+                if FileManager.default.fileExists(atPath: newFinal.path) {
+                    throw JobRepositoryError.renameTargetExists(sanitized)
+                }
+                try FileManager.default.moveItem(at: oldFinal, to: newFinal)
+            }
+
+            resource.filenameEvidence = sanitized
+            resource.identityRevision += 1
+            try resource.update(db)
+            job.updatedAt = Date()
+            job.revision += 1
+            try job.update(db)
+            return sanitized
+        }
     }
 
     public static func insertBatch(
@@ -159,7 +294,7 @@ public enum JobRepository {
                 let resourceID = UUID().uuidString.lowercased()
                 let jobID = UUID().uuidString.lowercased()
                 let protocolKind = URL(string: item.url)?.scheme?.lowercased() ?? "http"
-                let filename = URL(string: item.url)?.lastPathComponent
+                let filename = FilenameSanitizer.filename(fromURLString: item.url)
                 try ResourceRecord(
                     id: resourceID,
                     originalURL: item.url,
@@ -389,6 +524,13 @@ public enum JobRepository {
         }
     }
 
+    /// Deletes all event rows for a job. Returns how many rows were removed.
+    public static func clearEvents(database: EngineDatabase, jobID: String) throws -> Int {
+        try database.pool.write { db in
+            try EventRecord.filter(Column("jobID") == jobID).deleteAll(db)
+        }
+    }
+
     private static func sanitizedStatePayload(
         state: String,
         terminalReason: String?,
@@ -421,15 +563,27 @@ public enum JobRepository {
                 throw JobRepositoryError.jobNotFound(id)
             }
             var isStale = false
-            let destination = try URL(
-                resolvingBookmarkData: profile.bookmarkData,
-                options: [.withoutUI],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
+            let destination: URL
+            do {
+                destination = try URL(
+                    resolvingBookmarkData: profile.bookmarkData,
+                    options: [.withSecurityScope, .withoutUI],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+            } catch {
+                destination = try URL(
+                    resolvingBookmarkData: profile.bookmarkData,
+                    options: [.withoutUI],
+                    relativeTo: nil,
+                    bookmarkDataIsStale: &isStale
+                )
+            }
+            let suggested = FilenameSanitizer.preferredFilename(
+                contentDisposition: nil,
+                urlString: resource.canonicalURL,
+                existingEvidence: resource.filenameEvidence
             )
-            let suggested = resource.filenameEvidence
-                ?? URL(string: resource.canonicalURL)?.lastPathComponent
-                ?? "download.bin"
             return TransferJobDetails(
                 jobID: job.id,
                 revision: job.revision,
@@ -453,7 +607,8 @@ public enum JobRepository {
         finalURL: String?,
         expectedSize: Int64?,
         etag: String?,
-        mime: String?
+        mime: String?,
+        contentDisposition: String? = nil
     ) throws {
         try database.pool.write { db in
             guard let job = try JobRecord.fetchOne(db, key: jobID),
@@ -465,6 +620,12 @@ public enum JobRepository {
             resource.expectedSize = expectedSize
             resource.strongETag = etag
             if let mime { resource.mimeEvidence = mime }
+            let betterName = FilenameSanitizer.preferredFilename(
+                contentDisposition: contentDisposition,
+                urlString: finalURL ?? resource.canonicalURL,
+                existingEvidence: resource.filenameEvidence
+            )
+            resource.filenameEvidence = betterName
             resource.identityRevision += 1
             try resource.update(db)
         }
@@ -542,7 +703,9 @@ public enum JobRepository {
     }
 
     /// Deletes a terminal job row (and owned resource). Never touches destination
-    /// files — callers may optionally remove `.partial` for failed/cancelled.
+    /// Deletes a terminal job row (+ owned resource when unused). Does **not**
+    /// touch on-disk destination files — callers pass `deleteFiles` over XPC when
+    /// the user chooses “Delete File & Remove”.
     /// Returns the previous state for event/logging.
     @discardableResult
     public static func deleteTerminalJob(
@@ -588,4 +751,7 @@ public enum JobRepositoryError: Error, Equatable, Sendable {
     case jobNotFound(String)
     case revisionConflict(expected: Int, actual: Int)
     case notTerminal(String, state: String)
+    case invalidFilename(String)
+    case renameWhileActive(String)
+    case renameTargetExists(String)
 }

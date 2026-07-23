@@ -48,6 +48,42 @@ final class OrganizationRepositoryTests: XCTestCase {
         XCTAssertEqual(row.job.projectID, projectID)
     }
 
+    func testSetJobCategory() throws {
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-org-cat-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        let database = try EngineDatabase(url: dbURL)
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-org-cat-dest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dest) }
+        try JobRepository.ensureProductionSeed(database: database, defaultDestinationDirectory: dest)
+
+        let batch = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [("https://example.test/clip.mp4", "other")]
+        )
+        let jobID = try XCTUnwrap(batch.jobIDs.first)
+        try JobRepository.setJobCategory(
+            database: database,
+            jobID: jobID,
+            categoryStableKey: "videos"
+        )
+        let rows = try JobRepository.fetchJobRows(database: database)
+        let row = try XCTUnwrap(rows.first)
+        XCTAssertEqual(row.category.stableKey, "videos")
+
+        XCTAssertThrowsError(
+            try JobRepository.setJobCategory(
+                database: database,
+                jobID: jobID,
+                categoryStableKey: "not-a-real-category"
+            )
+        )
+    }
+
     func testUpsertTagNameFoldUniqueness() throws {
         let dbURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("dm-org-fold-\(UUID().uuidString).sqlite")
@@ -58,5 +94,11 @@ final class OrganizationRepositoryTests: XCTestCase {
         XCTAssertThrowsError(
             try OrganizationRepository.createTag(database: database, name: "release")
         )
+        let reused = try OrganizationRepository.upsertTag(
+            database: database,
+            id: UUID().uuidString.lowercased(),
+            name: "RELEASE"
+        )
+        XCTAssertEqual(reused, id)
     }
 }

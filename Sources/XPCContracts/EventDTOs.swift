@@ -140,3 +140,62 @@ public final class ListEventsResponse: NSObject, NSSecureCoding, @unchecked Send
         coder.encode(events as NSArray, forKey: "events")
     }
 }
+
+@objc(DMClearEventsRequest)
+public final class ClearEventsRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+
+    public init(requestID: String, jobID: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        guard let requestID, UUID(uuidString: requestID as String) != nil,
+              let jobID, UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+    }
+}
+
+@objc(DMClearEventsResponse)
+public final class ClearEventsResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let deletedCount: Int
+
+    public init(requestID: String, deletedCount: Int) {
+        self.requestID = requestID
+        self.deletedCount = deletedCount
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let deletedCount = coder.decodeInteger(forKey: "deletedCount")
+        guard let requestID, UUID(uuidString: requestID as String) != nil, deletedCount >= 0
+        else { return nil }
+        self.requestID = requestID as String
+        self.deletedCount = deletedCount
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(deletedCount, forKey: "deletedCount")
+    }
+}

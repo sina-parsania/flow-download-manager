@@ -17,6 +17,19 @@ public enum FinderIntegration {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         reveal(url: url)
     }
+
+    /// Prefer final file, then `.partial`, then the containing folder.
+    public static func revealDownload(named name: String, inFolder folder: URL) {
+        let finalURL = folder.appendingPathComponent(name)
+        let partialURL = folder.appendingPathComponent("\(name).partial")
+        if FileManager.default.fileExists(atPath: finalURL.path) {
+            reveal(url: finalURL)
+        } else if FileManager.default.fileExists(atPath: partialURL.path) {
+            reveal(url: partialURL)
+        } else if FileManager.default.fileExists(atPath: folder.path) {
+            reveal(url: folder)
+        }
+    }
 }
 
 /// Rate-limited user notifications for job completion/failure (FR-UX-004).
@@ -33,9 +46,21 @@ public final class DownloadNotificationCenter {
     public func requestAuthorizationIfNeeded() {
         let center = UNUserNotificationCenter.current()
         center.delegate = presentationDelegate
-        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
-            Task { @MainActor in
-                self?.authorized = granted
+        Task { @MainActor in
+            let settings = await center.notificationSettings()
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                self.authorized = true
+            case .denied:
+                self.authorized = false
+            case .notDetermined:
+                do {
+                    self.authorized = try await center.requestAuthorization(options: [.alert, .sound])
+                } catch {
+                    self.authorized = false
+                }
+            @unknown default:
+                self.authorized = false
             }
         }
     }
@@ -127,7 +152,7 @@ public final class MenuBarController: NSObject, ObservableObject {
             keyEquivalent: ""
         ))
         menu.addItem(.separator())
-        let open = NSMenuItem(title: "Open Download Manager", action: #selector(openApp), keyEquivalent: "")
+        let open = NSMenuItem(title: "Open Flow", action: #selector(openApp), keyEquivalent: "")
         open.target = self
         menu.addItem(open)
         let add = NSMenuItem(title: "Add Downloads…", action: #selector(addDownloads), keyEquivalent: "n")

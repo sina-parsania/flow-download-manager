@@ -218,6 +218,8 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
     public let id: String
     public let name: String
     public let sourceHost: String
+    /// Full download URL (final when known, otherwise canonical).
+    public let sourceURL: String
     public let state: String
     public let progressFraction: Double
     public let hasProgress: Bool
@@ -236,6 +238,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         id: String,
         name: String,
         sourceHost: String,
+        sourceURL: String,
         state: String,
         progressFraction: Double?,
         bytesTransferred: Int64,
@@ -251,6 +254,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         self.id = id
         self.name = name
         self.sourceHost = sourceHost
+        self.sourceURL = sourceURL
         self.state = state
         self.progressFraction = progressFraction ?? 0
         hasProgress = progressFraction != nil
@@ -270,16 +274,18 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         let id = coder.decodeObject(of: NSString.self, forKey: "id")
         let name = coder.decodeObject(of: NSString.self, forKey: "name")
         let sourceHost = coder.decodeObject(of: NSString.self, forKey: "sourceHost")
+        let sourceURL = coder.decodeObject(of: NSString.self, forKey: "sourceURL")
         let state = coder.decodeObject(of: NSString.self, forKey: "state")
         let categoryKey = coder.decodeObject(of: NSString.self, forKey: "categoryKey")
         let projectID = coder.decodeObject(of: NSString.self, forKey: "projectID")
         let projectName = coder.decodeObject(of: NSString.self, forKey: "projectName")
         let tagIDs = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "tagIDs") ?? []
         let tagNames = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "tagNames") ?? []
-        guard let id, let name, let sourceHost, let state, let categoryKey,
+        guard let id, let name, let sourceHost, let sourceURL, let state, let categoryKey,
               UUID(uuidString: id as String) != nil,
               name.length <= EngineXPC.maxPayloadStringLength,
               sourceHost.length <= EngineXPC.maxPayloadStringLength,
+              sourceURL.length > 0, sourceURL.length <= EngineXPC.maxURLLength,
               state.length <= 64,
               categoryKey.length <= 64,
               tagIDs.count <= EngineXPC.maxCollectionCount,
@@ -295,6 +301,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         self.id = id as String
         self.name = name as String
         self.sourceHost = sourceHost as String
+        self.sourceURL = sourceURL as String
         self.state = state as String
         self.categoryKey = categoryKey as String
         self.projectID = projectID.map { $0 as String }
@@ -314,6 +321,7 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         coder.encode(id as NSString, forKey: "id")
         coder.encode(name as NSString, forKey: "name")
         coder.encode(sourceHost as NSString, forKey: "sourceHost")
+        coder.encode(sourceURL as NSString, forKey: "sourceURL")
         coder.encode(state as NSString, forKey: "state")
         coder.encode(progressFraction, forKey: "progressFraction")
         coder.encode(hasProgress, forKey: "hasProgress")
@@ -541,10 +549,14 @@ public final class DeleteJobRequest: NSObject, NSSecureCoding, @unchecked Sendab
 
     public let requestID: String
     public let jobID: String
+    /// When `true`, also delete the destination file / `.partial` from disk.
+    /// When `false`, only remove the job from the library database.
+    public let deleteFiles: Bool
 
-    public init(requestID: String, jobID: String) {
+    public init(requestID: String, jobID: String, deleteFiles: Bool = false) {
         self.requestID = requestID
         self.jobID = jobID
+        self.deleteFiles = deleteFiles
     }
 
     public required init?(coder: NSCoder) {
@@ -556,11 +568,13 @@ public final class DeleteJobRequest: NSObject, NSSecureCoding, @unchecked Sendab
         else { return nil }
         self.requestID = requestID as String
         self.jobID = jobID as String
+        deleteFiles = coder.decodeBool(forKey: "deleteFiles")
     }
 
     public func encode(with coder: NSCoder) {
         coder.encode(requestID as NSString, forKey: "requestID")
         coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(deleteFiles, forKey: "deleteFiles")
     }
 }
 

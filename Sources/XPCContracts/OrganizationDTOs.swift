@@ -395,6 +395,154 @@ public final class SetJobProjectResponse: NSObject, NSSecureCoding, @unchecked S
     }
 }
 
+@objc(DMSetJobCategoryRequest)
+public final class SetJobCategoryRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let categoryStableKey: String
+
+    public init(requestID: String, jobID: String, categoryStableKey: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.categoryStableKey = categoryStableKey
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        let categoryStableKey = coder.decodeObject(of: NSString.self, forKey: "categoryStableKey")
+        guard let requestID, let jobID, let categoryStableKey,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil,
+              categoryStableKey.length > 0, categoryStableKey.length <= 64
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        self.categoryStableKey = categoryStableKey as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(categoryStableKey as NSString, forKey: "categoryStableKey")
+    }
+}
+
+@objc(DMSetJobCategoryResponse)
+public final class SetJobCategoryResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let categoryStableKey: String
+
+    public init(requestID: String, jobID: String, categoryStableKey: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.categoryStableKey = categoryStableKey
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        let categoryStableKey = coder.decodeObject(of: NSString.self, forKey: "categoryStableKey")
+        guard let requestID, let jobID, let categoryStableKey,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil,
+              categoryStableKey.length > 0, categoryStableKey.length <= 64
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        self.categoryStableKey = categoryStableKey as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(categoryStableKey as NSString, forKey: "categoryStableKey")
+    }
+}
+
+@objc(DMSetJobFilenameRequest)
+public final class SetJobFilenameRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let filename: String
+
+    public init(requestID: String, jobID: String, filename: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.filename = filename
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        let filename = coder.decodeObject(of: NSString.self, forKey: "filename")
+        guard let requestID, let jobID, let filename,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil,
+              filename.length > 0, filename.length <= EngineXPC.maxPayloadStringLength
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        self.filename = filename as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(filename as NSString, forKey: "filename")
+    }
+}
+
+@objc(DMSetJobFilenameResponse)
+public final class SetJobFilenameResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let filename: String
+
+    public init(requestID: String, jobID: String, filename: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.filename = filename
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        let filename = coder.decodeObject(of: NSString.self, forKey: "filename")
+        guard let requestID, let jobID, let filename,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil,
+              filename.length > 0, filename.length <= EngineXPC.maxPayloadStringLength
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        self.filename = filename as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(filename as NSString, forKey: "filename")
+    }
+}
+
 @objc(DMCategoryRuleSnapshot)
 public final class CategoryRuleSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
     public static var supportsSecureCoding: Bool {

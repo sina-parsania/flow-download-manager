@@ -38,6 +38,7 @@ public final class LibraryModel: ObservableObject {
     @Published public var selectedID: JobRowModel.ID?
     @Published public var searchText: String = ""
     @Published public var filter: LibraryFilter = .all
+    @Published public var layoutMode: LibraryLayoutMode = .board
     @Published public var inspectorVisible: Bool = true
     @Published public var addSheetPresented: Bool = false
     @Published public var pendingClipboardText: String?
@@ -46,6 +47,11 @@ public final class LibraryModel: ObservableObject {
     public let engineClient: EngineClient
     private var refreshTask: Task<Void, Never>?
     private var knownCompleted: Set<UUID> = []
+    /// Per-job remaining-time smoother so ETA eases instead of thrashing with speed.
+    private var remainingTimeSmoothers: [UUID: RemainingTimeSmoother] = [:]
+    private var lastETARefreshAt: ContinuousClock.Instant?
+    /// Cached default destination path for Open in Finder (resolved via XPC).
+    private var cachedDestinationPath: String?
 
     public init(rows: [JobRowModel], engineClient: EngineClient = EngineClient()) {
         self.rows = rows
@@ -113,12 +119,64 @@ public final class LibraryModel: ObservableObject {
 
     public func controlSelected(_ command: JobCommandKind) async {
         guard let row = selectedRow else { return }
+        await control(jobID: row.id, command: command)
+    }
+
+    public func control(jobID: JobRowModel.ID, command: JobCommandKind) async {
         do {
-            _ = try await engineClient.controlJob(jobID: row.id.uuidString.lowercased(), command: command)
+            _ = try await engineClient.controlJob(
+                jobID: jobID.uuidString.lowercased(),
+                command: command
+            )
             await refreshFromEngine()
         } catch {
-            lastErrorMessage = "Could not \(String(describing: command)) the selected download."
+            lastErrorMessage = "Could not \(String(describing: command)) the download."
         }
+    }
+
+    public func remove(jobID: JobRowModel.ID, deleteFiles: Bool = false) async {
+        guard let row = rows.first(where: { $0.id == jobID }),
+              DeleteJobGuard.allowsDelete(row.state)
+        else { return }
+        do {
+            _ = try await engineClient.deleteJob(
+                jobID: jobID.uuidString.lowercased(),
+                deleteFiles: deleteFiles
+            )
+            if selectedID == jobID { selectedID = nil }
+            await refreshFromEngine()
+        } catch {
+            lastErrorMessage = deleteFiles
+                ? "Could not delete the download from disk."
+                : "Could not remove the download from the library."
+        }
+    }
+
+    /// Reveal the downloaded file (or `.partial`) in Finder.
+    public func revealInFinder(jobID: JobRowModel.ID) async {
+        guard let row = rows.first(where: { $0.id == jobID }) else { return }
+        if cachedDestinationPath == nil {
+            do {
+                let dest = try await engineClient.getDefaultDestination()
+                let path = dest.pathDisplay.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !path.isEmpty {
+                    cachedDestinationPath = path
+                }
+            } catch {
+                // Fall through to Downloads/DownloadManager default.
+            }
+        }
+        let folder: URL
+        if let cachedDestinationPath, !cachedDestinationPath.isEmpty {
+            folder = URL(fileURLWithPath: cachedDestinationPath, isDirectory: true)
+        } else if let downloads = FileManager.default.urls(
+            for: .downloadsDirectory, in: .userDomainMask
+        ).first {
+            folder = downloads.appendingPathComponent("DownloadManager", isDirectory: true)
+        } else {
+            return
+        }
+        FinderIntegration.revealDownload(named: row.name, inFolder: folder)
     }
 
     public func pauseAll() async {
@@ -165,15 +223,9 @@ public final class LibraryModel: ObservableObject {
         }
     }
 
-    public func removeSelectedTerminal() async {
-        guard let row = selectedRow, DeleteJobGuard.allowsDelete(row.state) else { return }
-        do {
-            _ = try await engineClient.deleteJob(jobID: row.id.uuidString.lowercased())
-            if selectedID == row.id { selectedID = nil }
-            await refreshFromEngine()
-        } catch {
-            lastErrorMessage = "Could not remove the selected download."
-        }
+    public func removeSelectedTerminal(deleteFiles: Bool = false) async {
+        guard let row = selectedRow else { return }
+        await remove(jobID: row.id, deleteFiles: deleteFiles)
     }
 
     public func clearFailed() async {
@@ -181,7 +233,10 @@ public final class LibraryModel: ObservableObject {
         let removedIDs = Set(targets.map(\.id))
         for row in targets {
             do {
-                _ = try await engineClient.deleteJob(jobID: row.id.uuidString.lowercased())
+                _ = try await engineClient.deleteJob(
+                    jobID: row.id.uuidString.lowercased(),
+                    deleteFiles: false
+                )
             } catch {
                 lastErrorMessage = "Could not clear all failed downloads."
             }
@@ -211,20 +266,50 @@ public final class LibraryModel: ObservableObject {
         let client = client ?? engineClient
         do {
             let snapshot = try await client.listJobs()
+            let now = ContinuousClock.now
+            let elapsed: Double
+            if let lastETARefreshAt {
+                let delta = now - lastETARefreshAt
+                elapsed = Double(delta.components.seconds)
+                    + Double(delta.components.attoseconds) / 1e18
+            } else {
+                elapsed = 1.0
+            }
+            lastETARefreshAt = now
+
+            var liveIDs = Set<UUID>()
             let mapped: [JobRowModel] = snapshot.jobs.compactMap { job in
                 guard let id = UUID(uuidString: job.id),
                       let state = JobState(rawValue: job.state)
                 else { return nil }
+                let total = job.hasTotalBytes ? job.totalBytes : nil
+                let isLive = state == .downloading || state == .connecting
+                    || state == .verifying || state == .merging || state == .postProcessing
+                let eta: Int?
+                if isLive, let total, total > job.bytesTransferred, job.speedBytesPerSecond > 0 {
+                    liveIDs.insert(id)
+                    var smoother = remainingTimeSmoothers[id] ?? RemainingTimeSmoother()
+                    eta = smoother.update(
+                        remainingBytes: total - job.bytesTransferred,
+                        speedBytesPerSecond: job.speedBytesPerSecond,
+                        elapsedSeconds: elapsed
+                    )
+                    remainingTimeSmoothers[id] = smoother
+                } else {
+                    remainingTimeSmoothers[id] = nil
+                    eta = nil
+                }
                 return JobRowModel(
                     id: id,
                     name: job.name,
                     sourceHost: job.sourceHost,
+                    sourceURL: job.sourceURL,
                     state: state,
                     progressFraction: job.hasProgress ? job.progressFraction : nil,
                     bytesTransferred: job.bytesTransferred,
-                    totalBytes: job.hasTotalBytes ? job.totalBytes : nil,
+                    totalBytes: total,
                     speedBytesPerSecond: job.speedBytesPerSecond,
-                    etaSeconds: nil,
+                    etaSeconds: eta,
                     categoryKey: job.categoryKey,
                     projectID: job.projectID,
                     projectName: job.projectName,
@@ -233,11 +318,13 @@ public final class LibraryModel: ObservableObject {
                     priority: job.priority
                 )
             }
+            remainingTimeSmoothers = remainingTimeSmoothers.filter { liveIDs.contains($0.key) }
             notifyTerminalTransitions(from: rows, to: mapped)
             rows = mapped
             lastErrorMessage = nil
         } catch {
-            // Keep existing rows when the engine is unavailable (ad-hoc / not registered).
+            lastErrorMessage = "Could not reach the engine. It should start automatically — check the Engine badge."
+            engineClient.resetConnection()
         }
     }
 

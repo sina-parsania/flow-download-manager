@@ -36,6 +36,7 @@ public enum JobRowFixtures {
                 id: deterministicUUID(index),
                 name: "download-\(String(format: "%05d", index)).bin",
                 sourceHost: hosts[index % hosts.count],
+                sourceURL: "https://\(hosts[index % hosts.count])/files/download-\(String(format: "%05d", index)).bin",
                 state: state,
                 progressFraction: fraction,
                 bytesTransferred: transferred,

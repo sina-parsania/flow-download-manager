@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Application
+import Domain
 import Foundation
 import Persistence
 import SharedObservability
@@ -27,6 +28,7 @@ public actor TransferOrchestrator {
     private var abortFlags: [String: TransferAbortFlag] = [:]
     private var attemptByJob: [String: Int] = [:]
     private var sleepAssertions: [String: AnyObject] = [:]
+    private var speedEstimators: [String: TransferSpeedEstimator] = [:]
 
     public init(
         database: EngineDatabase,
@@ -118,6 +120,14 @@ public actor TransferOrchestrator {
     public func clearProgress(jobID: String) {
         progressLedger.remove(jobID)
         attemptByJob[jobID] = nil
+        speedEstimators[jobID] = nil
+    }
+
+    private var runningJobIDs: Set<String> = []
+
+    private func runJobThenRelease(_ jobID: String) async {
+        await runJob(jobID)
+        runningJobIDs.remove(jobID)
     }
 
     private func pump() async {
@@ -135,12 +145,22 @@ public actor TransferOrchestrator {
                         continue
                     }
                 }
-                let ids = try JobRepository.fetchQueuedJobIDs(database: database, limit: 1)
-                if let jobID = ids.first {
-                    await runJob(jobID)
-                } else {
-                    try await Task.sleep(nanoseconds: 250_000_000)
+
+                // Cap parallelism by budget — never fetch/download the whole queue at once.
+                // Track in-flight Tasks separately from ledger so we do not oversubscribe
+                // before tryBeginJob runs.
+                let maxJobs = await budget.maxActiveJobsLimit()
+                let want = max(0, maxJobs - runningJobIDs.count)
+                if want > 0 {
+                    let ids = try JobRepository.fetchQueuedJobIDs(database: database, limit: want)
+                    for jobID in ids where !runningJobIDs.contains(jobID) {
+                        runningJobIDs.insert(jobID)
+                        Task {
+                            await self.runJobThenRelease(jobID)
+                        }
+                    }
                 }
+                try await Task.sleep(nanoseconds: 200_000_000)
             } catch {
                 log.error("orchestrator pump error: \(EngineLog.redacted(error), privacy: .public)")
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -189,6 +209,15 @@ public actor TransferOrchestrator {
                 database: database, id: jobID, state: "connecting",
                 terminalReason: nil, expectedRevision: nil
             )
+            // Reclassify from URL/filename before bytes move — streaming CDNs often
+            // enqueue as `other` until extension/MIME is known.
+            Self.refineCategoryIfOther(
+                database: database,
+                jobID: jobID,
+                filenameEvidence: details.suggestedFilename,
+                mimeEvidence: nil,
+                url: details.canonicalURL
+            )
             _ = try JobRepository.updateJobState(
                 database: database, id: jobID, state: "downloading",
                 terminalReason: nil, expectedRevision: nil
@@ -234,10 +263,17 @@ public actor TransferOrchestrator {
                 try await Task.sleep(nanoseconds: 200_000_000)
                 return
             }
+            // Reserve segment sockets so concurrent jobs to one host respect
+            // the per-host and total caps; the grant bounds segment count.
+            let extraSegmentSockets = await budget.reserveSockets(host: host, upTo: 31)
             defer {
                 let budget = self.budget
                 let hostToRelease = host
-                Task.detached { await budget.releaseSocket(host: hostToRelease) }
+                let extra = extraSegmentSockets
+                Task.detached {
+                    await budget.releaseSocket(host: hostToRelease)
+                    await budget.releaseSockets(host: hostToRelease, count: extra)
+                }
             }
 
             let options = try buildDownloadOptions(from: details)
@@ -248,7 +284,7 @@ public actor TransferOrchestrator {
                 partialURL: partial,
                 options: options,
                 abortFlag: abort,
-                hostMaxSegments: hostHint?.maxSegments,
+                hostMaxSegments: min(hostHint?.maxSegments ?? Int.max, 1 + extraSegmentSockets),
                 onProgress: { bytes in
                     Task { await self.recordProgress(jobID: jobID, bytes: bytes, total: nil) }
                 }
@@ -277,6 +313,7 @@ public actor TransferOrchestrator {
                     ),
                     for: jobID
                 )
+                speedEstimators[jobID] = nil
                 return
             }
 
@@ -298,7 +335,20 @@ public actor TransferOrchestrator {
                 finalURL: outcome.identity.finalURL,
                 expectedSize: outcome.bytesWritten,
                 etag: outcome.identity.etag,
-                mime: outcome.identity.contentType
+                mime: outcome.identity.contentType,
+                contentDisposition: outcome.identity.contentDisposition
+            )
+            let betterName = FilenameSanitizer.preferredFilename(
+                contentDisposition: outcome.identity.contentDisposition,
+                urlString: outcome.identity.finalURL,
+                existingEvidence: details.suggestedFilename
+            )
+            Self.refineCategoryIfOther(
+                database: database,
+                jobID: jobID,
+                filenameEvidence: betterName,
+                mimeEvidence: outcome.identity.contentType,
+                url: outcome.identity.finalURL
             )
 
             _ = try JobRepository.updateJobState(
@@ -411,14 +461,28 @@ public actor TransferOrchestrator {
         var snap = previous ?? JobProgressSnapshot(
             bytesTransferred: 0, totalBytes: total, speedBytesPerSecond: 0
         )
-        let priorBytes = snap.bytesTransferred
-        snap.bytesTransferred = bytes
+        snap.bytesTransferred = max(bytes, snap.bytesTransferred)
         if let total { snap.totalBytes = total }
-        let delta = max(0, bytes - priorBytes)
-        if delta > 0 {
-            snap.speedBytesPerSecond = max(delta, snap.speedBytesPerSecond / 2)
-        }
+
+        var estimator = speedEstimators[jobID] ?? TransferSpeedEstimator()
+        snap.speedBytesPerSecond = estimator.record(bytes: bytes)
+        speedEstimators[jobID] = estimator
         progressLedger.set(snap, for: jobID)
+    }
+
+    private func zeroSpeed(jobID: String, bytesTransferred: Int64? = nil, totalBytes: Int64? = nil) {
+        speedEstimators[jobID] = nil
+        let previous = progressLedger.snapshot(for: jobID)
+        let bytes = bytesTransferred ?? previous?.bytesTransferred ?? 0
+        let total = totalBytes ?? previous?.totalBytes
+        progressLedger.set(
+            JobProgressSnapshot(
+                bytesTransferred: bytes,
+                totalBytes: total,
+                speedBytesPerSecond: 0
+            ),
+            for: jobID
+        )
     }
 
     private func handleAbort(jobID: String) async {
@@ -430,6 +494,7 @@ public actor TransferOrchestrator {
             cancelledJobIDs.remove(jobID)
             resumeAfterAbort.remove(jobID)
             progressLedger.remove(jobID)
+            speedEstimators[jobID] = nil
             return
         }
         if resumeAfterAbort.contains(jobID) {
@@ -439,6 +504,7 @@ public actor TransferOrchestrator {
                 database: database, id: jobID, state: "queued",
                 terminalReason: nil, expectedRevision: nil
             )
+            zeroSpeed(jobID: jobID)
             log.info("job requeued after abort id=\(jobID, privacy: .public)")
             return
         }
@@ -447,6 +513,7 @@ public actor TransferOrchestrator {
             terminalReason: nil, expectedRevision: nil
         )
         pausedJobIDs.remove(jobID)
+        zeroSpeed(jobID: jobID)
         log.info("job paused id=\(jobID, privacy: .public)")
     }
 
@@ -459,7 +526,7 @@ public actor TransferOrchestrator {
         hostMaxSegments: Int?,
         onProgress: @escaping TransferCore.ProgressHandler
     ) async throws -> SegmentedTransfer.Outcome {
-        try await Task.detached(priority: .utility) {
+        try await Task.detached(priority: .high) {
             try SegmentedTransfer.downloadHTTP(
                 url: url,
                 partialURL: partialURL,
@@ -470,6 +537,33 @@ public actor TransferOrchestrator {
                 hostMaxSegments: hostMaxSegments
             )
         }.value
+    }
+
+    /// Auto-assign built-in categories when the job is still `other`.
+    private nonisolated static func refineCategoryIfOther(
+        database: EngineDatabase,
+        jobID: String,
+        filenameEvidence: String?,
+        mimeEvidence: String?,
+        url: String
+    ) {
+        let classified = ClassificationEngine.classify(
+            filenameEvidence: filenameEvidence,
+            mimeEvidence: mimeEvidence,
+            urlPath: url
+        )
+        guard classified.stableKey != "other" else { return }
+        do {
+            _ = try JobRepository.upgradeCategoryFromOther(
+                database: database,
+                jobID: jobID,
+                categoryStableKey: classified.stableKey
+            )
+        } catch {
+            EngineLog.agent.error(
+                "category refine failed id=\(jobID, privacy: .public) err=\(EngineLog.redacted(error), privacy: .public)"
+            )
+        }
     }
 
     private func handleFailure(jobID: String, error: Error) async {

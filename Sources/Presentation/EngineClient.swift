@@ -15,13 +15,93 @@ public final class EngineClient: ObservableObject {
 
     private var connection: NSXPCConnection?
     private var didHandshake = false
+    /// When set, connect via the app-scoped XPC service instead of the LaunchAgent Mach service.
+    private var prefersBundledXPCService = false
 
     public init() {}
 
     public func connect() async throws {
         if connection != nil, didHandshake { return }
-        let connection = NSXPCConnection(machServiceName: EngineXPC.machServiceName)
+        try await openConnectionAndHandshake()
+    }
+
+    /// Prefer the embedded `DownloadEngineAgent.xpc` (ad-hoc / healed direct mode).
+    public func useBundledXPCService() {
+        prefersBundledXPCService = true
+        resetConnection()
+    }
+
+    /// Clear bundled-service preference and fall back to Mach service addressing.
+    public func clearDirectEndpoint() {
+        prefersBundledXPCService = false
+        resetConnection()
+    }
+
+    /// Drop a dead XPC session so the next call re-handshakes.
+    public func resetConnection() {
+        if let connection {
+            connection.invalidationHandler = nil
+            connection.interruptionHandler = nil
+            connection.invalidate()
+        }
+        connection = nil
+        didHandshake = false
+    }
+
+    /// Lightweight liveness check used by LaunchAgent heal / ensureRunning.
+    /// Returns `false` on timeout or any XPC failure (never throws).
+    public func ping(timeoutSeconds: Double = 2.5) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await self.healthProbeSucceeded()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private func healthProbeSucceeded() async -> Bool {
+        do {
+            let requestID = UUID().uuidString
+            _ = try await perform { proxy, reply in
+                proxy.healthStatus(requestID: requestID, reply: reply)
+            } as EngineHealthSnapshot
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func openConnectionAndHandshake() async throws {
+        resetConnection()
+        if !prefersBundledXPCService,
+           DirectAgentHost.shared.currentTransportIfReady == .bundledXPCService {
+            prefersBundledXPCService = true
+        }
+        let connection = if prefersBundledXPCService {
+            // App-scoped XPC service (ad-hoc / healed). Demand-launched by launchd.
+            NSXPCConnection(serviceName: EngineXPC.machServiceName)
+        } else {
+            NSXPCConnection(machServiceName: EngineXPC.machServiceName)
+        }
         connection.remoteObjectInterface = EngineControlInterface.make()
+        connection.invalidationHandler = { [weak self] in
+            Task { @MainActor in
+                self?.didHandshake = false
+                self?.connection = nil
+            }
+        }
+        connection.interruptionHandler = { [weak self] in
+            Task { @MainActor in
+                self?.didHandshake = false
+                self?.connection = nil
+            }
+        }
         connection.resume()
         self.connection = connection
 
@@ -32,16 +112,40 @@ public final class EngineClient: ObservableObject {
             capabilities: [
                 "enqueueBatch", "listJobs", "controlJob", "setJobPriority", "deleteJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
-                "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
+                "listProfiles", "getDefaultDestination", "setDefaultDestination",
+                "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags", "setJobProject",
+                "setJobCategory", "setJobFilename",
                 "getBoolSetting", "setBoolSetting",
-                "listCategoryRules", "upsertCategoryRule", "listEvents"
+                "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents"
             ]
         )
-        _ = try await Self.invoke(Self.box(connection)) { proxy, reply in
-            proxy.handshake(hello, reply: reply)
-        } as ServerHello
-        didHandshake = true
+        do {
+            _ = try await Self.invoke(Self.box(connection)) { proxy, reply in
+                proxy.handshake(hello, reply: reply)
+            } as ServerHello
+            didHandshake = true
+        } catch {
+            resetConnection()
+            throw error
+        }
+    }
+
+    /// Connect (with one automatic reconnect after failure).
+    private func perform<T: AnyObject & Sendable>(
+        _ call: @escaping @Sendable (
+            EngineControlProtocol,
+            @escaping @Sendable (T?, NSError?) -> Void
+        ) -> Void
+    ) async throws -> T {
+        do {
+            try await connect()
+            return try await Self.invoke(Self.box(connection), call)
+        } catch {
+            resetConnection()
+            try await connect()
+            return try await Self.invoke(Self.box(connection), call)
+        }
     }
 
     public func enqueueBatch(
@@ -55,7 +159,6 @@ public final class EngineClient: ObservableObject {
         projectID: String? = nil,
         scheduleStartAtISO8601: String? = nil
     ) async throws -> EnqueueBatchResponse {
-        try await connect()
         let request = EnqueueBatchRequest(
             requestID: UUID().uuidString,
             source: source,
@@ -68,15 +171,14 @@ public final class EngineClient: ObservableObject {
             projectID: projectID,
             scheduleStartAtISO8601: scheduleStartAtISO8601
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.enqueueBatch(request, reply: reply)
         }
     }
 
     public func listJobs() async throws -> JobListSnapshot {
-        try await connect()
         let requestID = UUID().uuidString
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.listJobs(requestID: requestID, reply: reply)
         }
     }
@@ -86,45 +188,67 @@ public final class EngineClient: ObservableObject {
         command: JobCommandKind,
         expectedRevision: Int = 0
     ) async throws -> JobCommandResponse {
-        try await connect()
         let request = JobCommandRequest(
             requestID: UUID().uuidString,
             jobID: jobID,
             command: command,
             expectedRevision: expectedRevision
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.controlJob(request, reply: reply)
         }
     }
 
     public func setJobPriority(jobID: String, priority: Int) async throws -> SetJobPriorityResponse {
-        try await connect()
         let request = SetJobPriorityRequest(
             requestID: UUID().uuidString,
             jobID: jobID,
             priority: priority
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.setJobPriority(request, reply: reply)
         }
     }
 
     public func listProfiles() async throws -> ListProfilesResponse {
-        try await connect()
         let requestID = UUID().uuidString
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.listProfiles(requestID: requestID, reply: reply)
         }
     }
 
-    public func deleteJob(jobID: String) async throws -> DeleteJobResponse {
-        try await connect()
+    public func getDefaultDestination() async throws -> DefaultDestinationSnapshot {
+        let requestID = UUID().uuidString
+        let response: GetDefaultDestinationResponse = try await perform { proxy, reply in
+            proxy.getDefaultDestination(requestID: requestID, reply: reply)
+        }
+        return response.destination
+    }
+
+    public func setDefaultDestination(
+        bookmarkData: Data?,
+        displayName: String?,
+        pathDisplay: String? = nil
+    ) async throws -> DefaultDestinationSnapshot {
+        let request = SetDefaultDestinationRequest(
+            requestID: UUID().uuidString,
+            bookmarkData: bookmarkData,
+            displayName: displayName,
+            pathDisplay: pathDisplay
+        )
+        let response: SetDefaultDestinationResponse = try await perform { proxy, reply in
+            proxy.setDefaultDestination(request, reply: reply)
+        }
+        return response.destination
+    }
+
+    public func deleteJob(jobID: String, deleteFiles: Bool = false) async throws -> DeleteJobResponse {
         let request = DeleteJobRequest(
             requestID: UUID().uuidString,
-            jobID: jobID
+            jobID: jobID,
+            deleteFiles: deleteFiles
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.deleteJob(request, reply: reply)
         }
     }
@@ -135,7 +259,6 @@ public final class EngineClient: ObservableObject {
         password: String,
         profileID: String = UUID().uuidString.lowercased()
     ) async throws -> UpsertCredentialProfileResponse {
-        try await connect()
         guard let passwordData = password.data(using: .utf8), !passwordData.isEmpty else {
             throw ClientError.decoding
         }
@@ -146,7 +269,7 @@ public final class EngineClient: ObservableObject {
             username: username,
             passwordUTF8: passwordData
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.upsertCredentialProfile(request, reply: reply)
         }
     }
@@ -158,7 +281,6 @@ public final class EngineClient: ObservableObject {
         port: Int,
         profileID: String = UUID().uuidString.lowercased()
     ) async throws -> UpsertProxyProfileResponse {
-        try await connect()
         let request = UpsertProxyProfileRequest(
             requestID: UUID().uuidString,
             profileID: profileID,
@@ -167,7 +289,7 @@ public final class EngineClient: ObservableObject {
             host: host,
             port: port
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.upsertProxyProfile(request, reply: reply)
         }
     }
@@ -176,13 +298,12 @@ public final class EngineClient: ObservableObject {
         displayName: String,
         profileID: String = UUID().uuidString.lowercased()
     ) async throws -> UpsertCookieProfileResponse {
-        try await connect()
         let request = UpsertCookieProfileRequest(
             requestID: UUID().uuidString,
             profileID: profileID,
             displayName: displayName
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.upsertCookieProfile(request, reply: reply)
         }
     }
@@ -193,7 +314,6 @@ public final class EngineClient: ObservableObject {
         maxBytesPerSecond: Int64,
         policyID: String = "00000000-0000-7000-8000-0000000000b1"
     ) async throws -> UpsertBandwidthPolicyResponse {
-        try await connect()
         let request = UpsertBandwidthPolicyRequest(
             requestID: UUID().uuidString,
             policyID: policyID,
@@ -201,23 +321,21 @@ public final class EngineClient: ObservableObject {
             windowsJSON: windowsJSON,
             maxBytesPerSecond: maxBytesPerSecond
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.upsertBandwidthPolicy(request, reply: reply)
         }
     }
 
     public func getBandwidthPolicy() async throws -> GetBandwidthPolicyResponse {
-        try await connect()
         let requestID = UUID().uuidString
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.getBandwidthPolicy(requestID: requestID, reply: reply)
         }
     }
 
     public func listOrganization() async throws -> ListOrganizationResponse {
-        try await connect()
         let requestID = UUID().uuidString
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.listOrganization(requestID: requestID, reply: reply)
         }
     }
@@ -227,14 +345,13 @@ public final class EngineClient: ObservableObject {
         colorRole: String? = nil,
         projectID: String = UUID().uuidString.lowercased()
     ) async throws -> UpsertProjectResponse {
-        try await connect()
         let request = UpsertProjectRequest(
             requestID: UUID().uuidString,
             projectID: projectID,
             name: name,
             colorRole: colorRole
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.upsertProject(request, reply: reply)
         }
     }
@@ -243,65 +360,87 @@ public final class EngineClient: ObservableObject {
         name: String,
         tagID: String = UUID().uuidString.lowercased()
     ) async throws -> UpsertTagResponse {
-        try await connect()
         let request = UpsertTagRequest(
             requestID: UUID().uuidString,
             tagID: tagID,
             name: name
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.upsertTag(request, reply: reply)
         }
     }
 
     public func setJobTags(jobID: String, tagIDs: [String]) async throws -> SetJobTagsResponse {
-        try await connect()
         let request = SetJobTagsRequest(
             requestID: UUID().uuidString,
             jobID: jobID,
             tagIDs: tagIDs
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.setJobTags(request, reply: reply)
         }
     }
 
     public func setJobProject(jobID: String, projectID: String?) async throws -> SetJobProjectResponse {
-        try await connect()
         let request = SetJobProjectRequest(
             requestID: UUID().uuidString,
             jobID: jobID,
             projectID: projectID
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.setJobProject(request, reply: reply)
         }
     }
 
+    public func setJobCategory(
+        jobID: String,
+        categoryStableKey: String
+    ) async throws -> SetJobCategoryResponse {
+        let request = SetJobCategoryRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID,
+            categoryStableKey: categoryStableKey
+        )
+        return try await perform { proxy, reply in
+            proxy.setJobCategory(request, reply: reply)
+        }
+    }
+
+    public func setJobFilename(
+        jobID: String,
+        filename: String
+    ) async throws -> SetJobFilenameResponse {
+        let request = SetJobFilenameRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID,
+            filename: filename
+        )
+        return try await perform { proxy, reply in
+            proxy.setJobFilename(request, reply: reply)
+        }
+    }
+
     public func getBoolSetting(key: String) async throws -> GetBoolSettingResponse {
-        try await connect()
         let request = GetBoolSettingRequest(requestID: UUID().uuidString, key: key)
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.getBoolSetting(request, reply: reply)
         }
     }
 
     public func setBoolSetting(key: String, value: Bool) async throws -> SetBoolSettingResponse {
-        try await connect()
         let request = SetBoolSettingRequest(
             requestID: UUID().uuidString,
             key: key,
             value: value
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.setBoolSetting(request, reply: reply)
         }
     }
 
     public func listCategoryRules() async throws -> ListCategoryRulesResponse {
-        try await connect()
         let requestID = UUID().uuidString
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.listCategoryRules(requestID: requestID, reply: reply)
         }
     }
@@ -313,7 +452,6 @@ public final class EngineClient: ObservableObject {
         enabled: Bool = true,
         ruleID: String = UUID().uuidString.lowercased()
     ) async throws -> UpsertCategoryRuleResponse {
-        try await connect()
         let request = UpsertCategoryRuleRequest(
             requestID: UUID().uuidString,
             ruleID: ruleID,
@@ -322,20 +460,29 @@ public final class EngineClient: ObservableObject {
             predicateJSON: predicateJSON,
             categoryStableKey: categoryStableKey
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.upsertCategoryRule(request, reply: reply)
         }
     }
 
     public func listEvents(jobID: String? = nil, limit: Int = 50) async throws -> ListEventsResponse {
-        try await connect()
         let request = ListEventsRequest(
             requestID: UUID().uuidString,
             jobID: jobID,
             limit: min(max(limit, 1), EngineXPC.maxCollectionCount)
         )
-        return try await Self.invoke(Self.box(connection)) { proxy, reply in
+        return try await perform { proxy, reply in
             proxy.listEvents(request, reply: reply)
+        }
+    }
+
+    public func clearEvents(jobID: String) async throws -> ClearEventsResponse {
+        let request = ClearEventsRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID
+        )
+        return try await perform { proxy, reply in
+            proxy.clearEvents(request, reply: reply)
         }
     }
 

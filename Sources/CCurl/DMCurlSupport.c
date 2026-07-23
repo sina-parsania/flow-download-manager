@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 CURLcode DMCurlGlobalInit(void) {
@@ -16,6 +17,32 @@ void DMCurlGlobalCleanup(void) {
 
 const curl_version_info_data *DMCurlVersionInfo(void) {
     return curl_version_info(CURLVERSION_NOW);
+}
+
+/// Mark sockets as high-priority interactive bulk transfers (Apple net service type)
+/// and enlarge the kernel receive buffer — closest equivalent to IDM-style priority
+/// without a Network Extension that can throttle other apps.
+static int DMCurlSockoptCallback(void *clientp, curl_socket_t curlfd, curlsocktype purpose) {
+    (void)clientp;
+    if (purpose != CURLSOCKTYPE_IPCXN) {
+        return CURL_SOCKOPT_OK;
+    }
+    int serviceType = NET_SERVICE_TYPE_RD; /* Responsive Data — prefer over background apps */
+    (void)setsockopt(curlfd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &serviceType, sizeof(serviceType));
+    int rcv = 2 * 1024 * 1024;
+    (void)setsockopt(curlfd, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof(rcv));
+    return CURL_SOCKOPT_OK;
+}
+
+static void DMCurlApplyThroughputOptions(CURL *easy) {
+    curl_easy_setopt(easy, CURLOPT_BUFFERSIZE, 1024L * 1024L);
+    curl_easy_setopt(easy, CURLOPT_TCP_NODELAY, 1L);
+    curl_easy_setopt(easy, CURLOPT_SOCKOPTFUNCTION, DMCurlSockoptCallback);
+    curl_easy_setopt(easy, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_2TLS);
+    /* Fail transfers stalled below 1 KiB/s for 30 s so the segment retry pass
+     * can re-split the remaining bytes onto fresh connections. */
+    curl_easy_setopt(easy, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+    curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, 30L);
 }
 
 CURLUcode DMCurlURLSetString(CURLU *handle, CURLUPart part, const char *value, unsigned int flags) {
@@ -300,6 +327,7 @@ CURLcode DMCurlEasyDownloadToFD(
     curl_easy_setopt(easy, CURLOPT_XFERINFODATA, &writeCtx);
     curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(easy, CURLOPT_USERAGENT, "DownloadManager/0.1");
+    DMCurlApplyThroughputOptions(easy);
     if (rangeHeader != NULL && rangeHeader[0] != '\0') {
         curl_easy_setopt(easy, CURLOPT_RANGE, rangeHeader);
     }
@@ -409,6 +437,7 @@ static void DMCurlApplyEasyDownloadOptions(
     curl_easy_setopt(easy, CURLOPT_XFERINFODATA, writeCtx);
     curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(easy, CURLOPT_USERAGENT, "DownloadManager/0.1");
+    DMCurlApplyThroughputOptions(easy);
     if (rangeHeader != NULL && rangeHeader[0] != '\0') {
         curl_easy_setopt(easy, CURLOPT_RANGE, rangeHeader);
     }
@@ -569,7 +598,14 @@ void DMCurlEasyDownloadFinish(
 }
 
 CURLM *DMCurlMultiCreate(void) {
-    return curl_multi_init();
+    CURLM *multi = curl_multi_init();
+    if (multi != NULL) {
+        /* Segmented ranges must each own a TCP connection: with the default
+         * CURLPIPE_MULTIPLEX, HTTP/2 servers get all segments folded onto one
+         * connection and per-connection throttles defeat the parallelism. */
+        curl_multi_setopt(multi, CURLMOPT_PIPELINING, (long)CURLPIPE_NOTHING);
+    }
+    return multi;
 }
 
 CURLMcode DMCurlMultiAddEasy(CURLM *multi, CURL *easy) {

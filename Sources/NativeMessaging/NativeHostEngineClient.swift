@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Application
 import Domain
 import Foundation
 import XPCContracts
@@ -60,7 +61,14 @@ public actor NativeHostEngineClient: NativeMessagingEngineBridge {
             requestID: UUID().uuidString,
             source: "chrome-extension",
             displayName: displayName,
-            items: urls.map { BatchURLItem(url: $0, categoryStableKey: "general") },
+            items: urls.map { url in
+                let category = ClassificationEngine.classify(
+                    filenameEvidence: URL(string: url)?.lastPathComponent,
+                    mimeEvidence: nil,
+                    urlPath: url
+                ).stableKey
+                return BatchURLItem(url: url, categoryStableKey: category)
+            },
             credentialProfileID: nil,
             proxyProfileID: nil,
             cookieProfileID: nil,

@@ -11,6 +11,8 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let name: String
     public let sourceHost: String
+    /// Full download URL (final when known, otherwise canonical).
+    public let sourceURL: String
     public let state: JobState
     /// 0...1 completion fraction, or nil when unknown (indeterminate).
     public let progressFraction: Double?
@@ -26,7 +28,8 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
     public let priority: Int
 
     public init(
-        id: UUID, name: String, sourceHost: String, state: JobState,
+        id: UUID, name: String, sourceHost: String, sourceURL: String = "",
+        state: JobState,
         progressFraction: Double?, bytesTransferred: Int64, totalBytes: Int64?,
         speedBytesPerSecond: Int64, etaSeconds: Int?, categoryKey: String,
         projectID: String? = nil, projectName: String?, tagIDs: [String] = [],
@@ -35,6 +38,9 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
         self.id = id
         self.name = name
         self.sourceHost = sourceHost
+        self.sourceURL = sourceURL.isEmpty
+            ? "https://\(sourceHost)/"
+            : sourceURL
         self.state = state
         self.progressFraction = progressFraction
         self.bytesTransferred = bytesTransferred

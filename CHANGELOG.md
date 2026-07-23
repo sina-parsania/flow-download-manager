@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0 — 2026-07-24
+
+Community-stable Flow release for daily Apple Silicon use.
+
+- **Flow Download Manager** branding (Dock / About / Settings)
+- Board-first SwiftUI UI (pins, inspector, projects & tags, destination card)
+- Reliable segmented resume via `.segmap` (no more “restart from 0” after relaunch)
+- Ad-hoc engine hosting via bundled **XPC service** (macOS 26-safe; replaces broken endpoint-file handshake)
+- Category auto-hints, rename, library-only vs delete-files remove
+- One-line terminal installer: `Scripts/install.sh`
+- Unsigned DMG ships as **Flow Download Manager.app**
+
 ## 0.1.0 — 2026-07-23
 
 First community GitHub release (unsigned; not Apple notarized).

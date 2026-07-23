@@ -196,6 +196,15 @@ public enum TransferCore {
               let total = totalLength(from: probe),
               existing < total
         else {
+            // Do not wipe a partial that is already at/above the remote size —
+            // that path is how preallocated segmented shells get destroyed on
+            // relaunch. Leave the bytes for a higher layer (segmap / Restart).
+            if existing > 0 {
+                throw TransferError.incompleteWrite(
+                    expected: totalLength(from: probe) ?? existing,
+                    wrote: existing
+                )
+            }
             try? FileManager.default.removeItem(at: partialURL)
             return try downloadSingleStream(
                 url: url,

@@ -18,13 +18,27 @@ final class TransferBudgetTests: XCTestCase {
     }
 
     func testActiveJobBudget() async {
-        let ledger = TransferBudgetLedger(maxActiveJobs: 1, maxTotalSockets: 8, maxSocketsPerHost: 8)
+        let ledger = TransferBudgetLedger(maxActiveJobs: 2, maxTotalSockets: 8, maxSocketsPerHost: 8)
+        let limit = await ledger.maxActiveJobsLimit()
+        XCTAssertEqual(limit, 2)
+
+        let slotsOpen = await ledger.availableJobSlots()
+        XCTAssertEqual(slotsOpen, 2)
+
         let first = await ledger.tryBeginJob()
+        let slotsAfterFirst = await ledger.availableJobSlots()
+        XCTAssertEqual(slotsAfterFirst, 1)
+
         let second = await ledger.tryBeginJob()
+        let slotsFull = await ledger.availableJobSlots()
+        XCTAssertEqual(slotsFull, 0)
+
+        let third = await ledger.tryBeginJob()
         await ledger.endJob()
         let afterEnd = await ledger.tryBeginJob()
         XCTAssertTrue(first)
-        XCTAssertFalse(second)
+        XCTAssertTrue(second)
+        XCTAssertFalse(third)
         XCTAssertTrue(afterEnd)
     }
 

@@ -94,4 +94,43 @@ final class ClassificationEngineTests: XCTestCase {
         )
         XCTAssertEqual(mimeAlone.stableKey, "other")
     }
+
+    func testSignedCDNURLWithQueryMapsToVideos() {
+        let result = ClassificationEngine.classify(
+            filenameEvidence: nil,
+            mimeEvidence: nil,
+            urlPath: "https://cdn.example.com/hls/ep01.mp4?token=abc&exp=99"
+        )
+        XCTAssertEqual(result.stableKey, "videos")
+    }
+
+    func testAnimePathHintMapsToVideos() {
+        let result = ClassificationEngine.classify(
+            filenameEvidence: nil,
+            mimeEvidence: nil,
+            urlPath: "https://nirvanime.example/stream/onepiece/episode/101"
+        )
+        XCTAssertEqual(result.stableKey, "videos")
+        XCTAssertEqual(result.confidence, .medium)
+    }
+
+    func testM3U8TokenInURLMapsToVideos() {
+        let result = ClassificationEngine.classify(
+            filenameEvidence: "segment",
+            mimeEvidence: "application/octet-stream",
+            urlPath: "https://media.example.com/play/master.m3u8"
+        )
+        XCTAssertEqual(result.stableKey, "videos")
+    }
+
+    func testVideoHostHintMapsToVideos() {
+        let result = ClassificationEngine.classify(
+            filenameEvidence: nil,
+            mimeEvidence: nil,
+            urlPath: "https://www.twitch.tv/somechannel/clip/AbCdEf"
+        )
+        XCTAssertEqual(result.stableKey, "videos")
+        XCTAssertEqual(result.confidence, .low)
+        XCTAssertEqual(result.evidence, "host-hint:videos")
+    }
 }

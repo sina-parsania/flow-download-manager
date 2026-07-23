@@ -54,7 +54,8 @@ public enum CurlMultiLoop {
         proxyURL: String? = nil,
         cookieJarPath: String? = nil,
         extraHeadersPayload: String? = nil,
-        onProgress: (@Sendable (Int64) -> Void)? = nil
+        onProgress: (@Sendable (Int64) -> Void)? = nil,
+        onSegmentProgress: (@Sendable (Int, Int64) -> Void)? = nil
     ) throws -> [Outcome] {
         guard !ranges.isEmpty else { throw MultiError.emptyRequests }
         try CurlBridge.initialize()
@@ -67,6 +68,9 @@ public enum CurlMultiLoop {
         }
         guard fd >= 0 else { throw MultiError.easyCreateFailed }
         defer { close(fd) }
+
+        // Prefer CPU over background work while the multi loop blocks this thread.
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0)
 
         guard let multi = DMCurlMultiCreate() else {
             throw MultiError.multiInitFailed
@@ -96,7 +100,13 @@ public enum CurlMultiLoop {
         let connect = Int(connectTimeoutMilliseconds)
         let transfer = Int(transferTimeoutMilliseconds)
         let redirects = Int(maxRedirects)
-        let progressState = onProgress.map { MultiProgressState(segmentCount: ranges.count, onProgress: $0) }
+        let progressState: MultiProgressState? = (onProgress != nil || onSegmentProgress != nil)
+            ? MultiProgressState(
+                segmentCount: ranges.count,
+                onProgress: onProgress,
+                onSegmentProgress: onSegmentProgress
+            )
+            : nil
         // Retain per-segment boxes for the full multi loop lifetime.
         var progressBoxes: [MultiSegmentProgressBox] = []
         progressBoxes.reserveCapacity(ranges.count)
@@ -317,11 +327,17 @@ public enum CurlMultiLoop {
 private final class MultiProgressState: @unchecked Sendable {
     private let lock = NSLock()
     private var progressBySegment: [Int64]
-    private let onProgress: @Sendable (Int64) -> Void
+    private let onProgress: (@Sendable (Int64) -> Void)?
+    private let onSegmentProgress: (@Sendable (Int, Int64) -> Void)?
 
-    init(segmentCount: Int, onProgress: @escaping @Sendable (Int64) -> Void) {
+    init(
+        segmentCount: Int,
+        onProgress: (@Sendable (Int64) -> Void)?,
+        onSegmentProgress: (@Sendable (Int, Int64) -> Void)?
+    ) {
         progressBySegment = Array(repeating: 0, count: segmentCount)
         self.onProgress = onProgress
+        self.onSegmentProgress = onSegmentProgress
     }
 
     func record(segment: Int, written: Int64) {
@@ -331,7 +347,8 @@ private final class MultiProgressState: @unchecked Sendable {
         }
         let total = progressBySegment.reduce(0, +)
         lock.unlock()
-        onProgress(total)
+        onSegmentProgress?(segment, written)
+        onProgress?(total)
     }
 }
 

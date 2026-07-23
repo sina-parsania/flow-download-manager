@@ -105,6 +105,10 @@ release-sbom: ## Write dependency inventory under Artifacts/release/
 release-dmg-unsigned: ## Build unsigned Release DMG (no signing/notarization)
 	@Scripts/release/build-dmg.sh
 
+.PHONY: install-release
+install-release: ## Install latest (or TAG=vX.Y.Z) GitHub Release via Scripts/install.sh
+	@Scripts/install.sh $(if $(TAG),--tag $(TAG),) $(INSTALL_FLAGS)
+
 .PHONY: release-notarize
 release-notarize: ## Notarize a signed DMG (BLOCKED without credentials)
 	@Scripts/release/notarize.sh

@@ -67,23 +67,35 @@ public enum OrganizationRepository {
         return id
     }
 
+    @discardableResult
     public static func upsertTag(
         database: EngineDatabase,
         id: String,
         name: String
-    ) throws {
+    ) throws -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.utf8.count <= 256 else {
             throw OrganizationRepositoryError.invalidName
         }
         let fold = nameFold(trimmed)
-        try database.pool.write { db in
+        return try database.pool.write { db in
+            if let existing = try TagRecord
+                .filter(Column("nameFold") == fold)
+                .fetchOne(db) {
+                if existing.id == id {
+                    var updated = existing
+                    updated.name = truncated(trimmed, maxUTF8: 256)
+                    try updated.update(db)
+                }
+                return existing.id
+            }
             let record = TagRecord(
                 id: id,
                 name: truncated(trimmed, maxUTF8: 256),
                 nameFold: fold
             )
-            try record.save(db)
+            try record.insert(db)
+            return id
         }
     }
 

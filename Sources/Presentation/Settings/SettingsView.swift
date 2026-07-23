@@ -7,12 +7,44 @@ import XPCContracts
 /// Minimal Settings surface for credential/proxy profiles, projects/tags, and About.
 public struct SettingsView: View {
     @StateObject private var model = SettingsModel()
+    @EnvironmentObject private var launchAgent: LaunchAgentModel
     @AppStorage(ClipboardMonitor.userDefaultsKey) private var clipboardMonitoringEnabled = false
+    @AppStorage(FlowAppearanceMode.userDefaultsKey) private var appearanceModeRaw = FlowAppearanceMode.system.rawValue
 
     public init() {}
 
     public var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $appearanceModeRaw) {
+                    ForEach(FlowAppearanceMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Theme")
+                Text((FlowAppearanceMode(rawValue: appearanceModeRaw) ?? .system).detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Download folder") {
+                DestinationFolderCard(
+                    engineClient: model.engineClient,
+                    compact: true,
+                    onHealEngine: {
+                        launchAgent.attachEngineClient(model.engineClient)
+                        await launchAgent.repair()
+                        return launchAgent.isEngineReady
+                    }
+                )
+                Text("New downloads land in this folder. Compose uses the same default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Clipboard") {
                 Toggle(
                     "Monitor clipboard for links",
@@ -207,7 +239,7 @@ public struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Product", value: "Download Manager")
+                LabeledContent("Product", value: "Flow Download Manager")
                 LabeledContent(
                     "Version",
                     value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
@@ -262,7 +294,7 @@ private final class SettingsModel: ObservableObject {
     @Published var isBusy = false
     private var suppressZipSettingSave = false
 
-    private let client = EngineClient()
+    let engineClient = EngineClient()
     private static let zipAutoExtractKey = "zipAutoExtractEnabled"
 
     var canSaveCredential: Bool {
@@ -313,16 +345,16 @@ private final class SettingsModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            let profiles = try await client.listProfiles()
+            let profiles = try await engineClient.listProfiles()
             credentials = profiles.credentials
             proxies = profiles.proxies
             cookies = profiles.cookies
-            let organization = try await client.listOrganization()
+            let organization = try await engineClient.listOrganization()
             projects = organization.projects
             tags = organization.tags
-            let rules = try await client.listCategoryRules()
+            let rules = try await engineClient.listCategoryRules()
             categoryRules = rules.rules
-            let bandwidth = try await client.getBandwidthPolicy()
+            let bandwidth = try await engineClient.getBandwidthPolicy()
             if let policy = bandwidth.policy {
                 bandwidthMaxBytesText = String(policy.maxBytesPerSecond)
                 let windows = (try? BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)) ?? []
@@ -332,7 +364,7 @@ private final class SettingsModel: ObservableObject {
                 bandwidthMaxBytesText = "0"
                 bandwidthNightWindowOnly = false
             }
-            let zipSetting = try await client.getBoolSetting(key: Self.zipAutoExtractKey)
+            let zipSetting = try await engineClient.getBoolSetting(key: Self.zipAutoExtractKey)
             suppressZipSettingSave = true
             zipAutoExtractEnabled = zipSetting.value
             suppressZipSettingSave = false
@@ -349,7 +381,7 @@ private final class SettingsModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            _ = try await client.setBoolSetting(key: Self.zipAutoExtractKey, value: enabled)
+            _ = try await engineClient.setBoolSetting(key: Self.zipAutoExtractKey, value: enabled)
             statusMessage = nil
             statusIsError = false
         } catch {
@@ -363,7 +395,7 @@ private final class SettingsModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            _ = try await client.upsertCredentialProfile(
+            _ = try await engineClient.upsertCredentialProfile(
                 displayName: credentialDisplayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 username: credentialUsername.trimmingCharacters(in: .whitespacesAndNewlines),
                 password: credentialPassword
@@ -386,7 +418,7 @@ private final class SettingsModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            _ = try await client.upsertProxyProfile(
+            _ = try await engineClient.upsertProxyProfile(
                 displayName: proxyDisplayName.trimmingCharacters(in: .whitespacesAndNewlines),
                 kind: proxyKind,
                 host: proxyHost.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -411,7 +443,7 @@ private final class SettingsModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            _ = try await client.upsertCookieProfile(
+            _ = try await engineClient.upsertCookieProfile(
                 displayName: cookieDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             cookieDisplayName = ""
@@ -436,7 +468,7 @@ private final class SettingsModel: ObservableObject {
                 ? [BandwidthWindowEvaluator.dailyMidnightToEightPreset]
                 : []
             let windowsJSON = try BandwidthWindowEvaluator.encodeWindowsJSON(windows)
-            _ = try await client.upsertBandwidthPolicy(
+            _ = try await engineClient.upsertBandwidthPolicy(
                 windowsJSON: windowsJSON,
                 maxBytesPerSecond: maxBytes
             )
@@ -454,7 +486,7 @@ private final class SettingsModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            _ = try await client.upsertProject(
+            _ = try await engineClient.upsertProject(
                 name: projectName.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             projectName = ""
@@ -473,7 +505,7 @@ private final class SettingsModel: ObservableObject {
         isBusy = true
         defer { isBusy = false }
         do {
-            _ = try await client.upsertTag(
+            _ = try await engineClient.upsertTag(
                 name: tagName.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             tagName = ""
@@ -495,7 +527,7 @@ private final class SettingsModel: ObservableObject {
         defer { isBusy = false }
         do {
             let priority = categoryRules.map(\.priority).max().map { $0 + 1 } ?? 0
-            _ = try await client.upsertCategoryRule(
+            _ = try await engineClient.upsertCategoryRule(
                 predicateJSON: predicate,
                 categoryStableKey: ruleCategoryKey,
                 priority: priority

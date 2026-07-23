@@ -26,10 +26,10 @@ public enum LaunchAgentStatus: Equatable, Sendable {
     /// Short, user-facing headline (localized in the String Catalog at the view).
     public var headline: String {
         switch self {
-        case .notRegistered: return "Background engine is off"
-        case .enabled: return "Background engine is running"
+        case .notRegistered: return "Background engine starting…"
+        case .enabled: return "Background engine is on"
         case .requiresApproval: return "Approval needed in System Settings"
-        case .notFound: return "Background engine not found"
+        case .notFound: return "Background engine starting…"
         case .unknown: return "Background engine status unknown"
         }
     }
@@ -37,15 +37,15 @@ public enum LaunchAgentStatus: Equatable, Sendable {
     public var detail: String {
         switch self {
         case .notRegistered:
-            return "Register the engine so transfers continue after you close the window."
+            return "Flow keeps the transfer engine on automatically. It will finish starting in a moment."
         case .enabled:
-            return "Transfers continue in the background even when the window is closed."
+            return "Transfers keep running in the background. The engine starts with Flow and stays available."
         case .requiresApproval:
-            return "Open Login Items in System Settings and allow Download Manager’s background engine."
+            return "Allow Flow Download Manager in Login Items (once). After that the engine stays on — Flow will not ask again every launch."
         case .notFound:
-            return "The engine helper is missing from the app bundle. Reinstall the app."
+            return "Flow is starting the transfer engine with a local LaunchAgent fallback."
         case let .unknown(code):
-            return "Reported an unrecognized status code (\(code))."
+            return "Reported an unrecognized status code (\(code)). Use Repair if downloads stall."
         }
     }
 
@@ -54,8 +54,19 @@ public enum LaunchAgentStatus: Equatable, Sendable {
         self == .requiresApproval
     }
 
-    /// Whether the engine is usable right now.
+    /// Whether the engine is registered and allowed — not a live process probe.
     public var isOperational: Bool {
         self == .enabled
+    }
+
+    /// Compact subtitle under the sidebar badge.
+    public var badgeSubtitle: String {
+        switch self {
+        case .enabled: return "always on"
+        case .notRegistered: return "starting…"
+        case .requiresApproval: return "needs approval once"
+        case .notFound: return "starting…"
+        case .unknown: return "unknown"
+        }
     }
 }

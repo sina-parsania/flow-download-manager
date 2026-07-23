@@ -18,7 +18,7 @@ public actor TransferBudgetLedger {
     private var openSockets = 0
     private var socketsByHost: [String: Int] = [:]
 
-    public init(maxActiveJobs: Int = 3, maxTotalSockets: Int = 32, maxSocketsPerHost: Int = 8) {
+    public init(maxActiveJobs: Int = 5, maxTotalSockets: Int = 96, maxSocketsPerHost: Int = 32) {
         self.maxActiveJobs = maxActiveJobs
         self.maxTotalSockets = maxTotalSockets
         self.maxSocketsPerHost = maxSocketsPerHost
@@ -26,6 +26,14 @@ public actor TransferBudgetLedger {
 
     public func snapshot() -> Snapshot {
         Snapshot(activeJobs: activeJobs, openSockets: openSockets, socketsByHost: socketsByHost)
+    }
+
+    public func maxActiveJobsLimit() -> Int {
+        maxActiveJobs
+    }
+
+    public func availableJobSlots() -> Int {
+        max(0, maxActiveJobs - activeJobs)
     }
 
     public func tryBeginJob() -> Bool {
@@ -44,6 +52,26 @@ public actor TransferBudgetLedger {
         openSockets += 1
         socketsByHost[host] = hostCount + 1
         return true
+    }
+
+    /// Reserve up to `requested` additional sockets for one job's segments.
+    /// Returns the granted count (possibly 0) within total and per-host caps.
+    public func reserveSockets(host: String, upTo requested: Int) -> Int {
+        guard requested > 0 else { return 0 }
+        let hostCount = socketsByHost[host, default: 0]
+        let grant = min(requested, maxTotalSockets - openSockets, maxSocketsPerHost - hostCount)
+        guard grant > 0 else { return 0 }
+        openSockets += grant
+        socketsByHost[host] = hostCount + grant
+        return grant
+    }
+
+    public func releaseSockets(host: String, count: Int) {
+        guard count > 0 else { return }
+        openSockets = max(0, openSockets - count)
+        let hostCount = socketsByHost[host, default: 0]
+        let next = hostCount - count
+        socketsByHost[host] = next > 0 ? next : nil
     }
 
     public func releaseSocket(host: String) {

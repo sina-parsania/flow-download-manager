@@ -21,8 +21,7 @@ struct DownloadManagerApp: App {
     init() {
         // Non-UI diagnostic path: report / re-register SMAppService, then exit.
         if CommandLine.arguments.contains(LaunchAgentProbe.launchArgument)
-            || CommandLine.arguments.contains(LaunchAgentProbe.reregisterArgument)
-        {
+            || CommandLine.arguments.contains(LaunchAgentProbe.reregisterArgument) {
             LaunchAgentProbe.runAndExit(plistName: Self.launchAgentPlistName)
         }
         _launchAgent = StateObject(wrappedValue: LaunchAgentModel(
@@ -35,6 +34,8 @@ struct DownloadManagerApp: App {
         WindowGroup {
             RootView(model: library, launchAgent: launchAgent)
                 .frame(minWidth: 900, minHeight: 520)
+                .flowAppearance()
+                .environmentObject(launchAgent)
                 .onAppear {
                     menuBar.install(
                         library: library,
@@ -86,6 +87,8 @@ struct DownloadManagerApp: App {
 
         Settings {
             SettingsView()
+                .environmentObject(launchAgent)
+                .flowAppearance()
         }
     }
 }

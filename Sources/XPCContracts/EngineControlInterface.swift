@@ -125,6 +125,32 @@ public enum EngineControlInterface {
         )
 
         interface.setClasses(
+            allowedClasses([
+                GetDefaultDestinationResponse.self,
+                DefaultDestinationSnapshot.self,
+                NSString.self
+            ]),
+            for: #selector(EngineControlProtocol.getDefaultDestination(requestID:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([
+                SetDefaultDestinationRequest.self, NSString.self, NSData.self
+            ]),
+            for: #selector(EngineControlProtocol.setDefaultDestination(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([
+                SetDefaultDestinationResponse.self,
+                DefaultDestinationSnapshot.self,
+                NSString.self
+            ]),
+            for: #selector(EngineControlProtocol.setDefaultDestination(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
             allowedClasses([UpsertBandwidthPolicyRequest.self, NSString.self]),
             for: #selector(EngineControlProtocol.upsertBandwidthPolicy(_:reply:)),
             argumentIndex: 0, ofReply: false
@@ -196,6 +222,26 @@ public enum EngineControlInterface {
             argumentIndex: 0, ofReply: true
         )
         interface.setClasses(
+            allowedClasses([SetJobCategoryRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobCategory(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([SetJobCategoryResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobCategory(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([SetJobFilenameRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobFilename(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([SetJobFilenameResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobFilename(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
             allowedClasses([GetBoolSettingRequest.self, NSString.self]),
             for: #selector(EngineControlProtocol.getBoolSetting(_:reply:)),
             argumentIndex: 0, ofReply: false
@@ -250,6 +296,16 @@ public enum EngineControlInterface {
                 NSArray.self
             ]),
             for: #selector(EngineControlProtocol.listEvents(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([ClearEventsRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.clearEvents(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([ClearEventsResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.clearEvents(_:reply:)),
             argumentIndex: 0, ofReply: true
         )
         return interface

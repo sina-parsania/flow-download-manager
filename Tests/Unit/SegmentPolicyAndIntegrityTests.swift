@@ -7,10 +7,12 @@ import XCTest
 final class SegmentPolicyAndIntegrityTests: XCTestCase {
     func testPreferredSegmentCountScalesWithSize() {
         XCTAssertEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 100), 1)
-        XCTAssertEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 4096), 2)
+        XCTAssertEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 4096), 1)
+        XCTAssertEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 2_000_000), 2)
         XCTAssertEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 20_000_000), 4)
-        XCTAssertGreaterThanOrEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 200_000_000), 4)
-        XCTAssertLessThanOrEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 200_000_000), 8)
+        XCTAssertGreaterThanOrEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 200_000_000), 8)
+        XCTAssertLessThanOrEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 200_000_000), 32)
+        XCTAssertEqual(SegmentedTransfer.preferredSegmentCount(totalBytes: 512_000_000), 32)
     }
 
     func testPreferredSegmentCountHonorsHostMaxHint() {

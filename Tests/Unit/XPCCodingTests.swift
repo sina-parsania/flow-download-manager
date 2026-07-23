@@ -149,6 +149,19 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertEqual(decoded?.sanitizedPayload, #"{"state":"queued"}"#)
     }
 
+    func testClearEventsDTORoundTrip() throws {
+        let request = ClearEventsRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString
+        )
+        let decodedRequest = try roundTrip(request, as: ClearEventsRequest.self)
+        XCTAssertEqual(decodedRequest?.jobID, request.jobID)
+
+        let response = ClearEventsResponse(requestID: UUID().uuidString, deletedCount: 7)
+        let decodedResponse = try roundTrip(response, as: ClearEventsResponse.self)
+        XCTAssertEqual(decodedResponse?.deletedCount, 7)
+    }
+
     func testCookieAndBandwidthDTORoundTrip() throws {
         let cookie = CookieProfileSnapshot(id: UUID().uuidString, displayName: "Browser")
         let decodedCookie = try roundTrip(cookie, as: CookieProfileSnapshot.self)
@@ -197,6 +210,7 @@ final class XPCCodingTests: XCTestCase {
             id: UUID().uuidString,
             name: "a.bin",
             sourceHost: "cdn.example.test",
+            sourceURL: "https://cdn.example.test/a.bin",
             state: "queued",
             progressFraction: nil,
             bytesTransferred: 0,
@@ -207,15 +221,25 @@ final class XPCCodingTests: XCTestCase {
         )
         let decodedSnapshot = try roundTrip(snapshot, as: JobSnapshot.self)
         XCTAssertEqual(decodedSnapshot?.priority, 4)
+        XCTAssertEqual(decodedSnapshot?.sourceURL, "https://cdn.example.test/a.bin")
     }
 
     func testDeleteJobDTORoundTrip() throws {
         let request = DeleteJobRequest(
             requestID: UUID().uuidString,
-            jobID: UUID().uuidString
+            jobID: UUID().uuidString,
+            deleteFiles: true
         )
         let decodedRequest = try roundTrip(request, as: DeleteJobRequest.self)
         XCTAssertEqual(decodedRequest?.jobID, request.jobID)
+        XCTAssertEqual(decodedRequest?.deleteFiles, true)
+
+        let libraryOnly = DeleteJobRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString
+        )
+        let decodedLibraryOnly = try roundTrip(libraryOnly, as: DeleteJobRequest.self)
+        XCTAssertEqual(decodedLibraryOnly?.deleteFiles, false)
 
         let response = DeleteJobResponse(
             requestID: UUID().uuidString,
@@ -256,6 +280,22 @@ final class XPCCodingTests: XCTestCase {
         let decodedClear = try roundTrip(clearRequest, as: SetJobProjectRequest.self)
         XCTAssertNil(decodedClear?.projectID)
 
+        let categoryRequest = SetJobCategoryRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            categoryStableKey: "videos"
+        )
+        let decodedCategory = try roundTrip(categoryRequest, as: SetJobCategoryRequest.self)
+        XCTAssertEqual(decodedCategory?.categoryStableKey, "videos")
+
+        let categoryResponse = SetJobCategoryResponse(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            categoryStableKey: "audio"
+        )
+        let decodedCategoryResponse = try roundTrip(categoryResponse, as: SetJobCategoryResponse.self)
+        XCTAssertEqual(decodedCategoryResponse?.categoryStableKey, "audio")
+
         let getRequest = GetBoolSettingRequest(
             requestID: UUID().uuidString,
             key: "zipAutoExtractEnabled"
@@ -283,6 +323,7 @@ final class XPCCodingTests: XCTestCase {
             id: UUID().uuidString,
             name: "a.zip",
             sourceHost: "cdn.example.test",
+            sourceURL: "https://cdn.example.test/a.zip",
             state: "queued",
             progressFraction: 0.5,
             bytesTransferred: 10,
@@ -299,5 +340,14 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertEqual(decodedSnapshot?.projectID, snapshot.projectID)
         XCTAssertEqual(decodedSnapshot?.tagIDs, snapshot.tagIDs)
         XCTAssertEqual(decodedSnapshot?.tagNames, ["urgent"])
+        XCTAssertEqual(decodedSnapshot?.sourceURL, "https://cdn.example.test/a.zip")
+
+        let renameRequest = SetJobFilenameRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            filename: "renamed.zip"
+        )
+        let decodedRename = try roundTrip(renameRequest, as: SetJobFilenameRequest.self)
+        XCTAssertEqual(decodedRename?.filename, "renamed.zip")
     }
 }

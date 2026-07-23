@@ -101,6 +101,36 @@ public enum ClassificationEngine {
             )
         }
 
+        // Full URL / query often carries the real file type (CDN, signed links).
+        if let raw = urlPathExtension,
+           let ext = embeddedExtension(in: raw),
+           let key = category(forExtension: ext) {
+            return ClassificationResult(
+                stableKey: key,
+                confidence: .medium,
+                evidence: "url-token:\(ext)"
+            )
+        }
+
+        if let raw = urlPathExtension ?? filenameEvidence,
+           let hint = pathHintCategory(in: raw) {
+            return ClassificationResult(
+                stableKey: hint,
+                confidence: .medium,
+                evidence: "path-hint:\(hint)"
+            )
+        }
+
+        // Host / path tokens without a leading slash (CDN hosts, anime sites).
+        if let raw = urlPathExtension ?? filenameEvidence,
+           let hint = hostHintCategory(in: raw) {
+            return ClassificationResult(
+                stableKey: hint,
+                confidence: .low,
+                evidence: "host-hint:\(hint)"
+            )
+        }
+
         return ClassificationResult(
             stableKey: "other",
             confidence: .low,
@@ -115,20 +145,27 @@ public enum ClassificationEngine {
         urlPath: String?,
         rules: [CategoryRulesEngine.Rule]? = nil
     ) -> ClassificationResult {
-        classify(
-            filenameEvidence: filenameEvidence,
+        // Prefer scanning the full URL string when callers pass only path.
+        let pathOrURL = urlPath
+        let filename = filenameEvidence ?? URL(string: urlPath ?? "")?.lastPathComponent
+        return classify(
+            filenameEvidence: filename,
             mimeEvidence: mimeEvidence,
-            urlPathExtension: urlPath,
+            urlPathExtension: pathOrURL,
             rules: rules
         )
     }
 
     // MARK: - Extension → category
 
+    private static let videoExtensions: Set<String> = [
+        "mp4", "m4v", "mkv", "mov", "avi", "webm", "wmv", "flv", "mpg", "mpeg",
+        "ts", "m2ts", "3gp", "m3u8", "mpd", "f4v", "ogv"
+    ]
+
     private static func category(forExtension ext: String) -> String? {
+        if videoExtensions.contains(ext) { return "videos" }
         switch ext {
-        case "mp4", "m4v", "mkv", "mov", "avi", "webm", "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "3gp":
-            return "videos"
         case "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "aif", "oga":
             return "audio"
         case "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "tiff", "tif", "svg", "ico", "raw":
@@ -145,6 +182,48 @@ public enum ClassificationEngine {
         default:
             return nil
         }
+    }
+
+    /// Finds `.mp4` / `.mkv` etc. anywhere in a URL (path or query).
+    private static func embeddedExtension(in raw: String) -> String? {
+        let lower = raw.lowercased()
+        for ext in videoExtensions.sorted(by: { $0.count > $1.count }) {
+            if lower.range(of: ".\(ext)") != nil { return ext }
+        }
+        for ext in ["mp3", "m4a", "flac", "zip", "rar", "7z", "pdf", "jpg", "jpeg", "png", "torrent"] {
+            if lower.range(of: ".\(ext)") != nil { return ext }
+        }
+        return nil
+    }
+
+    private static func pathHintCategory(in raw: String) -> String? {
+        let lower = raw.lowercased()
+        let videoHints = [
+            "/video", "/videos/", "/anime", "/episode", "/episodes/", "/movie", "/movies/",
+            "/film", "/watch", "/stream", "/hls", "/dash", "/player", "/embed", "/media/",
+            "nirvanime", "gogoanime", "9anime", "nineanime", "anizone", "kickassanime",
+            "onepiece", "one-piece", "one_piece", "animelon", "crunchyroll", "hidive"
+        ]
+        if videoHints.contains(where: { lower.contains($0) }) {
+            return "videos"
+        }
+        let audioHints = ["/audio/", "/music/", "/podcast", "/mp3/"]
+        if audioHints.contains(where: { lower.contains($0) }) {
+            return "audio"
+        }
+        return nil
+    }
+
+    private static func hostHintCategory(in raw: String) -> String? {
+        let lower = raw.lowercased()
+        let videoHosts = [
+            "youtube.", "youtu.be", "vimeo.", "twitch.", "dailymotion.",
+            "streamable.", "nicovideo.", "bilibili.", "tiktok."
+        ]
+        if videoHosts.contains(where: { lower.contains($0) }) {
+            return "videos"
+        }
+        return nil
     }
 
     // MARK: - MIME → category (never torrents — extension only)
@@ -218,7 +297,13 @@ public enum ClassificationEngine {
     }
 
     private static func pathExtension(of filename: String) -> String? {
-        let name = (filename as NSString).lastPathComponent
+        var name = (filename as NSString).lastPathComponent
+        if let query = name.firstIndex(of: "?") {
+            name = String(name[..<query])
+        }
+        if let fragment = name.firstIndex(of: "#") {
+            name = String(name[..<fragment])
+        }
         let ext = (name as NSString).pathExtension
         return normalizedExtension(ext)
     }

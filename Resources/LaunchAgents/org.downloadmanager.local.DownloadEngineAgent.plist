@@ -10,8 +10,8 @@
   (Configuration/BundleIdentifiers.xcconfig); the release owner replaces the prefix
   and keeps this file in sync.
 
-  launchd launches the agent on demand when the app connects to the Mach service;
-  no RunAtLoad is set.
+  launchd launches the agent on demand when the app connects to the Mach service,
+  and also at load so the engine is ready without a manual Start.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -32,6 +32,16 @@
         <key>org.downloadmanager.local.DownloadEngineAgent</key>
         <true/>
     </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!--
+      No KeepAlive here: when BundleProgram spawn fails with EX_CONFIG (ad-hoc /
+      DerivedData), KeepAlive only thrash-respawns and holds the Mach endpoint
+      dead. The app heals by unregistering SMAppService and installing the
+      absolute-path LaunchAgent (which does use KeepAlive).
+    -->
 
     <key>ProcessType</key>
     <string>Adaptive</string>

@@ -56,6 +56,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var proxyCache: [String: UpsertProxyProfileResponse] = [:]
     private var cookieCache: [String: UpsertCookieProfileResponse] = [:]
     private var listProfilesCache: [String: ListProfilesResponse] = [:]
+    private var getDefaultDestinationCache: [String: GetDefaultDestinationResponse] = [:]
+    private var setDefaultDestinationCache: [String: SetDefaultDestinationResponse] = [:]
     private var bandwidthUpsertCache: [String: UpsertBandwidthPolicyResponse] = [:]
     private var bandwidthGetCache: [String: GetBandwidthPolicyResponse] = [:]
     private var listOrganizationCache: [String: ListOrganizationResponse] = [:]
@@ -63,6 +65,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var upsertTagCache: [String: UpsertTagResponse] = [:]
     private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
     private var setJobProjectCache: [String: SetJobProjectResponse] = [:]
+    private var setJobCategoryCache: [String: SetJobCategoryResponse] = [:]
+    private var setJobFilenameCache: [String: SetJobFilenameResponse] = [:]
     private var getBoolSettingCache: [String: GetBoolSettingResponse] = [:]
     private var setBoolSettingCache: [String: SetBoolSettingResponse] = [:]
     private var setJobPriorityCache: [String: SetJobPriorityResponse] = [:]
@@ -70,6 +74,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var listCategoryRulesCache: [String: ListCategoryRulesResponse] = [:]
     private var upsertCategoryRuleCache: [String: UpsertCategoryRuleResponse] = [:]
     private var listEventsCache: [String: ListEventsResponse] = [:]
+    private var clearEventsCache: [String: ClearEventsResponse] = [:]
     private var snapshotSequence: Int64 = 0
 
     init(services: EngineServices) {
@@ -94,10 +99,12 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             capabilities: [
                 "health", "enqueueBatch", "listJobs", "controlJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
-                "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
+                "listProfiles", "getDefaultDestination", "setDefaultDestination",
+                "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags", "setJobProject",
+                "setJobCategory", "setJobFilename",
                 "getBoolSetting", "setBoolSetting",
-                "listCategoryRules", "upsertCategoryRule", "listEvents", "setJobPriority",
+                "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents", "setJobPriority",
                 "deleteJob"
             ]
         ), nil)
@@ -233,19 +240,35 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             let rows = try JobRepository.fetchJobRows(database: database)
             let progressMap = services.progressLedger?.all() ?? [:]
             let jobs = rows.map { job, resource, category, projectName, tagNames, tagIDs -> JobSnapshot in
-                let host = URL(string: resource.canonicalURL)?.host ?? ""
-                let name = resource.filenameEvidence
-                    ?? URL(string: resource.canonicalURL)?.lastPathComponent
-                    ?? resource.canonicalURL
+                let downloadURL = resource.finalURL ?? resource.canonicalURL
+                let host = URL(string: downloadURL)?.host
+                    ?? URL(string: resource.canonicalURL)?.host
+                    ?? ""
+                let name = FilenameSanitizer.preferredFilename(
+                    contentDisposition: nil,
+                    urlString: downloadURL,
+                    existingEvidence: resource.filenameEvidence
+                )
                 let live = progressMap[job.id]
                 let total = live?.totalBytes ?? resource.expectedSize
                 let transferred = live?.bytesTransferred ?? 0
-                let speed = live?.speedBytesPerSecond ?? 0
-                let fraction = live?.progressFraction
+                let isLiveTransfer = job.state == "downloading"
+                    || job.state == "connecting"
+                    || job.state == "verifying"
+                    || job.state == "merging"
+                    || job.state == "postProcessing"
+                // Stale ledger rates must not show on paused/queued/failed rows.
+                let speed = isLiveTransfer ? (live?.speedBytesPerSecond ?? 0) : 0
+                let fraction: Double? = if job.state == "completed" {
+                    live?.progressFraction ?? 1.0
+                } else {
+                    live?.progressFraction
+                }
                 return JobSnapshot(
                     id: job.id,
                     name: name,
                     sourceHost: host,
+                    sourceURL: downloadURL,
                     state: job.state,
                     progressFraction: fraction,
                     bytesTransferred: transferred,
@@ -335,6 +358,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                         }
                     }
                     try? FileManager.default.removeItem(at: partial)
+                    try? FileManager.default.removeItem(
+                        at: URL(fileURLWithPath: partial.path + ".segmap")
+                    )
                 }
                 try JobRepository.clearResourceIdentitySize(
                     database: database,
@@ -442,22 +468,25 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         }
 
         do {
-            // Optional partial cleanup for failed/cancelled only — never delete completed files.
-            let transferDetails = try? JobRepository.loadJobForTransfer(
-                database: database,
-                id: request.jobID
-            )
-            if let details = transferDetails {
-                if details.state == "failed" || details.state == "cancelled" {
-                    let filename = FilenameSanitizer.sanitize(details.suggestedFilename)
-                    let partial = details.destinationDirectory
-                        .appendingPathComponent("\(filename).partial")
-                    let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
-                    defer {
-                        if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
-                    }
-                    try? FileManager.default.removeItem(at: partial)
+            if request.deleteFiles,
+               let details = try? JobRepository.loadJobForTransfer(
+                   database: database,
+                   id: request.jobID
+               ) {
+                let filename = FilenameSanitizer.sanitize(details.suggestedFilename)
+                let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
+                defer {
+                    if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
                 }
+                let partial = details.destinationDirectory
+                    .appendingPathComponent("\(filename).partial")
+                let final = details.destinationDirectory
+                    .appendingPathComponent(filename)
+                try? FileManager.default.removeItem(at: partial)
+                try? FileManager.default.removeItem(
+                    at: URL(fileURLWithPath: partial.path + ".segmap")
+                )
+                try? FileManager.default.removeItem(at: final)
             }
 
             let previousState = try JobRepository.deleteTerminalJob(
@@ -648,6 +677,105 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list profiles failed"))
+        }
+    }
+
+    func getDefaultDestination(
+        requestID: String,
+        reply: @escaping @Sendable (GetDefaultDestinationResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = getDefaultDestinationCache[requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let snap = try DestinationRepository.fetchDefault(database: database)
+            let response = GetDefaultDestinationResponse(
+                requestID: requestID,
+                destination: DefaultDestinationSnapshot(
+                    pathDisplay: snap.pathDisplay,
+                    folderName: snap.folderName,
+                    isDefaultDownloads: snap.isDefaultDownloads
+                )
+            )
+            lock.lock()
+            getDefaultDestinationCache[requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "get destination failed"))
+        }
+    }
+
+    func setDefaultDestination(
+        _ request: SetDefaultDestinationRequest,
+        reply: @escaping @Sendable (SetDefaultDestinationResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = setDefaultDestinationCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let snap: DestinationRepository.Snapshot = if let bookmark = request.bookmarkData {
+                try DestinationRepository.setDefaultBookmark(
+                    database: database,
+                    bookmarkData: bookmark,
+                    displayName: request.displayName,
+                    pathHint: request.pathDisplay
+                )
+            } else {
+                try DestinationRepository.resetDefault(database: database)
+            }
+            let response = SetDefaultDestinationResponse(
+                requestID: request.requestID,
+                destination: DefaultDestinationSnapshot(
+                    pathDisplay: snap.pathDisplay,
+                    folderName: snap.folderName,
+                    isDefaultDownloads: snap.isDefaultDownloads
+                )
+            )
+            lock.lock()
+            setDefaultDestinationCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "set destination failed"))
         }
     }
 
@@ -915,14 +1043,14 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         }
 
         do {
-            try OrganizationRepository.upsertTag(
+            let resolvedTagID = try OrganizationRepository.upsertTag(
                 database: database,
                 id: request.tagID,
                 name: request.name
             )
             let response = UpsertTagResponse(
                 requestID: request.requestID,
-                tagID: request.tagID
+                tagID: resolvedTagID
             )
             lock.lock()
             upsertTagCache[request.requestID] = response
@@ -1020,6 +1148,120 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "set job project failed"))
+        }
+    }
+
+    func setJobCategory(
+        _ request: SetJobCategoryRequest,
+        reply: @escaping @Sendable (SetJobCategoryResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = setJobCategoryCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try JobRepository.setJobCategory(
+                database: database,
+                jobID: request.jobID,
+                categoryStableKey: request.categoryStableKey
+            )
+            let response = SetJobCategoryResponse(
+                requestID: request.requestID,
+                jobID: request.jobID,
+                categoryStableKey: request.categoryStableKey
+            )
+            lock.lock()
+            setJobCategoryCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch let error as JobRepositoryError {
+            switch error {
+            case .unknownCategory:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "unknown category"))
+            case .jobNotFound:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not found"))
+            default:
+                reply(nil, XPCErrorCode.internalError.error(detail: "set job category failed"))
+            }
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "set job category failed"))
+        }
+    }
+
+    func setJobFilename(
+        _ request: SetJobFilenameRequest,
+        reply: @escaping @Sendable (SetJobFilenameResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = setJobFilenameCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let filename = try JobRepository.setJobFilename(
+                database: database,
+                jobID: request.jobID,
+                filename: request.filename
+            )
+            let response = SetJobFilenameResponse(
+                requestID: request.requestID,
+                jobID: request.jobID,
+                filename: filename
+            )
+            lock.lock()
+            setJobFilenameCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch let error as JobRepositoryError {
+            switch error {
+            case .renameWhileActive:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "pause the download before renaming"))
+            case .renameTargetExists:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "a file with that name already exists"))
+            case .invalidFilename:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid filename"))
+            case .jobNotFound:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not found"))
+            default:
+                reply(nil, XPCErrorCode.internalError.error(detail: "set job filename failed"))
+            }
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "set job filename failed"))
         }
     }
 
@@ -1250,6 +1492,48 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list events failed"))
+        }
+    }
+
+    func clearEvents(
+        _ request: ClearEventsRequest,
+        reply: @escaping @Sendable (ClearEventsResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        guard UUID(uuidString: request.jobID) != nil else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed jobID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = clearEventsCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let deleted = try JobRepository.clearEvents(database: database, jobID: request.jobID)
+            let response = ClearEventsResponse(requestID: request.requestID, deletedCount: deleted)
+            lock.lock()
+            clearEventsCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "clear events failed"))
         }
     }
 

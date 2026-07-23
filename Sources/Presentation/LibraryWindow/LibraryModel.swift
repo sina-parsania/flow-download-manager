@@ -144,6 +144,33 @@ public final class LibraryModel: ObservableObject {
         }
     }
 
+    public func removeSelectedTerminal() async {
+        guard let row = selectedRow, DeleteJobGuard.allowsDelete(row.state) else { return }
+        do {
+            _ = try await engineClient.deleteJob(jobID: row.id.uuidString.lowercased())
+            if selectedID == row.id { selectedID = nil }
+            await refreshFromEngine()
+        } catch {
+            lastErrorMessage = "Could not remove the selected download."
+        }
+    }
+
+    public func clearFailed() async {
+        let targets = rows.filter { DeleteJobGuard.allowsClearFailed($0.state) }
+        let removedIDs = Set(targets.map(\.id))
+        for row in targets {
+            do {
+                _ = try await engineClient.deleteJob(jobID: row.id.uuidString.lowercased())
+            } catch {
+                lastErrorMessage = "Could not clear all failed downloads."
+            }
+        }
+        if let selectedID, removedIDs.contains(selectedID) {
+            self.selectedID = nil
+        }
+        await refreshFromEngine()
+    }
+
     public func startPolling() {
         guard refreshTask == nil else { return }
         refreshTask = Task { [weak self] in

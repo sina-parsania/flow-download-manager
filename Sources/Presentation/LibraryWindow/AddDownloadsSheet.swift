@@ -30,6 +30,8 @@ struct AddDownloadsSheet: View {
     @State private var headersError: String?
     @State private var useStartAt = false
     @State private var startAt = Date().addingTimeInterval(3600)
+    @State private var confirmationPhase: ConfirmationGate.Phase = .none
+    @State private var confirmationCounts: [(stableKey: String, count: Int)] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -53,6 +55,8 @@ struct AddDownloadsSheet: View {
                 .accessibilityLabel("Links to add")
                 .onChange(of: input) { _, newValue in
                     extraction = URLTextExtractor.extract(from: newValue)
+                    confirmationPhase = .none
+                    confirmationCounts = []
                 }
                 .onDrop(of: [.fileURL, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
                     handleDrop(providers)
@@ -112,6 +116,7 @@ struct AddDownloadsSheet: View {
                     }
                 }
                 Toggle("Start at", isOn: $useStartAt)
+                    .accessibilityLabel("Start at")
                 if useStartAt {
                     DatePicker(
                         "Start at",
@@ -121,7 +126,7 @@ struct AddDownloadsSheet: View {
                     .labelsHidden()
                 }
             }
-            .disabled(isEnqueueing)
+            .disabled(isEnqueueing || confirmationPhase == .needsConfirmation)
 
             if let extraction {
                 HStack(spacing: 12) {
@@ -131,6 +136,34 @@ struct AddDownloadsSheet: View {
                     stat("Invalid", extraction.invalidCount)
                 }
                 .font(.callout)
+            }
+
+            if confirmationPhase == .needsConfirmation, !confirmationCounts.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Confirm classification")
+                        .font(.headline)
+                    Text(
+                        "Some links have low confidence or are categorized as Other. "
+                            + "Review the counts, then queue anyway."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    ForEach(confirmationCounts, id: \.stableKey) { entry in
+                        HStack {
+                            Text(entry.stableKey)
+                            Spacer()
+                            Text("\(entry.count)")
+                                .font(.body.monospacedDigit())
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(entry.stableKey): \(entry.count)")
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
             if let statusMessage {
@@ -143,11 +176,27 @@ struct AddDownloadsSheet: View {
                 Spacer()
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(isEnqueueing ? "Queuing…" : "Queue Selected") {
-                    Task { await enqueue() }
+                if confirmationPhase == .needsConfirmation {
+                    Button("Back") {
+                        confirmationPhase = .none
+                        confirmationCounts = []
+                    }
+                    .disabled(isEnqueueing)
+                    Button(isEnqueueing ? "Queuing…" : "Queue anyway") {
+                        confirmationPhase = .confirmed
+                        Task { await enqueue() }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isEnqueueing || (extraction?.validCount ?? 0) == 0)
+                    .accessibilityLabel("Queue anyway")
+                } else {
+                    Button(isEnqueueing ? "Queuing…" : "Queue Selected") {
+                        Task { await enqueue() }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isEnqueueing || (extraction?.validCount ?? 0) == 0)
+                    .accessibilityLabel("Queue Selected")
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(isEnqueueing || (extraction?.validCount ?? 0) == 0)
             }
         }
         .padding(24)
@@ -279,13 +328,11 @@ struct AddDownloadsSheet: View {
     @MainActor
     private func enqueue() async {
         guard let extraction else { return }
-        isEnqueueing = true
-        statusMessage = nil
-        defer { isEnqueueing = false }
 
         let rules = classificationRules
-        let items: [(url: String, categoryStableKey: String)] = extraction.items.compactMap { item in
-            guard item.status == .valid else { return nil }
+        var classifiedItems: [(url: String, categoryStableKey: String)] = []
+        var results: [ClassificationEngine.ClassificationResult] = []
+        for item in extraction.items where item.status == .valid {
             let raw = item.raw
             let path = URL(string: raw)?.path
             let classified = ClassificationEngine.classify(
@@ -294,12 +341,24 @@ struct AddDownloadsSheet: View {
                 urlPath: path,
                 rules: rules
             )
-            return (raw, classified.stableKey)
+            classifiedItems.append((raw, classified.stableKey))
+            results.append(classified)
         }
-        guard !items.isEmpty else {
+        guard !classifiedItems.isEmpty else {
             statusMessage = "No valid links to queue."
             return
         }
+
+        if confirmationPhase != .confirmed, ConfirmationGate.shouldConfirm(results: results) {
+            confirmationCounts = ConfirmationGate.categoryCounts(results: results)
+            confirmationPhase = .needsConfirmation
+            statusMessage = nil
+            return
+        }
+
+        isEnqueueing = true
+        statusMessage = nil
+        defer { isEnqueueing = false }
 
         var scheduleISO: String?
         if useStartAt {
@@ -325,7 +384,7 @@ struct AddDownloadsSheet: View {
             let response = try await library.engineClient.enqueueBatch(
                 source: "paste",
                 displayName: nil,
-                items: items,
+                items: classifiedItems,
                 credentialProfileID: selectedCredentialID.isEmpty ? nil : selectedCredentialID,
                 proxyProfileID: selectedProxyID.isEmpty ? nil : selectedProxyID,
                 cookieProfileID: selectedCookieID.isEmpty ? nil : selectedCookieID,
@@ -338,6 +397,7 @@ struct AddDownloadsSheet: View {
             dismiss()
         } catch {
             statusMessage = "Could not queue downloads. Is the engine running?"
+            confirmationPhase = .none
         }
     }
 }

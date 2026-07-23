@@ -18,6 +18,7 @@ public struct SettingsView: View {
                     "Monitor clipboard for links",
                     isOn: $clipboardMonitoringEnabled
                 )
+                .accessibilityLabel("Monitor clipboard for links")
                 Text(
                     "When enabled, new pasteboard text with valid links opens Add Downloads "
                         + "prefilled. Downloads are never queued automatically."
@@ -110,6 +111,7 @@ public struct SettingsView: View {
                     "Only between 00:00 and 08:00 daily",
                     isOn: $model.bandwidthNightWindowOnly
                 )
+                .accessibilityLabel("Only between 00:00 and 08:00 daily")
                 Text(
                     "When the night window is on, new downloads start only in that local window "
                         + "and use the max rate. Outside the window, queued jobs wait."

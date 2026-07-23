@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Domain
 import Foundation
 import GRDB
 
@@ -516,6 +517,46 @@ public enum JobRepository {
             return job.revision
         }
     }
+
+    /// Deletes a terminal job row (and owned resource). Never touches destination
+    /// files — callers may optionally remove `.partial` for failed/cancelled.
+    /// Returns the previous state for event/logging.
+    @discardableResult
+    public static func deleteTerminalJob(
+        database: EngineDatabase,
+        id: String
+    ) throws -> String {
+        try database.pool.write { db in
+            guard let job = try JobRecord.fetchOne(db, key: id) else {
+                throw JobRepositoryError.jobNotFound(id)
+            }
+            guard let state = JobState(rawValue: job.state),
+                  JobState.terminalStates.contains(state)
+            else {
+                throw JobRepositoryError.notTerminal(id, state: job.state)
+            }
+            let previousState = job.state
+            let resourceID = job.resourceID
+            let scheduleID = job.scheduleID
+            try job.delete(db)
+            if try JobRecord.filter(Column("resourceID") == resourceID).fetchCount(db) == 0 {
+                try ResourceRecord.deleteOne(db, key: resourceID)
+            }
+            if let scheduleID {
+                let scheduleInUse = try JobRecord.filter(Column("scheduleID") == scheduleID).fetchCount(db) > 0
+                if !scheduleInUse {
+                    try ScheduleRecord.deleteOne(db, key: scheduleID)
+                }
+            }
+            try EventRecord(
+                jobID: nil,
+                occurredAt: Date(),
+                type: "library.jobDeleted",
+                sanitizedPayload: "{\"previousState\":\"\(previousState)\"}"
+            ).insert(db)
+            return previousState
+        }
+    }
 }
 
 public enum JobRepositoryError: Error, Equatable, Sendable {
@@ -523,4 +564,5 @@ public enum JobRepositoryError: Error, Equatable, Sendable {
     case unknownProject(String)
     case jobNotFound(String)
     case revisionConflict(expected: Int, actual: Int)
+    case notTerminal(String, state: String)
 }

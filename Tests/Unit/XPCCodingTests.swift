@@ -208,4 +208,21 @@ final class XPCCodingTests: XCTestCase {
         let decodedSnapshot = try roundTrip(snapshot, as: JobSnapshot.self)
         XCTAssertEqual(decodedSnapshot?.priority, 4)
     }
+
+    func testDeleteJobDTORoundTrip() throws {
+        let request = DeleteJobRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString
+        )
+        let decodedRequest = try roundTrip(request, as: DeleteJobRequest.self)
+        XCTAssertEqual(decodedRequest?.jobID, request.jobID)
+
+        let response = DeleteJobResponse(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            previousState: "failed"
+        )
+        let decodedResponse = try roundTrip(response, as: DeleteJobResponse.self)
+        XCTAssertEqual(decodedResponse?.previousState, "failed")
+    }
 }

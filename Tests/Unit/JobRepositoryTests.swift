@@ -341,6 +341,56 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertEqual(byID[result.jobIDs[1]]?.queuePosition, 50)
     }
 
+    func testDeleteTerminalJobRejectsNonTerminalAndRemovesTerminalRow() throws {
+        let (database, root, downloads) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [
+                (url: "https://example.test/keep.bin", categoryStableKey: "other"),
+                (url: "https://example.test/done.bin", categoryStableKey: "other"),
+                (url: "https://example.test/fail.bin", categoryStableKey: "other")
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try JobRepository.deleteTerminalJob(database: database, id: result.jobIDs[0])
+        ) { error in
+            guard case JobRepositoryError.notTerminal = error else {
+                return XCTFail("expected notTerminal, got \(error)")
+            }
+        }
+
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: result.jobIDs[1],
+            state: "completed",
+            terminalReason: nil,
+            expectedRevision: nil
+        )
+        let completedFile = downloads.appendingPathComponent("done.bin")
+        try Data([0x01, 0x02]).write(to: completedFile)
+
+        let previous = try JobRepository.deleteTerminalJob(database: database, id: result.jobIDs[1])
+        XCTAssertEqual(previous, "completed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: completedFile.path))
+
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: result.jobIDs[2],
+            state: "failed",
+            terminalReason: "notFound",
+            expectedRevision: nil
+        )
+        _ = try JobRepository.deleteTerminalJob(database: database, id: result.jobIDs[2])
+
+        let remaining = try JobRepository.fetchJobRows(database: database)
+        XCTAssertEqual(remaining.map(\.job.id), [result.jobIDs[0]])
+    }
+
     func testRequeueInterruptedTransfersIgnoresQueuedAndTerminal() throws {
         let (database, root, _) = try openTempDatabase()
         defer { try? FileManager.default.removeItem(at: root) }

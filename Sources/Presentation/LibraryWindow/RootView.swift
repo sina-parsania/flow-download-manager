@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Application
 import SwiftUI
 import XPCContracts
 
@@ -108,6 +109,7 @@ public struct RootView: View {
             } label: {
                 Label("Pause All", systemImage: "pause.circle")
             }
+            .accessibilityLabel("Pause All")
             .help("Pause all active and queued downloads")
 
             Button {
@@ -115,7 +117,26 @@ public struct RootView: View {
             } label: {
                 Label("Resume All", systemImage: "play.circle")
             }
+            .accessibilityLabel("Resume All")
             .help("Resume all paused downloads")
+
+            Button {
+                Task { await model.removeSelectedTerminal() }
+            } label: {
+                Label("Remove", systemImage: "trash")
+            }
+            .disabled(!canRemove)
+            .accessibilityLabel("Remove selected completed or failed download")
+            .help("Remove selected completed, cancelled, or failed download from the library")
+
+            Button {
+                Task { await model.clearFailed() }
+            } label: {
+                Label("Clear Failed", systemImage: "trash.slash")
+            }
+            .disabled(!hasFailed)
+            .accessibilityLabel("Clear Failed")
+            .help("Remove all failed downloads from the library")
 
             Button {
                 model.inspectorVisible.toggle()
@@ -139,6 +160,15 @@ public struct RootView: View {
     private var canRetry: Bool {
         guard let state = model.selectedRow?.state else { return false }
         return state == .failed || state == .cancelled
+    }
+
+    private var canRemove: Bool {
+        guard let state = model.selectedRow?.state else { return false }
+        return DeleteJobGuard.allowsDelete(state)
+    }
+
+    private var hasFailed: Bool {
+        model.rows.contains { DeleteJobGuard.allowsClearFailed($0.state) }
     }
 }
 

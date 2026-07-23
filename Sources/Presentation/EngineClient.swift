@@ -30,7 +30,7 @@ public final class EngineClient: ObservableObject {
             clientBuild: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
             clientRole: .app,
             capabilities: [
-                "enqueueBatch", "listJobs", "controlJob", "setJobPriority",
+                "enqueueBatch", "listJobs", "controlJob", "setJobPriority", "deleteJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
                 "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
@@ -191,6 +191,31 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.listProfiles(requestID: requestID) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func deleteJob(jobID: String) async throws -> DeleteJobResponse {
+        try await connect()
+        let request = DeleteJobRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.deleteJob(request) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

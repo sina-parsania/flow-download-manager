@@ -55,6 +55,12 @@ public protocol EngineControlProtocol {
         reply: @escaping @Sendable (SetJobPriorityResponse?, NSError?) -> Void
     )
 
+    /// Remove a terminal job from the library (DB row only; completed files kept).
+    func deleteJob(
+        _ request: DeleteJobRequest,
+        reply: @escaping @Sendable (DeleteJobResponse?, NSError?) -> Void
+    )
+
     /// Create or replace a credential profile (password → Keychain only).
     func upsertCredentialProfile(
         _ request: UpsertCredentialProfileRequest,

@@ -66,6 +66,17 @@ public enum EngineControlInterface {
         )
 
         interface.setClasses(
+            allowedClasses([DeleteJobRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.deleteJob(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([DeleteJobResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.deleteJob(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
             allowedClasses([
                 UpsertCredentialProfileRequest.self, NSString.self, NSData.self
             ]),

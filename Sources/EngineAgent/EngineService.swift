@@ -63,6 +63,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var upsertTagCache: [String: UpsertTagResponse] = [:]
     private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
     private var setJobPriorityCache: [String: SetJobPriorityResponse] = [:]
+    private var deleteJobCache: [String: DeleteJobResponse] = [:]
     private var listCategoryRulesCache: [String: ListCategoryRulesResponse] = [:]
     private var upsertCategoryRuleCache: [String: UpsertCategoryRuleResponse] = [:]
     private var listEventsCache: [String: ListEventsResponse] = [:]
@@ -92,7 +93,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
                 "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags",
-                "listCategoryRules", "upsertCategoryRule", "listEvents", "setJobPriority"
+                "listCategoryRules", "upsertCategoryRule", "listEvents", "setJobPriority",
+                "deleteJob"
             ]
         ), nil)
     }
@@ -378,6 +380,78 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "set job priority failed"))
+        }
+    }
+
+    func deleteJob(
+        _ request: DeleteJobRequest,
+        reply: @escaping @Sendable (DeleteJobResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = deleteJobCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            // Optional partial cleanup for failed/cancelled only — never delete completed files.
+            let transferDetails = try? JobRepository.loadJobForTransfer(
+                database: database,
+                id: request.jobID
+            )
+            if let details = transferDetails {
+                if details.state == "failed" || details.state == "cancelled" {
+                    let filename = FilenameSanitizer.sanitize(details.suggestedFilename)
+                    let partial = details.destinationDirectory
+                        .appendingPathComponent("\(filename).partial")
+                    let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
+                    defer {
+                        if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
+                    }
+                    try? FileManager.default.removeItem(at: partial)
+                }
+            }
+
+            let previousState = try JobRepository.deleteTerminalJob(
+                database: database,
+                id: request.jobID
+            )
+            let response = DeleteJobResponse(
+                requestID: request.requestID,
+                jobID: request.jobID,
+                previousState: previousState
+            )
+            lock.lock()
+            deleteJobCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch let error as JobRepositoryError {
+            switch error {
+            case .notTerminal:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not terminal"))
+            case .jobNotFound:
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not found"))
+            default:
+                reply(nil, XPCErrorCode.internalError.error(detail: "delete job failed"))
+            }
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "delete job failed"))
         }
     }
 

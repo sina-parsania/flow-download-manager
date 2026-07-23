@@ -511,3 +511,70 @@ public final class SetJobPriorityResponse: NSObject, NSSecureCoding, @unchecked 
         coder.encode(revision, forKey: "revision")
     }
 }
+
+@objc(DMDeleteJobRequest)
+public final class DeleteJobRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+
+    public init(requestID: String, jobID: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        guard let requestID, let jobID,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+    }
+}
+
+@objc(DMDeleteJobResponse)
+public final class DeleteJobResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let previousState: String
+
+    public init(requestID: String, jobID: String, previousState: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.previousState = previousState
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        let previousState = coder.decodeObject(of: NSString.self, forKey: "previousState")
+        guard let requestID, let jobID, let previousState,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        self.previousState = previousState as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(previousState as NSString, forKey: "previousState")
+    }
+}

@@ -75,7 +75,9 @@ struct InspectorView: View {
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button("Priority Down") { onPriorityBump(-1) }
+                                .accessibilityLabel("Priority Down")
                             Button("Priority Up") { onPriorityBump(1) }
+                                .accessibilityLabel("Priority Up")
                         }
                         if row.state == .completed {
                             Button("Show in Finder") {

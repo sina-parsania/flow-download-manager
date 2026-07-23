@@ -121,6 +121,24 @@ public protocol EngineControlProtocol {
         reply: @escaping @Sendable (SetJobTagsResponse?, NSError?) -> Void
     )
 
+    /// Assign or clear the project for a job.
+    func setJobProject(
+        _ request: SetJobProjectRequest,
+        reply: @escaping @Sendable (SetJobProjectResponse?, NSError?) -> Void
+    )
+
+    /// Read an allowlisted agent boolean preference (e.g. `zipAutoExtractEnabled`).
+    func getBoolSetting(
+        _ request: GetBoolSettingRequest,
+        reply: @escaping @Sendable (GetBoolSettingResponse?, NSError?) -> Void
+    )
+
+    /// Write an allowlisted agent boolean preference.
+    func setBoolSetting(
+        _ request: SetBoolSettingRequest,
+        reply: @escaping @Sendable (SetBoolSettingResponse?, NSError?) -> Void
+    )
+
     /// List user category classification rules (FR-CAT).
     func listCategoryRules(
         requestID: String,

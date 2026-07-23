@@ -208,13 +208,14 @@ public enum JobRepository {
         resource: ResourceRecord,
         category: CategoryRecord,
         projectName: String?,
-        tagNames: [String]
+        tagNames: [String],
+        tagIDs: [String]
     )] {
         try database.pool.read { db in
             let jobs = try JobRecord
                 .order(Column("queuePosition").asc, Column("createdAt").asc)
                 .fetchAll(db)
-            var rows: [(JobRecord, ResourceRecord, CategoryRecord, String?, [String])] = []
+            var rows: [(JobRecord, ResourceRecord, CategoryRecord, String?, [String], [String])] = []
             rows.reserveCapacity(jobs.count)
             for job in jobs {
                 guard let resource = try ResourceRecord.fetchOne(db, key: job.resourceID),
@@ -227,17 +228,19 @@ public enum JobRepository {
                 } else {
                     nil
                 }
-                let tagNames = try String.fetchAll(
+                let tagRows = try Row.fetchAll(
                     db,
                     sql: """
-                    SELECT t.name FROM tags t
+                    SELECT t.id, t.name FROM tags t
                     INNER JOIN job_tags jt ON jt.tagID = t.id
                     WHERE jt.jobID = ?
                     ORDER BY t.name ASC
                     """,
                     arguments: [job.id]
                 )
-                rows.append((job, resource, category, projectName, tagNames))
+                let tagIDs = tagRows.map { $0["id"] as String }
+                let tagNames = tagRows.map { $0["name"] as String }
+                rows.append((job, resource, category, projectName, tagNames, tagIDs))
             }
             return rows
         }

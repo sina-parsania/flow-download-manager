@@ -297,7 +297,7 @@ public actor TransferOrchestrator {
             if Self.shouldExtractZip(
                 filename: filename,
                 mimeEvidence: outcome.identity.contentType
-            ) {
+            ), AgentBoolSettings.bool(forKey: AgentBoolSettings.zipAutoExtractEnabledKey) {
                 do {
                     let basename = final.deletingPathExtension().lastPathComponent
                     let extractDir = final.deletingLastPathComponent()

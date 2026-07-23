@@ -9,8 +9,15 @@ struct InspectorView: View {
     let engineClient: EngineClient
     let onCommand: (JobCommandKind) -> Void
     let onPriorityBump: (Int) -> Void
+    let onOrganizationChanged: () -> Void
     @State private var events: [EventSnapshot] = []
     @State private var eventsError: String?
+    @State private var projects: [ProjectSnapshot] = []
+    @State private var tags: [TagSnapshot] = []
+    @State private var selectedProjectID = ""
+    @State private var selectedTagIDs: Set<String> = []
+    @State private var organizationError: String?
+    @State private var isSavingOrganization = false
 
     var body: some View {
         Group {
@@ -21,8 +28,46 @@ struct InspectorView: View {
                         labeled("Source", row.sourceHost)
                         labeled("State", row.state.rawValue)
                         labeled("Category", row.categoryKey)
-                        if let project = row.projectName { labeled("Project", project) }
-                        if !row.tagNames.isEmpty { labeled("Tags", row.tagNames.joined(separator: ", ")) }
+                    }
+                    Section("Organization") {
+                        if let organizationError {
+                            Text(organizationError)
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                        Picker("Project", selection: $selectedProjectID) {
+                            Text("None").tag("")
+                            ForEach(projects, id: \.id) { project in
+                                Text(project.name).tag(project.id)
+                            }
+                        }
+                        .disabled(isSavingOrganization || projects.isEmpty && selectedProjectID.isEmpty)
+                        .onChange(of: selectedProjectID) { _, newValue in
+                            Task { await saveProject(jobID: row.id, projectID: newValue) }
+                        }
+                        .accessibilityLabel("Project")
+
+                        if tags.isEmpty {
+                            Text("No tags yet. Create tags in Settings.")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        } else {
+                            ForEach(tags, id: \.id) { tag in
+                                Toggle(tag.name, isOn: Binding(
+                                    get: { selectedTagIDs.contains(tag.id) },
+                                    set: { enabled in
+                                        if enabled {
+                                            selectedTagIDs.insert(tag.id)
+                                        } else {
+                                            selectedTagIDs.remove(tag.id)
+                                        }
+                                        Task { await saveTags(jobID: row.id) }
+                                    }
+                                ))
+                                .disabled(isSavingOrganization)
+                                .accessibilityLabel("Tag \(tag.name)")
+                            }
+                        }
                     }
                     Section("Transfer") {
                         labeled("Progress", JobRowFormatting.progressText(
@@ -103,7 +148,15 @@ struct InspectorView: View {
                 }
                 .formStyle(.grouped)
                 .task(id: row.id) {
+                    syncOrganizationSelection(from: row)
+                    await loadOrganization()
                     await loadEvents(for: row.id)
+                }
+                .onChange(of: row.projectID) { _, _ in
+                    syncOrganizationSelection(from: row)
+                }
+                .onChange(of: row.tagIDs) { _, _ in
+                    syncOrganizationSelection(from: row)
                 }
             } else {
                 ContentUnavailableView(
@@ -124,6 +177,67 @@ struct InspectorView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label): \(value)")
+    }
+
+    private func syncOrganizationSelection(from row: JobRowModel) {
+        selectedProjectID = row.projectID ?? ""
+        selectedTagIDs = Set(row.tagIDs)
+    }
+
+    @MainActor
+    private func loadOrganization() async {
+        do {
+            let organization = try await engineClient.listOrganization()
+            projects = organization.projects
+            tags = organization.tags
+            organizationError = nil
+        } catch {
+            organizationError = "Unable to load projects and tags."
+        }
+    }
+
+    @MainActor
+    private func saveProject(jobID: UUID, projectID: String) async {
+        guard !isSavingOrganization else { return }
+        let normalized = projectID.isEmpty ? nil : projectID
+        if normalized == (row?.projectID) { return }
+        isSavingOrganization = true
+        defer { isSavingOrganization = false }
+        do {
+            _ = try await engineClient.setJobProject(
+                jobID: jobID.uuidString.lowercased(),
+                projectID: normalized
+            )
+            organizationError = nil
+            onOrganizationChanged()
+        } catch {
+            organizationError = "Unable to update project."
+            if let row {
+                selectedProjectID = row.projectID ?? ""
+            }
+        }
+    }
+
+    @MainActor
+    private func saveTags(jobID: UUID) async {
+        guard !isSavingOrganization else { return }
+        let next = Array(selectedTagIDs).sorted()
+        if next == (row?.tagIDs.sorted() ?? []) { return }
+        isSavingOrganization = true
+        defer { isSavingOrganization = false }
+        do {
+            _ = try await engineClient.setJobTags(
+                jobID: jobID.uuidString.lowercased(),
+                tagIDs: next
+            )
+            organizationError = nil
+            onOrganizationChanged()
+        } catch {
+            organizationError = "Unable to update tags."
+            if let row {
+                selectedTagIDs = Set(row.tagIDs)
+            }
+        }
     }
 
     @MainActor

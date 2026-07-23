@@ -31,6 +31,23 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
         XCTAssertEqual(ftruncate(fd, off_t(total)), 0)
 
         let url = "http://127.0.0.1:\(port)/fixtures/ok"
+        final class ProgressSamples: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [Int64] = []
+
+            func append(_ written: Int64) {
+                lock.lock()
+                values.append(written)
+                lock.unlock()
+            }
+
+            func snapshot() -> [Int64] {
+                lock.lock()
+                defer { lock.unlock() }
+                return values
+            }
+        }
+        let progressSamples = ProgressSamples()
         let outcomes = try TransferCore.downloadRangesViaMulti(
             url: url,
             partialURL: partial,
@@ -45,11 +62,20 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
                     fileOffset: mid,
                     expectedBytes: total - mid
                 )
-            ]
+            ],
+            onProgress: { written in
+                progressSamples.append(written)
+            }
         )
         XCTAssertEqual(outcomes.count, 2)
         XCTAssertEqual(outcomes[0].httpStatus, 206)
         XCTAssertEqual(outcomes[1].httpStatus, 206)
+        let samples = progressSamples.snapshot()
+        XCTAssertGreaterThan(samples.count, 0)
+        XCTAssertEqual(samples.last, total)
+        for index in 1 ..< samples.count {
+            XCTAssertGreaterThanOrEqual(samples[index], samples[index - 1])
+        }
 
         let data = try Data(contentsOf: partial)
         XCTAssertEqual(data, FaultHTTPServer.fixtureBody)

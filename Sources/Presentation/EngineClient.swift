@@ -33,7 +33,8 @@ public final class EngineClient: ObservableObject {
                 "enqueueBatch", "listJobs", "controlJob", "setJobPriority", "deleteJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
                 "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
-                "listOrganization", "upsertProject", "upsertTag", "setJobTags",
+                "listOrganization", "upsertProject", "upsertTag", "setJobTags", "setJobProject",
+                "getBoolSetting", "setBoolSetting",
                 "listCategoryRules", "upsertCategoryRule", "listEvents"
             ]
         )
@@ -479,6 +480,80 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.setJobTags(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func setJobProject(jobID: String, projectID: String?) async throws -> SetJobProjectResponse {
+        try await connect()
+        let request = SetJobProjectRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID,
+            projectID: projectID
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.setJobProject(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func getBoolSetting(key: String) async throws -> GetBoolSettingResponse {
+        try await connect()
+        let request = GetBoolSettingRequest(requestID: UUID().uuidString, key: key)
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.getBoolSetting(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func setBoolSetting(key: String, value: Bool) async throws -> SetBoolSettingResponse {
+        try await connect()
+        let request = SetBoolSettingRequest(
+            requestID: UUID().uuidString,
+            key: key,
+            value: value
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.setBoolSetting(request) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

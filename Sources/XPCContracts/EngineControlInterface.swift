@@ -185,6 +185,36 @@ public enum EngineControlInterface {
             for: #selector(EngineControlProtocol.setJobTags(_:reply:)),
             argumentIndex: 0, ofReply: true
         )
+        interface.setClasses(
+            allowedClasses([SetJobProjectRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobProject(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([SetJobProjectResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobProject(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([GetBoolSettingRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.getBoolSetting(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([GetBoolSettingResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.getBoolSetting(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([SetBoolSettingRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setBoolSetting(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([SetBoolSettingResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setBoolSetting(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
 
         interface.setClasses(
             allowedClasses([

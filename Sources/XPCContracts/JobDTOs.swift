@@ -226,7 +226,9 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
     public let hasTotalBytes: Bool
     public let speedBytesPerSecond: Int64
     public let categoryKey: String
+    public let projectID: String?
     public let projectName: String?
+    public let tagIDs: [String]
     public let tagNames: [String]
     public let priority: Int
 
@@ -240,7 +242,9 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         totalBytes: Int64?,
         speedBytesPerSecond: Int64,
         categoryKey: String,
+        projectID: String? = nil,
         projectName: String? = nil,
+        tagIDs: [String] = [],
         tagNames: [String] = [],
         priority: Int = 0
     ) {
@@ -255,7 +259,9 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         hasTotalBytes = totalBytes != nil
         self.speedBytesPerSecond = speedBytesPerSecond
         self.categoryKey = categoryKey
+        self.projectID = projectID
         self.projectName = projectName
+        self.tagIDs = tagIDs
         self.tagNames = tagNames
         self.priority = priority
     }
@@ -266,7 +272,9 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         let sourceHost = coder.decodeObject(of: NSString.self, forKey: "sourceHost")
         let state = coder.decodeObject(of: NSString.self, forKey: "state")
         let categoryKey = coder.decodeObject(of: NSString.self, forKey: "categoryKey")
+        let projectID = coder.decodeObject(of: NSString.self, forKey: "projectID")
         let projectName = coder.decodeObject(of: NSString.self, forKey: "projectName")
+        let tagIDs = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "tagIDs") ?? []
         let tagNames = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "tagNames") ?? []
         guard let id, let name, let sourceHost, let state, let categoryKey,
               UUID(uuidString: id as String) != nil,
@@ -274,8 +282,13 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
               sourceHost.length <= EngineXPC.maxPayloadStringLength,
               state.length <= 64,
               categoryKey.length <= 64,
-              tagNames.count <= EngineXPC.maxCollectionCount
+              tagIDs.count <= EngineXPC.maxCollectionCount,
+              tagNames.count <= EngineXPC.maxCollectionCount,
+              tagIDs.allSatisfy({ UUID(uuidString: $0 as String) != nil })
         else { return nil }
+        if let projectID, UUID(uuidString: projectID as String) == nil {
+            return nil
+        }
         if let projectName, projectName.length > EngineXPC.maxPayloadStringLength {
             return nil
         }
@@ -284,7 +297,9 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         self.sourceHost = sourceHost as String
         self.state = state as String
         self.categoryKey = categoryKey as String
+        self.projectID = projectID.map { $0 as String }
         self.projectName = projectName.map { $0 as String }
+        self.tagIDs = tagIDs.map { $0 as String }
         self.tagNames = tagNames.map { $0 as String }
         progressFraction = coder.decodeDouble(forKey: "progressFraction")
         hasProgress = coder.decodeBool(forKey: "hasProgress")
@@ -307,9 +322,13 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         coder.encode(hasTotalBytes, forKey: "hasTotalBytes")
         coder.encode(speedBytesPerSecond, forKey: "speedBytesPerSecond")
         coder.encode(categoryKey as NSString, forKey: "categoryKey")
+        if let projectID {
+            coder.encode(projectID as NSString, forKey: "projectID")
+        }
         if let projectName {
             coder.encode(projectName as NSString, forKey: "projectName")
         }
+        coder.encode(tagIDs as NSArray, forKey: "tagIDs")
         coder.encode(tagNames as NSArray, forKey: "tagNames")
         coder.encode(priority, forKey: "priority")
     }

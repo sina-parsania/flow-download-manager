@@ -322,6 +322,79 @@ public final class SetJobTagsResponse: NSObject, NSSecureCoding, @unchecked Send
     }
 }
 
+@objc(DMSetJobProjectRequest)
+public final class SetJobProjectRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    /// Nil clears the job's project assignment.
+    public let projectID: String?
+
+    public init(requestID: String, jobID: String, projectID: String?) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.projectID = projectID
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        let projectID = coder.decodeObject(of: NSString.self, forKey: "projectID")
+        guard let requestID, let jobID,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        if let projectID, UUID(uuidString: projectID as String) == nil {
+            return nil
+        }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        self.projectID = projectID.map { $0 as String }
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        if let projectID {
+            coder.encode(projectID as NSString, forKey: "projectID")
+        }
+    }
+}
+
+@objc(DMSetJobProjectResponse)
+public final class SetJobProjectResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+
+    public init(requestID: String, jobID: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        guard let requestID, let jobID,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+    }
+}
+
 @objc(DMCategoryRuleSnapshot)
 public final class CategoryRuleSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
     public static var supportsSecureCoding: Bool {

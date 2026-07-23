@@ -19,7 +19,9 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
     public let speedBytesPerSecond: Int64
     public let etaSeconds: Int?
     public let categoryKey: String
+    public let projectID: String?
     public let projectName: String?
+    public let tagIDs: [String]
     public let tagNames: [String]
     public let priority: Int
 
@@ -27,7 +29,8 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
         id: UUID, name: String, sourceHost: String, state: JobState,
         progressFraction: Double?, bytesTransferred: Int64, totalBytes: Int64?,
         speedBytesPerSecond: Int64, etaSeconds: Int?, categoryKey: String,
-        projectName: String?, tagNames: [String], priority: Int = 0
+        projectID: String? = nil, projectName: String?, tagIDs: [String] = [],
+        tagNames: [String], priority: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -39,7 +42,9 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
         self.speedBytesPerSecond = speedBytesPerSecond
         self.etaSeconds = etaSeconds
         self.categoryKey = categoryKey
+        self.projectID = projectID
         self.projectName = projectName
+        self.tagIDs = tagIDs
         self.tagNames = tagNames
         self.priority = priority
     }

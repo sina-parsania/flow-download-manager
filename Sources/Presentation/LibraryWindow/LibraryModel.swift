@@ -226,7 +226,9 @@ public final class LibraryModel: ObservableObject {
                     speedBytesPerSecond: job.speedBytesPerSecond,
                     etaSeconds: nil,
                     categoryKey: job.categoryKey,
+                    projectID: job.projectID,
                     projectName: job.projectName,
+                    tagIDs: job.tagIDs,
                     tagNames: job.tagNames,
                     priority: job.priority
                 )

@@ -44,6 +44,8 @@ final class OrganizationRepositoryTests: XCTestCase {
         let row = try XCTUnwrap(rows.first)
         XCTAssertEqual(row.projectName, "Alpha")
         XCTAssertEqual(row.tagNames, ["nightly", "urgent"])
+        XCTAssertEqual(row.tagIDs.count, 2)
+        XCTAssertEqual(row.job.projectID, projectID)
     }
 
     func testUpsertTagNameFoldUniqueness() throws {

@@ -102,6 +102,7 @@ public enum SegmentedTransfer {
                     ranges: rangeRequests,
                     options: options,
                     abortFlag: abortFlag,
+                    onProgress: onProgress,
                     probe: probe,
                     total: total,
                     segments: segments
@@ -191,6 +192,7 @@ public enum SegmentedTransfer {
         ranges: [CurlMultiLoop.RangeRequest],
         options: TransferCore.DownloadOptions,
         abortFlag: TransferAbortFlag?,
+        onProgress: TransferCore.ProgressHandler?,
         probe: TransferCore.ResourceIdentity,
         total: Int64,
         segments: Int
@@ -200,7 +202,8 @@ public enum SegmentedTransfer {
             partialURL: partialURL,
             ranges: ranges,
             options: options,
-            abortFlag: abortFlag
+            abortFlag: abortFlag,
+            onProgress: onProgress
         )
         let attrs = try FileManager.default.attributesOfItem(atPath: partialURL.path)
         let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0

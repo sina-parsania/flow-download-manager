@@ -62,6 +62,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var upsertProjectCache: [String: UpsertProjectResponse] = [:]
     private var upsertTagCache: [String: UpsertTagResponse] = [:]
     private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
+    private var setJobProjectCache: [String: SetJobProjectResponse] = [:]
+    private var getBoolSettingCache: [String: GetBoolSettingResponse] = [:]
+    private var setBoolSettingCache: [String: SetBoolSettingResponse] = [:]
     private var setJobPriorityCache: [String: SetJobPriorityResponse] = [:]
     private var deleteJobCache: [String: DeleteJobResponse] = [:]
     private var listCategoryRulesCache: [String: ListCategoryRulesResponse] = [:]
@@ -92,7 +95,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 "health", "enqueueBatch", "listJobs", "controlJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "upsertCookieProfile",
                 "listProfiles", "upsertBandwidthPolicy", "getBandwidthPolicy",
-                "listOrganization", "upsertProject", "upsertTag", "setJobTags",
+                "listOrganization", "upsertProject", "upsertTag", "setJobTags", "setJobProject",
+                "getBoolSetting", "setBoolSetting",
                 "listCategoryRules", "upsertCategoryRule", "listEvents", "setJobPriority",
                 "deleteJob"
             ]
@@ -228,7 +232,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         do {
             let rows = try JobRepository.fetchJobRows(database: database)
             let progressMap = services.progressLedger?.all() ?? [:]
-            let jobs = rows.map { job, resource, category, projectName, tagNames -> JobSnapshot in
+            let jobs = rows.map { job, resource, category, projectName, tagNames, tagIDs -> JobSnapshot in
                 let host = URL(string: resource.canonicalURL)?.host ?? ""
                 let name = resource.filenameEvidence
                     ?? URL(string: resource.canonicalURL)?.lastPathComponent
@@ -248,7 +252,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     totalBytes: total,
                     speedBytesPerSecond: speed,
                     categoryKey: category.stableKey,
+                    projectID: job.projectID,
                     projectName: projectName,
+                    tagIDs: tagIDs,
                     tagNames: tagNames,
                     priority: job.priority
                 )
@@ -970,6 +976,124 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "set job tags failed"))
         }
+    }
+
+    func setJobProject(
+        _ request: SetJobProjectRequest,
+        reply: @escaping @Sendable (SetJobProjectResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = setJobProjectCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try OrganizationRepository.setJobProject(
+                database: database,
+                jobID: request.jobID,
+                projectID: request.projectID
+            )
+            let response = SetJobProjectResponse(
+                requestID: request.requestID,
+                jobID: request.jobID
+            )
+            lock.lock()
+            setJobProjectCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "set job project failed"))
+        }
+    }
+
+    func getBoolSetting(
+        _ request: GetBoolSettingRequest,
+        reply: @escaping @Sendable (GetBoolSettingResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = getBoolSettingCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard AgentBoolSettings.allowlistedKeys.contains(request.key) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "unknown setting key"))
+            return
+        }
+        let value = AgentBoolSettings.bool(forKey: request.key)
+        let response = GetBoolSettingResponse(
+            requestID: request.requestID,
+            key: request.key,
+            value: value
+        )
+        lock.lock()
+        getBoolSettingCache[request.requestID] = response
+        lock.unlock()
+        reply(response, nil)
+    }
+
+    func setBoolSetting(
+        _ request: SetBoolSettingRequest,
+        reply: @escaping @Sendable (SetBoolSettingResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = setBoolSettingCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard AgentBoolSettings.setBool(request.value, forKey: request.key) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "unknown setting key"))
+            return
+        }
+        let response = SetBoolSettingResponse(
+            requestID: request.requestID,
+            key: request.key,
+            value: request.value
+        )
+        lock.lock()
+        setBoolSettingCache[request.requestID] = response
+        lock.unlock()
+        reply(response, nil)
     }
 
     func listCategoryRules(

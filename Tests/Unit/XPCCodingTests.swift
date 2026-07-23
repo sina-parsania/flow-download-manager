@@ -238,4 +238,66 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertEqual(decoded?.command.rawValue, 5)
         XCTAssertEqual(decoded?.expectedRevision, 2)
     }
+
+    func testSetJobProjectAndBoolSettingRoundTrip() throws {
+        let projectRequest = SetJobProjectRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            projectID: UUID().uuidString
+        )
+        let decodedProject = try roundTrip(projectRequest, as: SetJobProjectRequest.self)
+        XCTAssertEqual(decodedProject?.projectID, projectRequest.projectID)
+
+        let clearRequest = SetJobProjectRequest(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            projectID: nil
+        )
+        let decodedClear = try roundTrip(clearRequest, as: SetJobProjectRequest.self)
+        XCTAssertNil(decodedClear?.projectID)
+
+        let getRequest = GetBoolSettingRequest(
+            requestID: UUID().uuidString,
+            key: "zipAutoExtractEnabled"
+        )
+        let decodedGet = try roundTrip(getRequest, as: GetBoolSettingRequest.self)
+        XCTAssertEqual(decodedGet?.key, "zipAutoExtractEnabled")
+
+        let getResponse = GetBoolSettingResponse(
+            requestID: UUID().uuidString,
+            key: "zipAutoExtractEnabled",
+            value: true
+        )
+        let decodedGetResponse = try roundTrip(getResponse, as: GetBoolSettingResponse.self)
+        XCTAssertEqual(decodedGetResponse?.value, true)
+
+        let setRequest = SetBoolSettingRequest(
+            requestID: UUID().uuidString,
+            key: "zipAutoExtractEnabled",
+            value: false
+        )
+        let decodedSet = try roundTrip(setRequest, as: SetBoolSettingRequest.self)
+        XCTAssertEqual(decodedSet?.value, false)
+
+        let snapshot = JobSnapshot(
+            id: UUID().uuidString,
+            name: "a.zip",
+            sourceHost: "cdn.example.test",
+            state: "queued",
+            progressFraction: 0.5,
+            bytesTransferred: 10,
+            totalBytes: 20,
+            speedBytesPerSecond: 1,
+            categoryKey: "archives",
+            projectID: UUID().uuidString,
+            projectName: "Film",
+            tagIDs: [UUID().uuidString],
+            tagNames: ["urgent"],
+            priority: 1
+        )
+        let decodedSnapshot = try roundTrip(snapshot, as: JobSnapshot.self)
+        XCTAssertEqual(decodedSnapshot?.projectID, snapshot.projectID)
+        XCTAssertEqual(decodedSnapshot?.tagIDs, snapshot.tagIDs)
+        XCTAssertEqual(decodedSnapshot?.tagNames, ["urgent"])
+    }
 }

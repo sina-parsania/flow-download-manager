@@ -41,6 +41,7 @@ public enum CurlMultiLoop {
     }
 
     /// Downloads each range into the same open file (positioned writes) until all complete.
+    /// When `onProgress` is set, per-segment write progress is summed and reported.
     public static func downloadRangesToFile(
         url: String,
         partialURL: URL,
@@ -52,7 +53,8 @@ public enum CurlMultiLoop {
         userpwd: String? = nil,
         proxyURL: String? = nil,
         cookieJarPath: String? = nil,
-        extraHeadersPayload: String? = nil
+        extraHeadersPayload: String? = nil,
+        onProgress: (@Sendable (Int64) -> Void)? = nil
     ) throws -> [Outcome] {
         guard !ranges.isEmpty else { throw MultiError.emptyRequests }
         try CurlBridge.initialize()
@@ -94,13 +96,42 @@ public enum CurlMultiLoop {
         let connect = Int(connectTimeoutMilliseconds)
         let transfer = Int(transferTimeoutMilliseconds)
         let redirects = Int(maxRedirects)
+        let progressState = onProgress.map { MultiProgressState(segmentCount: ranges.count, onProgress: $0) }
+        // Retain per-segment boxes for the full multi loop lifetime.
+        var progressBoxes: [MultiSegmentProgressBox] = []
+        progressBoxes.reserveCapacity(ranges.count)
 
         try url.withCString { urlC in
             try withOptionalCString(userpwd) { userpwdC in
                 try withOptionalCString(proxyURL) { proxyC in
                     try withOptionalCString(cookieJarPath) { cookieC in
                         try withOptionalCString(extraHeadersPayload) { headersC in
-                            for range in ranges {
+                            for (index, range) in ranges.enumerated() {
+                                let progressBox: MultiSegmentProgressBox?
+                                let progressCallback: DMCurlProgressCallback?
+                                let progressUserdata: UnsafeMutableRawPointer?
+                                if let progressState {
+                                    let box = MultiSegmentProgressBox(
+                                        segmentIndex: index,
+                                        state: progressState
+                                    )
+                                    progressBoxes.append(box)
+                                    progressBox = box
+                                    progressCallback = { written, userdata in
+                                        guard let userdata else { return 0 }
+                                        let box = Unmanaged<MultiSegmentProgressBox>
+                                            .fromOpaque(userdata)
+                                            .takeUnretainedValue()
+                                        box.record(written: Int64(written))
+                                        return 0
+                                    }
+                                    progressUserdata = Unmanaged.passUnretained(box).toOpaque()
+                                } else {
+                                    progressBox = nil
+                                    progressCallback = nil
+                                    progressUserdata = nil
+                                }
+                                _ = progressBox
                                 let created: OpaquePointer? = range.rangeHeader.withCString { rangeC in
                                     DMCurlEasyDownloadCreate(
                                         urlC,
@@ -111,8 +142,8 @@ public enum CurlMultiLoop {
                                         transfer,
                                         redirects,
                                         abortFlag,
-                                        nil,
-                                        nil,
+                                        progressCallback,
+                                        progressUserdata,
                                         userpwdC,
                                         proxyC,
                                         cookieC,
@@ -139,25 +170,27 @@ public enum CurlMultiLoop {
                 }
             }
         }
-
-        var running: Int32 = 0
-        var performCode = DMCurlMultiPerform(multi, &running)
-        guard performCode == CURLM_OK else {
-            throw MultiError.curl(CURLE_FAILED_INIT)
-        }
-
-        while running > 0 {
-            if let abortFlag, abortFlag.pointee != 0 {
-                throw MultiError.aborted
-            }
-            var numfds: Int32 = 0
-            let waitCode = DMCurlMultiWait(multi, 250, &numfds)
-            guard waitCode == CURLM_OK else {
-                throw MultiError.curl(CURLE_FAILED_INIT)
-            }
-            performCode = DMCurlMultiPerform(multi, &running)
+        // Keep boxes alive through perform/wait.
+        try withExtendedLifetime(progressBoxes) {
+            var running: Int32 = 0
+            var performCode = DMCurlMultiPerform(multi, &running)
             guard performCode == CURLM_OK else {
                 throw MultiError.curl(CURLE_FAILED_INIT)
+            }
+
+            while running > 0 {
+                if let abortFlag, abortFlag.pointee != 0 {
+                    throw MultiError.aborted
+                }
+                var numfds: Int32 = 0
+                let waitCode = DMCurlMultiWait(multi, 250, &numfds)
+                guard waitCode == CURLM_OK else {
+                    throw MultiError.curl(CURLE_FAILED_INIT)
+                }
+                performCode = DMCurlMultiPerform(multi, &running)
+                guard performCode == CURLM_OK else {
+                    throw MultiError.curl(CURLE_FAILED_INIT)
+                }
             }
         }
 
@@ -263,11 +296,55 @@ public enum CurlMultiLoop {
         return outcomes
     }
 
+    private static func withExtendedLifetime(
+        _ boxes: [MultiSegmentProgressBox],
+        _ body: () throws -> Void
+    ) throws {
+        _ = boxes
+        try body()
+    }
+
     private static func withOptionalCString<T>(
         _ value: String?,
         _ body: (UnsafePointer<CChar>?) throws -> T
     ) throws -> T {
         guard let value else { return try body(nil) }
         return try value.withCString { try body($0) }
+    }
+}
+
+/// Aggregates per-segment curl write progress for a multi transfer.
+private final class MultiProgressState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var progressBySegment: [Int64]
+    private let onProgress: @Sendable (Int64) -> Void
+
+    init(segmentCount: Int, onProgress: @escaping @Sendable (Int64) -> Void) {
+        progressBySegment = Array(repeating: 0, count: segmentCount)
+        self.onProgress = onProgress
+    }
+
+    func record(segment: Int, written: Int64) {
+        lock.lock()
+        if segment >= 0, segment < progressBySegment.count {
+            progressBySegment[segment] = written
+        }
+        let total = progressBySegment.reduce(0, +)
+        lock.unlock()
+        onProgress(total)
+    }
+}
+
+private final class MultiSegmentProgressBox {
+    let segmentIndex: Int
+    let state: MultiProgressState
+
+    init(segmentIndex: Int, state: MultiProgressState) {
+        self.segmentIndex = segmentIndex
+        self.state = state
+    }
+
+    func record(written: Int64) {
+        state.record(segment: segmentIndex, written: written)
     }
 }

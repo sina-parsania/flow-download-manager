@@ -28,6 +28,25 @@ public struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
+            Section("Post-processing") {
+                Toggle(
+                    "Auto-extract ZIP archives",
+                    isOn: $model.zipAutoExtractEnabled
+                )
+                .accessibilityLabel("Auto-extract ZIP archives")
+                .disabled(model.isBusy)
+                .onChange(of: model.zipAutoExtractEnabled) { _, newValue in
+                    Task { await model.saveZipAutoExtract(newValue) }
+                }
+                Text(
+                    "When enabled, completed .zip downloads extract into a sibling "
+                        + "folder. Turn off to keep archives intact."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Credentials") {
                 if model.credentials.isEmpty {
                     Text("No credential profiles yet.")
@@ -237,11 +256,14 @@ private final class SettingsModel: ObservableObject {
     @Published var tagName = ""
     @Published var ruleExtension = ""
     @Published var ruleCategoryKey = "other"
+    @Published var zipAutoExtractEnabled = true
     @Published var statusMessage: String?
     @Published var statusIsError = false
     @Published var isBusy = false
+    private var suppressZipSettingSave = false
 
     private let client = EngineClient()
+    private static let zipAutoExtractKey = "zipAutoExtractEnabled"
 
     var canSaveCredential: Bool {
         !credentialDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -310,10 +332,28 @@ private final class SettingsModel: ObservableObject {
                 bandwidthMaxBytesText = "0"
                 bandwidthNightWindowOnly = false
             }
+            let zipSetting = try await client.getBoolSetting(key: Self.zipAutoExtractKey)
+            suppressZipSettingSave = true
+            zipAutoExtractEnabled = zipSetting.value
+            suppressZipSettingSave = false
             statusMessage = nil
             statusIsError = false
         } catch {
             statusMessage = "Unable to load settings from the engine."
+            statusIsError = true
+        }
+    }
+
+    func saveZipAutoExtract(_ enabled: Bool) async {
+        guard !suppressZipSettingSave else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            _ = try await client.setBoolSetting(key: Self.zipAutoExtractKey, value: enabled)
+            statusMessage = nil
+            statusIsError = false
+        } catch {
+            statusMessage = "Unable to save ZIP extract preference."
             statusIsError = true
         }
     }

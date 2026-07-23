@@ -35,6 +35,9 @@ public struct RootView: View {
                         },
                         onPriorityBump: { delta in
                             Task { await model.bumpSelectedPriority(by: delta) }
+                        },
+                        onOrganizationChanged: {
+                            Task { await model.refreshFromEngine() }
                         }
                     )
                     .inspectorColumnWidth(min: 300, ideal: 340, max: 420)

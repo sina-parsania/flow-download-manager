@@ -164,12 +164,18 @@ public enum JobRepository {
 
     public static func fetchJobRows(
         database: EngineDatabase
-    ) throws -> [(job: JobRecord, resource: ResourceRecord, category: CategoryRecord)] {
+    ) throws -> [(
+        job: JobRecord,
+        resource: ResourceRecord,
+        category: CategoryRecord,
+        projectName: String?,
+        tagNames: [String]
+    )] {
         try database.pool.read { db in
             let jobs = try JobRecord
                 .order(Column("queuePosition").asc, Column("createdAt").asc)
                 .fetchAll(db)
-            var rows: [(JobRecord, ResourceRecord, CategoryRecord)] = []
+            var rows: [(JobRecord, ResourceRecord, CategoryRecord, String?, [String])] = []
             rows.reserveCapacity(jobs.count)
             for job in jobs {
                 guard let resource = try ResourceRecord.fetchOne(db, key: job.resourceID),
@@ -177,7 +183,22 @@ public enum JobRepository {
                 else {
                     throw JobRepositoryError.jobNotFound(job.id)
                 }
-                rows.append((job, resource, category))
+                let projectName: String? = if let projectID = job.projectID {
+                    try ProjectRecord.fetchOne(db, key: projectID)?.name
+                } else {
+                    nil
+                }
+                let tagNames = try String.fetchAll(
+                    db,
+                    sql: """
+                    SELECT t.name FROM tags t
+                    INNER JOIN job_tags jt ON jt.tagID = t.id
+                    WHERE jt.jobID = ?
+                    ORDER BY t.name ASC
+                    """,
+                    arguments: [job.id]
+                )
+                rows.append((job, resource, category, projectName, tagNames))
             }
             return rows
         }

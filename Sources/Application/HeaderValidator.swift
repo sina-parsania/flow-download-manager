@@ -25,6 +25,39 @@ public enum HeaderValidator {
         if bannedNames.contains(trimmedName.lowercased()) { return false }
         return true
     }
+
+    public enum ParseError: Error, Equatable, Sendable {
+        case malformedJSON
+        case invalidHeader
+    }
+
+    /// Parses `[{ "name": "...", "value": "..." }, ...]`. Rejects the whole set if any entry is invalid.
+    public static func parseExtraHeadersJSON(_ json: String?) throws -> [(name: String, value: String)] {
+        guard let json, !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        guard let data = json.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data),
+              let array = raw as? [[String: Any]]
+        else {
+            throw ParseError.malformedJSON
+        }
+        var headers: [(name: String, value: String)] = []
+        headers.reserveCapacity(array.count)
+        for item in array {
+            guard let name = item["name"] as? String,
+                  let value = item["value"] as? String
+            else {
+                throw ParseError.invalidHeader
+            }
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard validate(name: trimmedName, value: value) else {
+                throw ParseError.invalidHeader
+            }
+            headers.append((trimmedName, value))
+        }
+        return headers
+    }
 }
 
 /// Proxy profile kinds claimed by the UI must match runtime capability (FR-TRN-004).

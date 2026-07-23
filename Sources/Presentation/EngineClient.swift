@@ -31,7 +31,8 @@ public final class EngineClient: ObservableObject {
             clientRole: .app,
             capabilities: [
                 "enqueueBatch", "listJobs", "controlJob",
-                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles"
+                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
+                "listOrganization", "upsertProject", "upsertTag", "setJobTags"
             ]
         )
         let server: ServerHello = try await withCheckedThrowingContinuation { cont in
@@ -221,6 +222,114 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.upsertProxyProfile(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func listOrganization() async throws -> ListOrganizationResponse {
+        try await connect()
+        let requestID = UUID().uuidString
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.listOrganization(requestID: requestID) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func upsertProject(
+        name: String,
+        colorRole: String? = nil,
+        projectID: String = UUID().uuidString.lowercased()
+    ) async throws -> UpsertProjectResponse {
+        try await connect()
+        let request = UpsertProjectRequest(
+            requestID: UUID().uuidString,
+            projectID: projectID,
+            name: name,
+            colorRole: colorRole
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.upsertProject(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func upsertTag(
+        name: String,
+        tagID: String = UUID().uuidString.lowercased()
+    ) async throws -> UpsertTagResponse {
+        try await connect()
+        let request = UpsertTagRequest(
+            requestID: UUID().uuidString,
+            tagID: tagID,
+            name: name
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.upsertTag(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func setJobTags(jobID: String, tagIDs: [String]) async throws -> SetJobTagsResponse {
+        try await connect()
+        let request = SetJobTagsRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID,
+            tagIDs: tagIDs
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.setJobTags(request) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

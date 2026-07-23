@@ -148,6 +148,8 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
     public let hasTotalBytes: Bool
     public let speedBytesPerSecond: Int64
     public let categoryKey: String
+    public let projectName: String?
+    public let tagNames: [String]
 
     public init(
         id: String,
@@ -158,7 +160,9 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         bytesTransferred: Int64,
         totalBytes: Int64?,
         speedBytesPerSecond: Int64,
-        categoryKey: String
+        categoryKey: String,
+        projectName: String? = nil,
+        tagNames: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -171,6 +175,8 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         hasTotalBytes = totalBytes != nil
         self.speedBytesPerSecond = speedBytesPerSecond
         self.categoryKey = categoryKey
+        self.projectName = projectName
+        self.tagNames = tagNames
     }
 
     public required init?(coder: NSCoder) {
@@ -179,18 +185,26 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         let sourceHost = coder.decodeObject(of: NSString.self, forKey: "sourceHost")
         let state = coder.decodeObject(of: NSString.self, forKey: "state")
         let categoryKey = coder.decodeObject(of: NSString.self, forKey: "categoryKey")
+        let projectName = coder.decodeObject(of: NSString.self, forKey: "projectName")
+        let tagNames = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "tagNames") ?? []
         guard let id, let name, let sourceHost, let state, let categoryKey,
               UUID(uuidString: id as String) != nil,
               name.length <= EngineXPC.maxPayloadStringLength,
               sourceHost.length <= EngineXPC.maxPayloadStringLength,
               state.length <= 64,
-              categoryKey.length <= 64
+              categoryKey.length <= 64,
+              tagNames.count <= EngineXPC.maxCollectionCount
         else { return nil }
+        if let projectName, projectName.length > EngineXPC.maxPayloadStringLength {
+            return nil
+        }
         self.id = id as String
         self.name = name as String
         self.sourceHost = sourceHost as String
         self.state = state as String
         self.categoryKey = categoryKey as String
+        self.projectName = projectName.map { $0 as String }
+        self.tagNames = tagNames.map { $0 as String }
         progressFraction = coder.decodeDouble(forKey: "progressFraction")
         hasProgress = coder.decodeBool(forKey: "hasProgress")
         bytesTransferred = coder.decodeInt64(forKey: "bytesTransferred")
@@ -211,6 +225,10 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         coder.encode(hasTotalBytes, forKey: "hasTotalBytes")
         coder.encode(speedBytesPerSecond, forKey: "speedBytesPerSecond")
         coder.encode(categoryKey as NSString, forKey: "categoryKey")
+        if let projectName {
+            coder.encode(projectName as NSString, forKey: "projectName")
+        }
+        coder.encode(tagNames as NSArray, forKey: "tagNames")
     }
 }
 

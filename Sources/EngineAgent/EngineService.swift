@@ -54,6 +54,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var credentialCache: [String: UpsertCredentialProfileResponse] = [:]
     private var proxyCache: [String: UpsertProxyProfileResponse] = [:]
     private var listProfilesCache: [String: ListProfilesResponse] = [:]
+    private var listOrganizationCache: [String: ListOrganizationResponse] = [:]
+    private var upsertProjectCache: [String: UpsertProjectResponse] = [:]
+    private var upsertTagCache: [String: UpsertTagResponse] = [:]
+    private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
     private var snapshotSequence: Int64 = 0
 
     init(services: EngineServices) {
@@ -77,7 +81,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             databaseVersion: services.databaseVersion,
             capabilities: [
                 "health", "enqueueBatch", "listJobs", "controlJob",
-                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles"
+                "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
+                "listOrganization", "upsertProject", "upsertTag", "setJobTags"
             ]
         ), nil)
     }
@@ -189,7 +194,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         do {
             let rows = try JobRepository.fetchJobRows(database: database)
             let progressMap = services.progressLedger?.all() ?? [:]
-            let jobs = rows.map { job, resource, category -> JobSnapshot in
+            let jobs = rows.map { job, resource, category, projectName, tagNames -> JobSnapshot in
                 let host = URL(string: resource.canonicalURL)?.host ?? ""
                 let name = resource.filenameEvidence
                     ?? URL(string: resource.canonicalURL)?.lastPathComponent
@@ -208,7 +213,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     bytesTransferred: transferred,
                     totalBytes: total,
                     speedBytesPerSecond: speed,
-                    categoryKey: category.stableKey
+                    categoryKey: category.stableKey,
+                    projectName: projectName,
+                    tagNames: tagNames
                 )
             }
             lock.lock()
@@ -450,6 +457,187 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list profiles failed"))
+        }
+    }
+
+    func listOrganization(
+        requestID: String,
+        reply: @escaping @Sendable (ListOrganizationResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = listOrganizationCache[requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let projects = try OrganizationRepository.listProjects(database: database)
+                .map { ProjectSnapshot(id: $0.id, name: $0.name, colorRole: $0.colorRole) }
+            let tags = try OrganizationRepository.listTags(database: database)
+                .map { TagSnapshot(id: $0.id, name: $0.name) }
+            let response = ListOrganizationResponse(
+                requestID: requestID,
+                projects: projects,
+                tags: tags
+            )
+            lock.lock()
+            listOrganizationCache[requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "list organization failed"))
+        }
+    }
+
+    func upsertProject(
+        _ request: UpsertProjectRequest,
+        reply: @escaping @Sendable (UpsertProjectResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = upsertProjectCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try OrganizationRepository.upsertProject(
+                database: database,
+                id: request.projectID,
+                name: request.name,
+                colorRole: request.colorRole
+            )
+            let response = UpsertProjectResponse(
+                requestID: request.requestID,
+                projectID: request.projectID
+            )
+            lock.lock()
+            upsertProjectCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "project upsert failed"))
+        }
+    }
+
+    func upsertTag(
+        _ request: UpsertTagRequest,
+        reply: @escaping @Sendable (UpsertTagResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = upsertTagCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try OrganizationRepository.upsertTag(
+                database: database,
+                id: request.tagID,
+                name: request.name
+            )
+            let response = UpsertTagResponse(
+                requestID: request.requestID,
+                tagID: request.tagID
+            )
+            lock.lock()
+            upsertTagCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "tag upsert failed"))
+        }
+    }
+
+    func setJobTags(
+        _ request: SetJobTagsRequest,
+        reply: @escaping @Sendable (SetJobTagsResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = setJobTagsCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try OrganizationRepository.setJobTags(
+                database: database,
+                jobID: request.jobID,
+                tagIDs: request.tagIDs
+            )
+            let response = SetJobTagsResponse(
+                requestID: request.requestID,
+                jobID: request.jobID
+            )
+            lock.lock()
+            setJobTagsCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "set job tags failed"))
         }
     }
 

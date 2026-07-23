@@ -4,9 +4,9 @@ import CCurl
 import Darwin
 import Foundation
 
-/// Concurrent ranged downloads via curl_multi (FR-TRN-009 foundation).
-/// Dispatch-based SegmentedTransfer remains the default production path;
-/// this loop is the multi-socket building block and is covered by integration tests.
+/// Concurrent ranged downloads via curl_multi (FR-TRN-009).
+/// SegmentedTransfer prefers this path when segmentCount > 1; Dispatch is the
+/// recoverable fallback when multi setup fails.
 public enum CurlMultiLoop {
     public struct RangeRequest: Sendable, Equatable {
         public let rangeHeader: String
@@ -51,7 +51,8 @@ public enum CurlMultiLoop {
         abortFlag: UnsafeMutablePointer<Int32>? = nil,
         userpwd: String? = nil,
         proxyURL: String? = nil,
-        cookieJarPath: String? = nil
+        cookieJarPath: String? = nil,
+        extraHeadersPayload: String? = nil
     ) throws -> [Outcome] {
         guard !ranges.isEmpty else { throw MultiError.emptyRequests }
         try CurlBridge.initialize()
@@ -98,38 +99,41 @@ public enum CurlMultiLoop {
             try withOptionalCString(userpwd) { userpwdC in
                 try withOptionalCString(proxyURL) { proxyC in
                     try withOptionalCString(cookieJarPath) { cookieC in
-                        for range in ranges {
-                            let created: OpaquePointer? = range.rangeHeader.withCString { rangeC in
-                                DMCurlEasyDownloadCreate(
-                                    urlC,
-                                    fd,
-                                    curl_off_t(range.fileOffset),
-                                    rangeC,
-                                    connect,
-                                    transfer,
-                                    redirects,
-                                    abortFlag,
-                                    nil,
-                                    nil,
-                                    userpwdC,
-                                    proxyC,
-                                    cookieC
-                                )
+                        try withOptionalCString(extraHeadersPayload) { headersC in
+                            for range in ranges {
+                                let created: OpaquePointer? = range.rangeHeader.withCString { rangeC in
+                                    DMCurlEasyDownloadCreate(
+                                        urlC,
+                                        fd,
+                                        curl_off_t(range.fileOffset),
+                                        rangeC,
+                                        connect,
+                                        transfer,
+                                        redirects,
+                                        abortFlag,
+                                        nil,
+                                        nil,
+                                        userpwdC,
+                                        proxyC,
+                                        cookieC,
+                                        headersC
+                                    )
+                                }
+                                guard let created,
+                                      let easy = DMCurlEasyDownloadGetHandle(created)
+                                else {
+                                    throw MultiError.easyCreateFailed
+                                }
+                                let addCode = DMCurlMultiAddEasy(multi, easy)
+                                guard addCode == CURLM_OK else {
+                                    var discarded = DMCurlDownloadResult()
+                                    discarded.contentLength = -1
+                                    DMCurlEasyDownloadFinish(created, CURLE_FAILED_INIT, &discarded)
+                                    DMCurlDownloadResultClear(&discarded)
+                                    throw MultiError.multiAddFailed
+                                }
+                                liveDownloads.append(created)
                             }
-                            guard let created,
-                                  let easy = DMCurlEasyDownloadGetHandle(created)
-                            else {
-                                throw MultiError.easyCreateFailed
-                            }
-                            let addCode = DMCurlMultiAddEasy(multi, easy)
-                            guard addCode == CURLM_OK else {
-                                var discarded = DMCurlDownloadResult()
-                                discarded.contentLength = -1
-                                DMCurlEasyDownloadFinish(created, CURLE_FAILED_INIT, &discarded)
-                                DMCurlDownloadResultClear(&discarded)
-                                throw MultiError.multiAddFailed
-                            }
-                            liveDownloads.append(created)
                         }
                     }
                 }

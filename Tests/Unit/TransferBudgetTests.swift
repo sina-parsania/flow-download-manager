@@ -27,4 +27,16 @@ final class TransferBudgetTests: XCTestCase {
         XCTAssertFalse(second)
         XCTAssertTrue(afterEnd)
     }
+
+    func testSyncBandwidthGovernorCapsThroughput() {
+        let governor = SyncBandwidthGovernor(bytesPerSecond: 5000)
+        // Drain the initial full bucket so subsequent consumes must wait.
+        governor.consume(bytes: 5000)
+        let started = ProcessInfo.processInfo.systemUptime
+        governor.consume(bytes: 2500)
+        let seconds = ProcessInfo.processInfo.systemUptime - started
+        // 2500 bytes at 5000 B/s needs ~0.5s; allow CI slack.
+        XCTAssertGreaterThanOrEqual(seconds, 0.25)
+        XCTAssertLessThan(seconds, 4.0)
+    }
 }

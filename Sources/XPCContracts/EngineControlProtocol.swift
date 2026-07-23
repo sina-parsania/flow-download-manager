@@ -66,6 +66,30 @@ public protocol EngineControlProtocol {
         requestID: String,
         reply: @escaping @Sendable (ListProfilesResponse?, NSError?) -> Void
     )
+
+    /// List projects and tags (FR-ORG minimal).
+    func listOrganization(
+        requestID: String,
+        reply: @escaping @Sendable (ListOrganizationResponse?, NSError?) -> Void
+    )
+
+    /// Create or replace a project.
+    func upsertProject(
+        _ request: UpsertProjectRequest,
+        reply: @escaping @Sendable (UpsertProjectResponse?, NSError?) -> Void
+    )
+
+    /// Create or replace a tag.
+    func upsertTag(
+        _ request: UpsertTagRequest,
+        reply: @escaping @Sendable (UpsertTagResponse?, NSError?) -> Void
+    )
+
+    /// Replace the tag set attached to a job.
+    func setJobTags(
+        _ request: SetJobTagsRequest,
+        reply: @escaping @Sendable (SetJobTagsResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.

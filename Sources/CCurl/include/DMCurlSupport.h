@@ -43,6 +43,7 @@ typedef int (*DMCurlProgressCallback)(curl_off_t written, void *userdata);
 /// @c CURLE_ABORTED_BY_CALLBACK.
 /// @c userpwd may be "user:password" or NULL. @c proxyURL may be a proxy URL or NULL.
 /// @c cookieJarPath may be a Netscape cookie-jar path (COOKIEFILE + COOKIEJAR) or NULL.
+/// @c extraHeaders may be newline-separated "Name: Value" lines, or NULL.
 CURLcode DMCurlEasyDownloadToFD(
     const char *url,
     int fd,
@@ -57,6 +58,7 @@ CURLcode DMCurlEasyDownloadToFD(
     const char *userpwd,
     const char *proxyURL,
     const char *cookieJarPath,
+    const char *extraHeaders,
     DMCurlDownloadResult *out
 );
 
@@ -78,7 +80,8 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
     void *progressUserdata,
     const char *userpwd,
     const char *proxyURL,
-    const char *cookieJarPath
+    const char *cookieJarPath,
+    const char *extraHeaders
 );
 
 CURL *DMCurlEasyDownloadGetHandle(DMCurlEasyDownload *download);

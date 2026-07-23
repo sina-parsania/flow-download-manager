@@ -89,6 +89,48 @@ public enum EngineControlInterface {
             for: #selector(EngineControlProtocol.listProfiles(requestID:reply:)),
             argumentIndex: 0, ofReply: true
         )
+
+        interface.setClasses(
+            allowedClasses([
+                ListOrganizationResponse.self,
+                ProjectSnapshot.self,
+                TagSnapshot.self,
+                NSString.self,
+                NSArray.self
+            ]),
+            for: #selector(EngineControlProtocol.listOrganization(requestID:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([UpsertProjectRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertProject(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([UpsertProjectResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertProject(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([UpsertTagRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertTag(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([UpsertTagResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertTag(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([SetJobTagsRequest.self, NSString.self, NSArray.self]),
+            for: #selector(EngineControlProtocol.setJobTags(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([SetJobTagsResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.setJobTags(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
         return interface
     }
 

@@ -41,7 +41,7 @@ public enum SegmentedTransfer {
         onProgress: TransferCore.ProgressHandler? = nil,
         preferResume: Bool = true,
         hostMaxSegments: Int? = nil,
-        useCurlMulti: Bool = false
+        useCurlMulti: Bool = true
     ) throws -> Outcome {
         if preferResume,
            let existing = (try? partialURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
@@ -95,34 +95,20 @@ public enum SegmentedTransfer {
         }
 
         if useCurlMulti {
-            _ = try TransferCore.downloadRangesViaMulti(
-                url: url,
-                partialURL: partialURL,
-                ranges: rangeRequests,
-                options: options,
-                abortFlag: abortFlag
-            )
-            let attrs = try FileManager.default.attributesOfItem(atPath: partialURL.path)
-            let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
-            guard size == total else {
-                throw TransferCore.TransferError.incompleteWrite(expected: total, wrote: size)
+            do {
+                return try completeMultiDownload(
+                    url: url,
+                    partialURL: partialURL,
+                    ranges: rangeRequests,
+                    options: options,
+                    abortFlag: abortFlag,
+                    probe: probe,
+                    total: total,
+                    segments: segments
+                )
+            } catch TransferCore.TransferError.fileOpenFailed {
+                // Recoverable multi setup failure — fall through to Dispatch once.
             }
-            return Outcome(
-                identity: TransferCore.ResourceIdentity(
-                    finalURL: probe.finalURL,
-                    contentLength: total,
-                    contentType: probe.contentType,
-                    etag: probe.etag,
-                    lastModified: probe.lastModified,
-                    acceptRanges: probe.acceptRanges,
-                    contentDisposition: probe.contentDisposition,
-                    contentRange: nil,
-                    httpStatus: 206
-                ),
-                bytesWritten: size,
-                segmentCount: segments,
-                partialURL: partialURL
-            )
         }
 
         let state = ConcurrentSegmentState(probe: probe, segmentCount: segments)
@@ -192,6 +178,46 @@ public enum SegmentedTransfer {
                 contentDisposition: lastIdentity.contentDisposition ?? probe.contentDisposition,
                 contentRange: lastIdentity.contentRange,
                 httpStatus: lastIdentity.httpStatus
+            ),
+            bytesWritten: size,
+            segmentCount: segments,
+            partialURL: partialURL
+        )
+    }
+
+    private static func completeMultiDownload(
+        url: String,
+        partialURL: URL,
+        ranges: [CurlMultiLoop.RangeRequest],
+        options: TransferCore.DownloadOptions,
+        abortFlag: TransferAbortFlag?,
+        probe: TransferCore.ResourceIdentity,
+        total: Int64,
+        segments: Int
+    ) throws -> Outcome {
+        _ = try TransferCore.downloadRangesViaMulti(
+            url: url,
+            partialURL: partialURL,
+            ranges: ranges,
+            options: options,
+            abortFlag: abortFlag
+        )
+        let attrs = try FileManager.default.attributesOfItem(atPath: partialURL.path)
+        let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        guard size == total else {
+            throw TransferCore.TransferError.incompleteWrite(expected: total, wrote: size)
+        }
+        return Outcome(
+            identity: TransferCore.ResourceIdentity(
+                finalURL: probe.finalURL,
+                contentLength: total,
+                contentType: probe.contentType,
+                etag: probe.etag,
+                lastModified: probe.lastModified,
+                acceptRanges: probe.acceptRanges,
+                contentDisposition: probe.contentDisposition,
+                contentRange: nil,
+                httpStatus: 206
             ),
             bytesWritten: size,
             segmentCount: segments,

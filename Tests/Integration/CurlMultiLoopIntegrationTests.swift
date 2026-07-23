@@ -69,8 +69,7 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
         let url = "http://127.0.0.1:\(port)/fixtures/ok"
         let outcome = try SegmentedTransfer.downloadHTTP(
             url: url,
-            partialURL: partial,
-            useCurlMulti: true
+            partialURL: partial
         )
         XCTAssertEqual(outcome.segmentCount, 2)
         XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.fixtureBody.count))

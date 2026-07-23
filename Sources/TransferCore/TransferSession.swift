@@ -8,6 +8,16 @@ import TransferCurlBridge
 /// Single-stream and ranged transfer orchestration over the pinned libcurl stack
 /// (FR-TRN-001…009 foundation). Multi-socket adaptive segmentation builds on this.
 public enum TransferCore {
+    public struct HTTPHeader: Sendable, Equatable {
+        public var name: String
+        public var value: String
+
+        public init(name: String, value: String) {
+            self.name = name
+            self.value = value
+        }
+    }
+
     public struct DownloadOptions: Sendable, Equatable {
         public var connectTimeoutMilliseconds: Int
         public var transferTimeoutMilliseconds: Int
@@ -18,6 +28,10 @@ public enum TransferCore {
         public var proxyURL: String?
         /// Netscape cookie jar path for CURLOPT_COOKIEFILE / CURLOPT_COOKIEJAR.
         public var cookieJarPath: String?
+        /// Validated custom request headers (FR-TRN-005).
+        public var extraHeaders: [HTTPHeader]
+        /// Soft cap in bytes/second; `0` means unlimited (FR-TRN-011).
+        public var maxBytesPerSecond: Int64
 
         public init(
             connectTimeoutMilliseconds: Int = 15000,
@@ -25,7 +39,9 @@ public enum TransferCore {
             maxRedirects: Int = 10,
             userpwd: String? = nil,
             proxyURL: String? = nil,
-            cookieJarPath: String? = nil
+            cookieJarPath: String? = nil,
+            extraHeaders: [HTTPHeader] = [],
+            maxBytesPerSecond: Int64 = 0
         ) {
             self.connectTimeoutMilliseconds = connectTimeoutMilliseconds
             self.transferTimeoutMilliseconds = transferTimeoutMilliseconds
@@ -33,6 +49,14 @@ public enum TransferCore {
             self.userpwd = userpwd
             self.proxyURL = proxyURL
             self.cookieJarPath = cookieJarPath
+            self.extraHeaders = extraHeaders
+            self.maxBytesPerSecond = maxBytesPerSecond
+        }
+
+        /// Newline-separated `Name: Value` lines for CURLOPT_HTTPHEADER.
+        public var extraHeadersCurlPayload: String? {
+            guard !extraHeaders.isEmpty else { return nil }
+            return extraHeaders.map { "\($0.name): \($0.value)" }.joined(separator: "\n")
         }
     }
 
@@ -262,47 +286,61 @@ public enum TransferCore {
         let transfer = Int(options.transferTimeoutMilliseconds)
         let redirects = Int(options.maxRedirects)
         let abortPtr: UnsafeMutablePointer<Int32>? = abortFlag.map(\.pointer)
-        return withProgressContext(onProgress) { progressCtx in
+        let governor: SyncBandwidthGovernor? = options.maxBytesPerSecond > 0
+            ? SyncBandwidthGovernor(bytesPerSecond: options.maxBytesPerSecond)
+            : nil
+        let gatedProgress: ProgressHandler? = {
+            guard let governor else { return onProgress }
+            return { written in
+                governor.noteProgress(totalWritten: written)
+                onProgress?(written)
+            }
+        }()
+        return withProgressContext(gatedProgress) { progressCtx in
             url.withCString { urlC in
                 withOptionalCString(options.userpwd) { userpwdC in
                     withOptionalCString(options.proxyURL) { proxyC in
                         withOptionalCString(options.cookieJarPath) { cookieC in
-                            if let rangeHeader {
-                                return rangeHeader.withCString { rangeC in
-                                    DMCurlEasyDownloadToFD(
-                                        urlC,
-                                        fd,
-                                        curl_off_t(fileOffset),
-                                        rangeC,
-                                        connect,
-                                        transfer,
-                                        redirects,
-                                        abortPtr,
-                                        progressCtx.callback,
-                                        progressCtx.userdata,
-                                        userpwdC,
-                                        proxyC,
-                                        cookieC,
-                                        &result
-                                    )
+                            withOptionalCString(options.extraHeadersCurlPayload) { headersC in
+                                if let rangeHeader {
+                                    return rangeHeader.withCString { rangeC in
+                                        DMCurlEasyDownloadToFD(
+                                            urlC,
+                                            fd,
+                                            curl_off_t(fileOffset),
+                                            rangeC,
+                                            connect,
+                                            transfer,
+                                            redirects,
+                                            abortPtr,
+                                            progressCtx.callback,
+                                            progressCtx.userdata,
+                                            userpwdC,
+                                            proxyC,
+                                            cookieC,
+                                            headersC,
+                                            &result
+                                        )
+                                    }
                                 }
+                                return DMCurlEasyDownloadToFD(
+                                    urlC,
+                                    fd,
+                                    curl_off_t(fileOffset),
+                                    nil,
+                                    connect,
+                                    transfer,
+                                    redirects,
+                                    abortPtr,
+                                    progressCtx.callback,
+                                    progressCtx.userdata,
+                                    userpwdC,
+                                    proxyC,
+                                    cookieC,
+                                    headersC,
+                                    &result
+                                )
                             }
-                            return DMCurlEasyDownloadToFD(
-                                urlC,
-                                fd,
-                                curl_off_t(fileOffset),
-                                nil,
-                                connect,
-                                transfer,
-                                redirects,
-                                abortPtr,
-                                progressCtx.callback,
-                                progressCtx.userdata,
-                                userpwdC,
-                                proxyC,
-                                cookieC,
-                                &result
-                            )
                         }
                     }
                 }

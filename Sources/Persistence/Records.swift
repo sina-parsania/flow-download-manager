@@ -257,3 +257,47 @@ public struct SegmentRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         self.rollingThroughput = rollingThroughput
     }
 }
+
+public struct ProjectRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "projects"
+    public var id: String
+    public var name: String
+    public var colorRole: String?
+    public var defaultDestinationProfileID: String?
+
+    public init(
+        id: String,
+        name: String,
+        colorRole: String?,
+        defaultDestinationProfileID: String?
+    ) {
+        self.id = id
+        self.name = name
+        self.colorRole = colorRole
+        self.defaultDestinationProfileID = defaultDestinationProfileID
+    }
+}
+
+public struct TagRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "tags"
+    public var id: String
+    public var name: String
+    public var nameFold: String
+
+    public init(id: String, name: String, nameFold: String) {
+        self.id = id
+        self.name = name
+        self.nameFold = nameFold
+    }
+}
+
+public struct JobTagRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "job_tags"
+    public var jobID: String
+    public var tagID: String
+
+    public init(jobID: String, tagID: String) {
+        self.jobID = jobID
+        self.tagID = tagID
+    }
+}

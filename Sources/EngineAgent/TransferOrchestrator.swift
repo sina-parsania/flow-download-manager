@@ -294,6 +294,14 @@ public actor TransferOrchestrator {
             log.info("job completed id=\(jobID, privacy: .public)")
         } catch TransferCore.TransferError.aborted {
             await handleAbort(jobID: jobID)
+        } catch is HeaderValidator.ParseError {
+            _ = try? JobRepository.updateJobState(
+                database: database, id: jobID, state: "failed",
+                terminalReason: "dependencyProtocolMismatch", expectedRevision: nil
+            )
+            progressLedger.remove(jobID)
+            attemptByJob[jobID] = nil
+            log.error("job rejected invalid headers id=\(jobID, privacy: .public)")
         } catch {
             await handleFailure(jobID: jobID, error: error)
         }
@@ -320,6 +328,10 @@ public actor TransferOrchestrator {
                 profileID: cookieID,
                 applicationSupportRoot: applicationSupportRoot
             )
+        }
+        let parsedHeaders = try HeaderValidator.parseExtraHeadersJSON(details.customHeadersJSON)
+        options.extraHeaders = parsedHeaders.map {
+            TransferCore.HTTPHeader(name: $0.name, value: $0.value)
         }
         return options
     }

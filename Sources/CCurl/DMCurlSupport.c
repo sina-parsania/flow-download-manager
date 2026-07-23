@@ -81,6 +81,43 @@ static char *DMCurlDupCString(const char *value) {
     return DMCurlDupRange(value, strlen(value));
 }
 
+/// Builds a curl_slist from newline-separated "Name: Value" lines. Skips blanks.
+static struct curl_slist *DMCurlBuildHeaderList(const char *extraHeaders) {
+    if (extraHeaders == NULL || extraHeaders[0] == '\0') {
+        return NULL;
+    }
+    struct curl_slist *list = NULL;
+    const char *cursor = extraHeaders;
+    while (*cursor != '\0') {
+        const char *lineStart = cursor;
+        while (*cursor != '\0' && *cursor != '\n' && *cursor != '\r') {
+            cursor++;
+        }
+        size_t length = (size_t)(cursor - lineStart);
+        while (length > 0 && (lineStart[length - 1] == ' ' || lineStart[length - 1] == '\t')) {
+            length--;
+        }
+        if (length > 0) {
+            char *line = DMCurlDupRange(lineStart, length);
+            if (line == NULL) {
+                curl_slist_free_all(list);
+                return NULL;
+            }
+            struct curl_slist *next = curl_slist_append(list, line);
+            free(line);
+            if (next == NULL) {
+                curl_slist_free_all(list);
+                return NULL;
+            }
+            list = next;
+        }
+        while (*cursor == '\n' || *cursor == '\r') {
+            cursor++;
+        }
+    }
+    return list;
+}
+
 static void DMCurlAssignHeader(char **slot, const char *valueStart, size_t valueLength) {
     if (slot == NULL) {
         return;
@@ -217,6 +254,7 @@ CURLcode DMCurlEasyDownloadToFD(
     const char *userpwd,
     const char *proxyURL,
     const char *cookieJarPath,
+    const char *extraHeaders,
     DMCurlDownloadResult *out
 ) {
     if (url == NULL || fd < 0 || out == NULL) {
@@ -242,6 +280,7 @@ CURLcode DMCurlEasyDownloadToFD(
         .progressUserdata = progressUserdata
     };
     DMCurlHeaderCtx headerCtx = {0};
+    struct curl_slist *headerList = DMCurlBuildHeaderList(extraHeaders);
 
     curl_easy_setopt(easy, CURLOPT_URL, url);
     curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
@@ -274,6 +313,9 @@ CURLcode DMCurlEasyDownloadToFD(
     if (cookieJarPath != NULL && cookieJarPath[0] != '\0') {
         curl_easy_setopt(easy, CURLOPT_COOKIEFILE, cookieJarPath);
         curl_easy_setopt(easy, CURLOPT_COOKIEJAR, cookieJarPath);
+    }
+    if (headerList != NULL) {
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headerList);
     }
 
     CURLcode code = curl_easy_perform(easy);
@@ -310,6 +352,7 @@ CURLcode DMCurlEasyDownloadToFD(
     out->contentDisposition = headerCtx.contentDisposition;
     out->contentRange = headerCtx.contentRange;
 
+    curl_slist_free_all(headerList);
     curl_easy_cleanup(easy);
     return out->code;
 }
@@ -324,6 +367,7 @@ struct DMCurlEasyDownload {
     char *userpwdCopy;
     char *proxyURLCopy;
     char *cookieJarPathCopy;
+    struct curl_slist *headerList;
 };
 
 static char *DMCurlDupOrNull(const char *value) {
@@ -344,7 +388,8 @@ static void DMCurlApplyEasyDownloadOptions(
     long maxRedirects,
     const char *userpwd,
     const char *proxyURL,
-    const char *cookieJarPath
+    const char *cookieJarPath,
+    struct curl_slist *headerList
 ) {
     curl_easy_setopt(easy, CURLOPT_URL, url);
     curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
@@ -377,6 +422,9 @@ static void DMCurlApplyEasyDownloadOptions(
     if (cookieJarPath != NULL && cookieJarPath[0] != '\0') {
         curl_easy_setopt(easy, CURLOPT_COOKIEFILE, cookieJarPath);
         curl_easy_setopt(easy, CURLOPT_COOKIEJAR, cookieJarPath);
+    }
+    if (headerList != NULL) {
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headerList);
     }
 }
 
@@ -432,7 +480,8 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
     void *progressUserdata,
     const char *userpwd,
     const char *proxyURL,
-    const char *cookieJarPath
+    const char *cookieJarPath,
+    const char *extraHeaders
 ) {
     if (url == NULL || fd < 0) {
         return NULL;
@@ -450,6 +499,7 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
     download->userpwdCopy = DMCurlDupOrNull(userpwd);
     download->proxyURLCopy = DMCurlDupOrNull(proxyURL);
     download->cookieJarPathCopy = DMCurlDupOrNull(cookieJarPath);
+    download->headerList = DMCurlBuildHeaderList(extraHeaders);
 
     download->writeCtx.fd = fd;
     download->writeCtx.offset = fileOffset;
@@ -470,7 +520,8 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
         maxRedirects,
         download->userpwdCopy,
         download->proxyURLCopy,
-        download->cookieJarPathCopy
+        download->cookieJarPathCopy,
+        download->headerList
     );
     return download;
 }
@@ -513,6 +564,7 @@ void DMCurlEasyDownloadFinish(
     free(download->userpwdCopy);
     free(download->proxyURLCopy);
     free(download->cookieJarPathCopy);
+    curl_slist_free_all(download->headerList);
     free(download);
 }
 

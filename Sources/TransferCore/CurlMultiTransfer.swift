@@ -27,7 +27,8 @@ public extension TransferCore {
                 abortFlag: abortFlag.map(\.pointer),
                 userpwd: options.userpwd,
                 proxyURL: options.proxyURL,
-                cookieJarPath: options.cookieJarPath
+                cookieJarPath: options.cookieJarPath,
+                extraHeadersPayload: options.extraHeadersCurlPayload
             )
         } catch let error as CurlMultiLoop.MultiError {
             switch error {

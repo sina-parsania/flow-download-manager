@@ -108,8 +108,8 @@ public final class LibraryModel: ObservableObject {
                     speedBytesPerSecond: job.speedBytesPerSecond,
                     etaSeconds: nil,
                     categoryKey: job.categoryKey,
-                    projectName: nil,
-                    tagNames: []
+                    projectName: job.projectName,
+                    tagNames: job.tagNames
                 )
             }
             notifyTerminalTransitions(from: rows, to: mapped)

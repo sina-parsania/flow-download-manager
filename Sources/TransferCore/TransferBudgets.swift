@@ -91,3 +91,61 @@ public actor BandwidthGovernor {
         tokens = min(Double(bytesPerSecond), tokens + seconds * Double(bytesPerSecond))
     }
 }
+
+/// Synchronous token bucket for the libcurl write/progress path (FR-TRN-011).
+/// Downloads run on background threads; use `Thread.sleep` rather than async.
+public final class SyncBandwidthGovernor: @unchecked Sendable {
+    private let lock = NSLock()
+    private let bytesPerSecond: Int64
+    private var tokens: Double
+    private var lastRefill: TimeInterval
+    private var lastReportedWritten: Int64 = 0
+
+    public init(bytesPerSecond: Int64) {
+        self.bytesPerSecond = max(0, bytesPerSecond)
+        tokens = Double(max(0, bytesPerSecond))
+        lastRefill = ProcessInfo.processInfo.systemUptime
+    }
+
+    /// Consume an absolute byte delta (e.g. from a write callback chunk).
+    public func consume(bytes: Int64) {
+        guard bytesPerSecond > 0, bytes > 0 else { return }
+        lock.lock()
+        refillLocked()
+        let needed = Double(bytes)
+        if tokens >= needed {
+            tokens -= needed
+            lock.unlock()
+            return
+        }
+        let deficit = needed - tokens
+        tokens = 0
+        let sleepSeconds = deficit / Double(bytesPerSecond)
+        lastRefill = ProcessInfo.processInfo.systemUptime
+        lock.unlock()
+        if sleepSeconds > 0 {
+            Thread.sleep(forTimeInterval: min(sleepSeconds, 30))
+        }
+    }
+
+    /// Progress callbacks report cumulative bytes; convert to deltas then consume.
+    public func noteProgress(totalWritten: Int64) {
+        guard bytesPerSecond > 0 else { return }
+        lock.lock()
+        guard totalWritten > lastReportedWritten else {
+            lock.unlock()
+            return
+        }
+        let delta = totalWritten - lastReportedWritten
+        lastReportedWritten = totalWritten
+        lock.unlock()
+        consume(bytes: delta)
+    }
+
+    private func refillLocked() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let seconds = max(0, now - lastRefill)
+        lastRefill = now
+        tokens = min(Double(bytesPerSecond), tokens + seconds * Double(bytesPerSecond))
+    }
+}

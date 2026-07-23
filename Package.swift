@@ -47,6 +47,8 @@ let package = Package(
         .library(name: "SharedSecurity", targets: ["SharedSecurity"]),
         .library(name: "TransferCurlBridge", targets: ["TransferCurlBridge"]),
         .library(name: "TransferCore", targets: ["TransferCore"]),
+        .library(name: "TorrentCore", targets: ["TorrentCore"]),
+        .library(name: "MediaIsolation", targets: ["MediaIsolation"]),
         .library(name: "EngineAgent", targets: ["EngineAgent"]),
         .library(name: "Presentation", targets: ["Presentation"]),
         .library(name: "TestFaultService", targets: ["TestFaultService"]),
@@ -93,6 +95,18 @@ let package = Package(
             name: "TransferCore",
             dependencies: ["TransferCurlBridge", "CCurl"],
             path: "Sources/TransferCore",
+            swiftSettings: strict
+        ),
+
+        .target(
+            name: "TorrentCore",
+            path: "Sources/TorrentCore",
+            swiftSettings: strict
+        ),
+
+        .target(
+            name: "MediaIsolation",
+            path: "Sources/MediaIsolation",
             swiftSettings: strict
         ),
 

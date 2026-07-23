@@ -95,6 +95,20 @@ incomplete-work-scan: ## Fail on banned incomplete-work / unsafe patterns in fir
 verify-fast: format-check lint build-debug test-unit incomplete-work-scan ## Fast local gate
 	@echo "verify-fast: OK"
 
+## ----- Release rehearsal (Phase 5 local) -----
+
+.PHONY: release-sbom
+release-sbom: ## Write dependency inventory under Artifacts/release/
+	@Scripts/release/generate-sbom.sh
+
+.PHONY: release-dmg-unsigned
+release-dmg-unsigned: ## Build unsigned Release DMG (no signing/notarization)
+	@Scripts/release/build-dmg.sh
+
+.PHONY: release-notarize
+release-notarize: ## Notarize a signed DMG (BLOCKED without credentials)
+	@Scripts/release/notarize.sh
+
 ## ----- Complete stable gate -----
 
 .PHONY: test-integration

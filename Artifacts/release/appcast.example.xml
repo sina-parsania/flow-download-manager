@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Example Sparkle 2 appcast. Replace EdDSA signature, file URL, and length
+  before publishing. Phase 5 requires human approval before any GitHub Release.
+-->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Download Manager</title>
+    <item>
+      <title>Version 1.0.0</title>
+      <pubDate>Thu, 01 Jan 2026 00:00:00 +0000</pubDate>
+      <enclosure
+        url="https://example.invalid/releases/DownloadManager-1.0.0.dmg"
+        sparkle:version="1"
+        sparkle:shortVersionString="1.0.0"
+        length="0"
+        type="application/octet-stream"
+        sparkle:edSignature="REPLACE_WITH_EDDSA_SIGNATURE" />
+    </item>
+  </channel>
+</rss>

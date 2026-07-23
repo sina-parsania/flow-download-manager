@@ -150,6 +150,10 @@ targets:
       - package: DownloadKit
         product: TransferCore
       - package: DownloadKit
+        product: TorrentCore
+      - package: DownloadKit
+        product: MediaIsolation
+      - package: DownloadKit
         product: Application
       - package: GRDB
         product: GRDB

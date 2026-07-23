@@ -1,0 +1,8 @@
+{
+  "name": "yt-dlp",
+  "version": "2026.03.17",
+  "license": "Unlicense",
+  "purpose": "Phase 3 media extraction; binary not vendored until capability gate",
+  "fetch": "https://github.com/yt-dlp/yt-dlp/releases",
+  "status": "pin-declared-not-bundled"
+}

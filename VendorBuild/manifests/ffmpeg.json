@@ -1,0 +1,7 @@
+{
+  "name": "ffmpeg",
+  "version": "7.1.1",
+  "license": "LGPL-2.1-or-later / GPL-2.0-or-later (build dependent)",
+  "purpose": "Phase 3 remux/extract; binary not vendored until capability gate",
+  "status": "pin-declared-not-bundled"
+}

@@ -165,8 +165,9 @@ fi
 
 echo "Mounting DMG…"
 attach_out="$(hdiutil attach "${WORKDIR}/flow.dmg" -nobrowse -readonly)"
-MOUNTPOINT="$(printf '%s\n' "$attach_out" | awk '/\/Volumes\// {print $NF}' | tail -n1)"
-[[ -d "${MOUNTPOINT}" ]] || die "failed to mount DMG"
+# Volume names may contain spaces — take everything from /Volumes/ onward.
+MOUNTPOINT="$(printf '%s\n' "$attach_out" | sed -n 's|.*\(/Volumes/.*\)|\1|p' | tail -n1)"
+[[ -d "${MOUNTPOINT}" ]] || die "failed to mount DMG (parsed mount point: '${MOUNTPOINT:-<empty>}')"
 
 SRC_APP=""
 if [[ -d "${MOUNTPOINT}/${APP_BUNDLE_NAME}" ]]; then

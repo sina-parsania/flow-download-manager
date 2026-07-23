@@ -308,7 +308,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             case .resume:
                 newState = "queued"
                 reason = nil
-                Task { await services.orchestrator?.clearControl(jobID: request.jobID) }
+                Task { await services.orchestrator?.requestResume(jobID: request.jobID) }
                 Task { await services.orchestrator?.start() }
             case .cancel:
                 newState = "cancelled"
@@ -317,7 +317,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             case .retry:
                 newState = "queued"
                 reason = nil
-                Task { await services.orchestrator?.clearControl(jobID: request.jobID) }
+                Task { await services.orchestrator?.requestResume(jobID: request.jobID) }
                 Task { await services.orchestrator?.start() }
             case .restart:
                 // Wipe partial + clear identity size, then requeue (FR restart-from-scratch).
@@ -343,7 +343,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 Task { await services.orchestrator?.clearProgress(jobID: request.jobID) }
                 newState = "queued"
                 reason = nil
-                Task { await services.orchestrator?.clearControl(jobID: request.jobID) }
+                Task { await services.orchestrator?.requestResume(jobID: request.jobID) }
                 Task { await services.orchestrator?.start() }
             }
             let revision = try JobRepository.updateJobState(

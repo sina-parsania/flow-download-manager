@@ -21,6 +21,9 @@ public actor TransferOrchestrator {
     private var isRunning = false
     private var cancelledJobIDs: Set<String> = []
     private var pausedJobIDs: Set<String> = []
+    /// When a pause is in-flight and the user resumes, finish the abort then requeue
+    /// instead of clearing the abort flag (which left transfers running while UI said queued).
+    private var resumeAfterAbort: Set<String> = []
     private var abortFlags: [String: TransferAbortFlag] = [:]
     private var attemptByJob: [String: Int] = [:]
     private var sleepAssertions: [String: AnyObject] = [:]
@@ -83,18 +86,33 @@ public actor TransferOrchestrator {
     public func requestCancel(jobID: String) {
         cancelledJobIDs.insert(jobID)
         pausedJobIDs.remove(jobID)
+        resumeAfterAbort.remove(jobID)
         abortFlags[jobID]?.requestAbort()
     }
 
     public func requestPause(jobID: String) {
         pausedJobIDs.insert(jobID)
+        resumeAfterAbort.remove(jobID)
         abortFlags[jobID]?.requestAbort()
+    }
+
+    public func requestResume(jobID: String) {
+        cancelledJobIDs.remove(jobID)
+        pausedJobIDs.remove(jobID)
+        if abortFlags[jobID] != nil {
+            // Transfer still running (often mid-pause). Keep abort asserted and
+            // requeue once the in-flight call returns — do not reset the flag.
+            resumeAfterAbort.insert(jobID)
+            abortFlags[jobID]?.requestAbort()
+        } else {
+            resumeAfterAbort.remove(jobID)
+        }
     }
 
     public func clearControl(jobID: String) {
         cancelledJobIDs.remove(jobID)
         pausedJobIDs.remove(jobID)
-        abortFlags[jobID]?.reset()
+        // Intentionally do not reset abortFlags — that races with in-flight curl.
     }
 
     public func clearProgress(jobID: String) {
@@ -136,7 +154,9 @@ public actor TransferOrchestrator {
             return
         }
         defer {
-            Task { await budget.endJob() }
+            // Detached so endJob is not stuck behind a blocking curl call on this actor.
+            let budget = self.budget
+            Task.detached { await budget.endJob() }
             abortFlags[jobID] = nil
             endSleepAssertion(for: jobID)
         }
@@ -214,21 +234,24 @@ public actor TransferOrchestrator {
                 try await Task.sleep(nanoseconds: 200_000_000)
                 return
             }
-            defer { Task { await budget.releaseSocket(host: host) } }
+            defer {
+                let budget = self.budget
+                let hostToRelease = host
+                Task.detached { await budget.releaseSocket(host: hostToRelease) }
+            }
 
             let options = try buildDownloadOptions(from: details)
             let hostHint = try? HostObservationRepository.get(database: database, host: host)
 
-            let outcome = try SegmentedTransfer.downloadHTTP(
+            let outcome = try await Self.downloadOffActor(
                 url: details.canonicalURL,
                 partialURL: partial,
                 options: options,
                 abortFlag: abort,
+                hostMaxSegments: hostHint?.maxSegments,
                 onProgress: { bytes in
                     Task { await self.recordProgress(jobID: jobID, bytes: bytes, total: nil) }
-                },
-                preferResume: true,
-                hostMaxSegments: hostHint?.maxSegments
+                }
             )
 
             if cancelledJobIDs.contains(jobID) || abort.isSet && cancelledJobIDs.contains(jobID) {
@@ -405,7 +428,18 @@ public actor TransferOrchestrator {
                 terminalReason: "userCancelled", expectedRevision: nil
             )
             cancelledJobIDs.remove(jobID)
+            resumeAfterAbort.remove(jobID)
             progressLedger.remove(jobID)
+            return
+        }
+        if resumeAfterAbort.contains(jobID) {
+            resumeAfterAbort.remove(jobID)
+            pausedJobIDs.remove(jobID)
+            _ = try? JobRepository.updateJobState(
+                database: database, id: jobID, state: "queued",
+                terminalReason: nil, expectedRevision: nil
+            )
+            log.info("job requeued after abort id=\(jobID, privacy: .public)")
             return
         }
         _ = try? JobRepository.updateJobState(
@@ -414,6 +448,28 @@ public actor TransferOrchestrator {
         )
         pausedJobIDs.remove(jobID)
         log.info("job paused id=\(jobID, privacy: .public)")
+    }
+
+    /// Blocking libcurl work must not sit on the orchestrator actor (pauses pump).
+    private nonisolated static func downloadOffActor(
+        url: String,
+        partialURL: URL,
+        options: TransferCore.DownloadOptions,
+        abortFlag: TransferAbortFlag,
+        hostMaxSegments: Int?,
+        onProgress: @escaping TransferCore.ProgressHandler
+    ) async throws -> SegmentedTransfer.Outcome {
+        try await Task.detached(priority: .utility) {
+            try SegmentedTransfer.downloadHTTP(
+                url: url,
+                partialURL: partialURL,
+                options: options,
+                abortFlag: abortFlag,
+                onProgress: onProgress,
+                preferResume: true,
+                hostMaxSegments: hostMaxSegments
+            )
+        }.value
     }
 
     private func handleFailure(jobID: String, error: Error) async {

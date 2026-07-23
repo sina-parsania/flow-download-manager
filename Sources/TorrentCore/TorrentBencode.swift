@@ -79,12 +79,28 @@ public enum TorrentBencode {
                 } else {
                     path = "file"
                 }
-                if path.contains("..") || path.hasPrefix("/") { continue }
+                guard isSafeRelativePath(path) else { continue }
                 files.append(TorrentFileEntry(path: path, length: length))
             }
         }
-        let total = files.reduce(Int64(0)) { $0 + $1.length }
-        return TorrentMetadata(name: name, pieceLength: pieceLength, files: files, totalLength: total)
+        // Reject case-folding collisions on Apple filesystems (FR-P2P-007).
+        var seenFolded: Set<String> = []
+        var uniqueFiles: [TorrentFileEntry] = []
+        for entry in files {
+            let folded = entry.path.lowercased()
+            guard seenFolded.insert(folded).inserted else { continue }
+            uniqueFiles.append(entry)
+        }
+        let total = uniqueFiles.reduce(Int64(0)) { $0 + $1.length }
+        return TorrentMetadata(name: name, pieceLength: pieceLength, files: uniqueFiles, totalLength: total)
+    }
+
+    /// Relative POSIX-style paths only: no absolute, no `..`, no empty segments, no NUL.
+    public static func isSafeRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\0") else { return false }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return false }
+        return true
     }
 
     private static func parseValue(_ data: Data, index: inout Data.Index) throws -> Value {

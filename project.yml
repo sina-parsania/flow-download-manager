@@ -82,10 +82,20 @@ targets:
           copyFiles:
             destination: wrapper
             subpath: Contents/Library/LaunchAgents
+      - path: Resources/NativeMessaging/org.downloadmanager.local.ChromeNativeHost.json
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: NativeMessaging
     dependencies:
       - package: DownloadKit
         product: Presentation
       - target: DownloadEngineAgent
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+      - target: ChromeNativeHost
         embed: true
         codeSign: true
         copy:

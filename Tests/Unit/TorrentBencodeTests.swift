@@ -20,4 +20,24 @@ final class TorrentBencodeTests: XCTestCase {
         XCTAssertTrue(meta.files.isEmpty)
         XCTAssertEqual(meta.totalLength, 0)
     }
+
+    func testIsSafeRelativePath() {
+        XCTAssertTrue(TorrentBencode.isSafeRelativePath("film.mp4"))
+        XCTAssertTrue(TorrentBencode.isSafeRelativePath("dir/film.mp4"))
+        XCTAssertFalse(TorrentBencode.isSafeRelativePath("../etc/passwd"))
+        XCTAssertFalse(TorrentBencode.isSafeRelativePath("/abs"))
+        XCTAssertFalse(TorrentBencode.isSafeRelativePath("a//b"))
+        XCTAssertFalse(TorrentBencode.isSafeRelativePath("a/./b"))
+    }
+
+    func testCaseFoldCollisionKeepsFirst() throws {
+        let data = Data(
+            "d4:infod4:name3:set5:filesld6:lengthi10e4:pathl1:Aeed6:lengthi20e4:pathl1:aeeeee"
+                .utf8
+        )
+        let meta = try TorrentBencode.metadata(fromTorrentFile: data)
+        XCTAssertEqual(meta.files.count, 1)
+        XCTAssertEqual(meta.files.first?.path, "A")
+        XCTAssertEqual(meta.totalLength, 10)
+    }
 }

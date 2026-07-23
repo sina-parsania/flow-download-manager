@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Download Manager Companion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Send links to the local Download Manager native host.",
   "permissions": [
     "contextMenus",
     "nativeMessaging",
     "activeTab",
-    "tabs"
+    "tabs",
+    "storage",
+    "downloads"
   ],
   "background": {
     "service_worker": "background.js",

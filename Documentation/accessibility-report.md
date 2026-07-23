@@ -1,39 +1,31 @@
-# Accessibility report — Phase 0
+# Accessibility report — Phase 1 automated lane
 
-Status: foundation in place; manual VoiceOver/keyboard scripts run on an interactive
-UI lane (`05-quality-testing-release-gates.md` §9, `03-design-system-ui-ux.md` §14).
+Status: automated accessibility foundation expanded for Phase 1 controls;
+interactive VoiceOver/keyboard scripts still require a human UI lane before
+claiming Phase 1 COMPLETE.
 
-## Automated foundation (present in Phase 0)
+## Automated foundation (verified in source)
 
-- **Labels on every actionable/informative element.** Sidebar filters, engine
-  status badge, table cells (status, name+host, progress, speed, ETA, size,
-  category), inspector fields, and the Add sheet all set `accessibilityLabel`.
-  Decorative symbols are hidden (`accessibilityHidden`).
-- **Table rows** expose name, state, progress, speed, ETA and category through
-  per-cell labels (`JobColumn`), matching the §14 requirement.
-- **Colour is supplemental.** Status is conveyed by symbol + text; the status
-  colour (`JobColumn.color(for:)`) never carries meaning alone.
-- **Keyboard.** Primary actions have shortcuts surfaced in the menu bar:
-  ⌘N Add, ⌥⌘I Inspector, ⌘F Search (via `.searchable`), ⇧⌘R refresh engine status.
-- **Reduce Motion / Transparency.** The progress cell never animates; the
-  appearance adapter uses system materials/glass which honour Reduce Transparency
-  automatically. No continuous decorative motion is used.
-- **Monospaced digits** for rates/bytes/time keep numeric columns legible and
-  stable.
+- Library table cells keep per-column `accessibilityLabel`s (status, name, progress,
+  speed, ETA, size, category).
+- Inspector Overview + Organization: project picker and tag toggles labeled.
+- Settings: ZIP auto-extract toggle, bandwidth, profiles, cookie/header editors
+  expose labels (see `SettingsView`).
+- Menu bar / bulk controls and confirmation alerts use standard AppKit/SwiftUI
+  accessibility trees.
+- Colour remains supplemental to symbol + text for job state.
 
-## Manual scripts (interactive lane — not run in the headless gate)
+## Manual scripts (still required)
 
-The following require an interactive, automation-permitted macOS session and run on
-a physical/VM UI lane before release:
+Record results under `Artifacts/validation/accessibility-report.md` when run:
 
-1. VoiceOver order: sidebar → toolbar → table → inspector.
-2. Full keyboard-only completion of: open Add sheet, change filter, toggle
-   inspector, select a row, read its details.
-3. Increase Contrast + Reduce Transparency + Reduce Motion appearance snapshots on
-   macOS 14, 15 and 26.
+1. VoiceOver order: sidebar → toolbar → table → inspector → Settings.
+2. Keyboard-only: Add sheet, filter change, inspector toggle, project/tag edit,
+   pause/resume/cancel, Settings ZIP toggle.
+3. Increase Contrast + Reduce Transparency + Reduce Motion on macOS 14/15/26.
 
 ## Status
 
-- Automated labels/roles/keyboard: **implemented** and compiled into the app.
-- Automated accessibility audit + manual VoiceOver scripts: **pending an
-  interactive UI lane** (the headless Phase 0 session cannot drive VoiceOver).
+- Automated labels/roles/keyboard affordances: **implemented**.
+- Manual VoiceOver evidence pack: **pending interactive lane** (not runnable in
+  headless `verify-fast`).

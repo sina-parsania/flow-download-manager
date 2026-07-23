@@ -4,5 +4,8 @@
   "license": "Unlicense",
   "purpose": "Phase 3 media extraction; binary not vendored until capability gate",
   "fetch": "https://github.com/yt-dlp/yt-dlp/releases",
-  "status": "pin-declared-not-bundled"
+  "status": "pin-declared-not-bundled",
+  "binaryName": "yt-dlp",
+  "downloadURL": null,
+  "sha256": null
 }

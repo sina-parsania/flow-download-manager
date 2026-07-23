@@ -25,4 +25,17 @@ final class MediaIsolationTests: XCTestCase {
             XCTAssertEqual(error as? MediaProcessLauncher.LaunchError, .executableMissing)
         }
     }
+
+    func testYtdlpProbeParsesDRM() throws {
+        let json = Data(#"{"id":"v1","title":"t","format_id":"hls-drm","_has_drm":true}"#.utf8)
+        let probe = try YtdlpJSONProbe.parse(stdout: json)
+        XCTAssertEqual(probe.mediaDecision, .rejectedDRM)
+    }
+
+    func testYtdlpProbeAllowsCleanFormat() throws {
+        let json = Data(#"{"id":"v1","title":"t","format_id":"140","is_live":false}"#.utf8)
+        let probe = try YtdlpJSONProbe.parse(stdout: json)
+        XCTAssertEqual(probe.mediaDecision, .allowed)
+        XCTAssertEqual(probe.formatID, "140")
+    }
 }

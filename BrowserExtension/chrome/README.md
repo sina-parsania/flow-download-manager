@@ -6,7 +6,7 @@ extension never touches the queue database or partial files.
 
 ## Local load
 
-1. Build `ChromeNativeHost` (Debug) and the app/agent so the Mach service is available.
+1. Build the **DownloadManager** app (embeds `ChromeNativeHost` in `Contents/MacOS/`).
 2. Open `chrome://extensions`, enable Developer mode, **Load unpacked** → this `chrome/` directory.
 3. Copy the extension ID, then:
 
@@ -14,4 +14,4 @@ extension never touches the queue database or partial files.
 DM_CHROME_EXTENSION_ID=<id> make install-chrome-native-host
 ```
 
-4. Use the toolbar popup or context menu “Send link to Download Manager”.
+4. Use popup **Check native host**, context menus (link / page / selection), or optional download takeover (off by default).

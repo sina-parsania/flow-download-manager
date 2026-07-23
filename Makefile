@@ -113,6 +113,10 @@ release-notarize: ## Notarize a signed DMG (BLOCKED without credentials)
 install-chrome-native-host: ## Register Chrome Native Messaging host (needs DM_CHROME_EXTENSION_ID)
 	@Scripts/install-chrome-native-host.sh
 
+.PHONY: vendor-media-helpers
+vendor-media-helpers: ## Fetch yt-dlp/ffmpeg when manifests include URL+sha256
+	@Scripts/VendorBuild/fetch-media-helpers.sh
+
 ## ----- Complete stable gate -----
 
 .PHONY: test-integration

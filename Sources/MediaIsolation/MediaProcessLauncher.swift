@@ -76,4 +76,17 @@ public struct MediaProcessLauncher: Sendable {
     public static func ytdlpMetadataArguments(url: String) -> [String] {
         ["--dump-json", "--no-playlist", "--no-warnings", "--", url]
     }
+
+    /// Resolves a helper under `VendorBuild/prefix/<arch>/media/bin` when present.
+    public static func vendorMediaExecutable(
+        named name: String,
+        arch: String = "arm64",
+        fileManager: FileManager = .default
+    ) -> URL? {
+        let cwd = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+        let candidate = cwd
+            .appendingPathComponent("VendorBuild/prefix/\(arch)/media/bin/\(name)", isDirectory: false)
+        guard fileManager.isExecutableFile(atPath: candidate.path) else { return nil }
+        return candidate
+    }
 }

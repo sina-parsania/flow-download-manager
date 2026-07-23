@@ -1,0 +1,85 @@
+# Download Manager dependency inventory
+# generated: 2026-07-23T09:52:52Z
+
+## Swift packages (Package.resolved)
+{
+  "originHash" : "9af6b0d07895f840276752c0dcb8915f50064471563a281a08be96d411221131",
+  "pins" : [
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift",
+      "state" : {
+        "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+        "version" : "7.11.1"
+      }
+    }
+  ],
+  "version" : 3
+}
+
+## Vendored libcurl manifest
+{
+  "component": "libcurl-stack",
+  "purpose": "Pinned reproducible arm64 networking stack for Phase 1 TransferCurlBridge",
+  "target": {
+    "arch": "arm64",
+    "platform": "macOS",
+    "deployment_target": "14.0"
+  },
+  "prefix_relative": "VendorBuild/prefix/arm64",
+  "components": [
+    {
+      "name": "openssl",
+      "version": "3.5.1",
+      "role": "TLS for libcurl and crypto backend for libssh2",
+      "spdx": "Apache-2.0",
+      "source_url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.1/openssl-3.5.1.tar.gz",
+      "sha256": "529043b15cffa5f36077a4d0af83f3de399807181d607441d734196d889b641f"
+    },
+    {
+      "name": "nghttp2",
+      "version": "1.66.0",
+      "role": "HTTP/2 for libcurl",
+      "spdx": "MIT",
+      "source_url": "https://github.com/nghttp2/nghttp2/releases/download/v1.66.0/nghttp2-1.66.0.tar.xz",
+      "sha256": "00ba1bdf0ba2c74b2a4fe6c8b1069dc9d82f82608af24442d430df97c6f9e631"
+    },
+    {
+      "name": "libssh2",
+      "version": "1.11.1",
+      "role": "SFTP for libcurl",
+      "spdx": "BSD-3-Clause",
+      "source_url": "https://www.libssh2.org/download/libssh2-1.11.1.tar.gz",
+      "sha256": "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7"
+    },
+    {
+      "name": "curl",
+      "version": "8.21.0",
+      "role": "libcurl transfer engine",
+      "spdx": "curl",
+      "source_url": "https://curl.se/download/curl-8.21.0.tar.xz",
+      "sha256": "aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6",
+      "configure_features": [
+        "OpenSSL TLS (HTTPS/FTPS) from pinned OpenSSL 3.5.1",
+        "nghttp2 HTTP/2",
+        "libssh2 SFTP",
+        "system zlib",
+        "IPv6",
+        "static library only"
+      ],
+      "explicitly_disabled": [
+        "shared library",
+        "LDAP/LDAPS",
+        "libpsl",
+        "system/Homebrew curl",
+        "Secure Transport (removed upstream in curl 8.21+)"
+      ]
+    }
+  ],
+  "link": {
+    "type": "static",
+    "frameworks": ["Security", "SystemConfiguration", "CoreFoundation"],
+    "system_libs": ["z"]
+  }
+}

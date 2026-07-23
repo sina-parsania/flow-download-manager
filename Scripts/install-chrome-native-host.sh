@@ -1,11 +1,26 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Installs the Chrome Native Messaging host manifest for local development.
+# Prefers the host embedded in DownloadManager.app when present.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST_BIN="${DM_NATIVE_HOST_PATH:-}"
 EXTENSION_ID="${DM_CHROME_EXTENSION_ID:-}"
+APP_CANDIDATES=(
+  "${ROOT}/.build/DerivedData/Build/Products/Debug/DownloadManager.app"
+  "${ROOT}/build/Debug/DownloadManager.app"
+)
+
+if [[ -z "${HOST_BIN}" ]]; then
+  for APP in "${APP_CANDIDATES[@]}"; do
+    EMBEDDED="${APP}/Contents/MacOS/ChromeNativeHost"
+    if [[ -x "${EMBEDDED}" ]]; then
+      HOST_BIN="${EMBEDDED}"
+      break
+    fi
+  done
+fi
 
 if [[ -z "${HOST_BIN}" ]]; then
   for CANDIDATE in \
@@ -20,7 +35,7 @@ if [[ -z "${HOST_BIN}" ]]; then
 fi
 
 if [[ -z "${HOST_BIN}" || ! -x "${HOST_BIN}" ]]; then
-  echo "error: set DM_NATIVE_HOST_PATH to the built ChromeNativeHost binary" >&2
+  echo "error: set DM_NATIVE_HOST_PATH or build DownloadManager / ChromeNativeHost first" >&2
   exit 1
 fi
 
@@ -45,4 +60,5 @@ doc = {
 }
 Path(r"""${DEST}""").write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 print(f"wrote {Path(r'''${DEST}''')}")
+print(f"host  {r'''${HOST_BIN}'''}")
 PY

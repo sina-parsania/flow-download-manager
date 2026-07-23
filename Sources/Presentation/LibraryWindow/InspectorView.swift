@@ -67,8 +67,14 @@ struct InspectorView: View {
                             Button("Resume") { onCommand(.resume) }
                                 .disabled(row.state != .paused)
                             Button("Cancel") { onCommand(.cancel) }
+                        }
+                        HStack {
                             Button("Retry") { onCommand(.retry) }
                                 .disabled(!(row.state == .failed || row.state == .cancelled))
+                                .help("Retry without wiping partial data")
+                            Button("Restart") { onCommand(.restart) }
+                                .disabled(!(row.state == .paused || row.state == .failed || row.state == .cancelled))
+                                .help("Restart from scratch (wipe partial)")
                         }
                         HStack {
                             Text("Priority \(row.priority)")

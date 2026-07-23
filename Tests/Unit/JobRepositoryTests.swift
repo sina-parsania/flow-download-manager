@@ -415,4 +415,41 @@ final class JobRepositoryTests: XCTestCase {
         let requeued = try JobRepository.requeueInterruptedTransfers(database: database)
         XCTAssertTrue(requeued.isEmpty)
     }
+
+    func testClearResourceIdentitySizeClearsExpectedSizeAndValidators() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [(url: "https://example.test/restart.bin", categoryStableKey: "other")]
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+
+        try JobRepository.updateResourceIdentity(
+            database: database,
+            jobID: jobID,
+            finalURL: "https://example.test/restart.bin",
+            expectedSize: 4096,
+            etag: "\"abc\"",
+            mime: "application/octet-stream"
+        )
+
+        try JobRepository.clearResourceIdentitySize(database: database, jobID: jobID)
+
+        let cleared = try database.pool.read { db -> (Int64?, String?, String?, Int) in
+            guard let job = try JobRecord.fetchOne(db, key: jobID),
+                  let resource = try ResourceRecord.fetchOne(db, key: job.resourceID)
+            else {
+                throw JobRepositoryError.jobNotFound(jobID)
+            }
+            return (resource.expectedSize, resource.finalURL, resource.strongETag, resource.identityRevision)
+        }
+        XCTAssertNil(cleared.0)
+        XCTAssertNil(cleared.1)
+        XCTAssertNil(cleared.2)
+        XCTAssertGreaterThanOrEqual(cleared.3, 2)
+    }
 }

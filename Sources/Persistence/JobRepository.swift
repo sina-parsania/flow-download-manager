@@ -467,6 +467,26 @@ public enum JobRepository {
         }
     }
 
+    /// Clears transfer identity size (and related resume validators) for a
+    /// restart-from-scratch. Bumps `identityRevision`.
+    public static func clearResourceIdentitySize(
+        database: EngineDatabase,
+        jobID: String
+    ) throws {
+        try database.pool.write { db in
+            guard let job = try JobRecord.fetchOne(db, key: jobID),
+                  var resource = try ResourceRecord.fetchOne(db, key: job.resourceID)
+            else {
+                throw JobRepositoryError.jobNotFound(jobID)
+            }
+            resource.expectedSize = nil
+            resource.finalURL = nil
+            resource.strongETag = nil
+            resource.identityRevision += 1
+            try resource.update(db)
+        }
+    }
+
     /// Sets absolute queue priority (`ORDER BY priority DESC`). Bumps revision.
     @discardableResult
     public static func setPriority(

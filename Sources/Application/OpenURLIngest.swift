@@ -4,12 +4,14 @@ import Foundation
 
 /// Pure parser for the local-dev `downloadmanager` URL scheme (FR-ING dock / URL handoff).
 /// Never starts transfers — callers only prefill the Add sheet.
+/// File drops use ``ImportTextIngest``; this type only handles the custom scheme.
 public enum OpenURLIngest {
     public static let scheme = "downloadmanager"
 
     /// Extracts download URL strings from a custom-scheme open-URL.
     /// Accepts `?url=` / repeated `url` query items, and a path that itself looks like
     /// an `http(s)` / `ftp(s)` / `sftp` URL (leading slash stripped).
+    /// File URLs return `[]` — callers should route those through ``ImportTextIngest``.
     public static func parse(_ url: URL) -> [String] {
         guard url.scheme?.lowercased() == scheme else { return [] }
 

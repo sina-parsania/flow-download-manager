@@ -108,6 +108,18 @@ targets:
             CFBundleTypeRole: Viewer
             CFBundleURLSchemes:
               - downloadmanager
+        # Finder / Dock drop of link lists onto the app icon (FR-ING).
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Plain text link list
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.plain-text
+              - public.comma-separated-values-text
+              - public.utf8-plain-text
+            CFBundleTypeExtensions:
+              - txt
+              - csv
 
   # --- Tests ---
   UnitTests:

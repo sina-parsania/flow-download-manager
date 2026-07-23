@@ -2,6 +2,7 @@
 
 import Application
 import SwiftUI
+import UniformTypeIdentifiers
 import XPCContracts
 
 /// The main library window: sidebar + AppKit-backed table + inspector
@@ -9,6 +10,7 @@ import XPCContracts
 public struct RootView: View {
     @ObservedObject private var model: LibraryModel
     @ObservedObject private var launchAgent: LaunchAgentModel
+    @State private var isDropTargeted = false
 
     public init(model: LibraryModel, launchAgent: LaunchAgentModel) {
         self.model = model
@@ -41,6 +43,17 @@ public struct RootView: View {
         .sheet(isPresented: $model.addSheetPresented) {
             AddDownloadsSheet()
                 .environmentObject(model)
+        }
+        .onDrop(of: [.fileURL, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
+            handleWindowDrop(providers)
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.accentColor, lineWidth: 3)
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
         }
         .task {
             DownloadNotificationCenter.shared.requestAuthorizationIfNeeded()
@@ -102,7 +115,15 @@ public struct RootView: View {
                 Label("Retry", systemImage: "arrow.clockwise")
             }
             .disabled(!canRetry)
-            .help("Retry selected download")
+            .help("Retry selected download (keep partial)")
+
+            Button {
+                Task { await model.controlSelected(.restart) }
+            } label: {
+                Label("Restart", systemImage: "arrow.counterclockwise")
+            }
+            .disabled(!canRestart)
+            .help("Restart selected download from scratch (wipe partial)")
 
             Button {
                 Task { await model.pauseAll() }
@@ -162,6 +183,11 @@ public struct RootView: View {
         return state == .failed || state == .cancelled
     }
 
+    private var canRestart: Bool {
+        guard let state = model.selectedRow?.state else { return false }
+        return state == .paused || state == .failed || state == .cancelled
+    }
+
     private var canRemove: Bool {
         guard let state = model.selectedRow?.state else { return false }
         return DeleteJobGuard.allowsDelete(state)
@@ -169,6 +195,37 @@ public struct RootView: View {
 
     private var hasFailed: Bool {
         model.rows.contains { DeleteJobGuard.allowsClearFailed($0.state) }
+    }
+
+    private func handleWindowDrop(_ providers: [NSItemProvider]) -> Bool {
+        var handled = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    let url: URL? = if let data = item as? Data {
+                        URL(dataRepresentation: data, relativeTo: nil)
+                    } else if let url = item as? URL {
+                        url
+                    } else {
+                        nil
+                    }
+                    guard let url, ImportTextIngest.isImportableFile(url) else { return }
+                    Task { @MainActor in
+                        model.handleDroppedFileURL(url)
+                    }
+                }
+                handled = true
+            } else if provider.canLoadObject(ofClass: String.self) {
+                _ = provider.loadObject(ofClass: String.self) { string, _ in
+                    guard let string, !string.isEmpty else { return }
+                    Task { @MainActor in
+                        model.handleDroppedText(string)
+                    }
+                }
+                handled = true
+            }
+        }
+        return handled
     }
 }
 

@@ -97,6 +97,11 @@ public actor TransferOrchestrator {
         abortFlags[jobID]?.reset()
     }
 
+    public func clearProgress(jobID: String) {
+        progressLedger.remove(jobID)
+        attemptByJob[jobID] = nil
+    }
+
     private func pump() async {
         while isRunning {
             do {

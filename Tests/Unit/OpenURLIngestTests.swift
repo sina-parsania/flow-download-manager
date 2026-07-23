@@ -33,5 +33,8 @@ final class OpenURLIngestTests: XCTestCase {
 
         let badPath = try XCTUnwrap(URL(string: "downloadmanager:///not-a-url"))
         XCTAssertEqual(OpenURLIngest.parse(badPath), [])
+
+        let fileURL = URL(fileURLWithPath: "/tmp/links.txt")
+        XCTAssertEqual(OpenURLIngest.parse(fileURL), [])
     }
 }

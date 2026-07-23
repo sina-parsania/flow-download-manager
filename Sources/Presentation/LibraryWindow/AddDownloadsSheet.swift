@@ -264,17 +264,7 @@ struct AddDownloadsSheet: View {
             if accessed { url.stopAccessingSecurityScopedResource() }
         }
         do {
-            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-            guard data.count <= 8_000_000 else {
-                statusMessage = "File exceeds the 8 MB import limit."
-                return
-            }
-            guard let text = String(data: data, encoding: .utf8)
-                ?? String(data: data, encoding: .isoLatin1)
-            else {
-                statusMessage = "Could not decode the file as text."
-                return
-            }
+            let text = try ImportTextIngest.readText(from: url)
             if input.isEmpty {
                 input = text
             } else {
@@ -282,6 +272,15 @@ struct AddDownloadsSheet: View {
             }
             extraction = URLTextExtractor.extract(from: input)
             statusMessage = "Imported \(url.lastPathComponent)."
+        } catch let error as ImportTextIngest.ReadError {
+            switch error {
+            case .exceedsSizeLimit:
+                statusMessage = "File exceeds the 8 MB import limit."
+            case .undecodable:
+                statusMessage = "Could not decode the file as text."
+            case .unsupportedExtension, .notAFileURL:
+                statusMessage = "Could not import the selected file."
+            }
         } catch {
             statusMessage = "Could not read the selected file."
         }
@@ -299,9 +298,7 @@ struct AddDownloadsSheet: View {
                     } else {
                         nil
                     }
-                    guard let url else { return }
-                    let ext = url.pathExtension.lowercased()
-                    guard ext == "txt" || ext == "csv" || ext.isEmpty else { return }
+                    guard let url, ImportTextIngest.isImportableFile(url) else { return }
                     Task { @MainActor in
                         importFile(url)
                     }

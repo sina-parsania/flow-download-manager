@@ -313,6 +313,32 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 reason = nil
                 Task { await services.orchestrator?.clearControl(jobID: request.jobID) }
                 Task { await services.orchestrator?.start() }
+            case .restart:
+                // Wipe partial + clear identity size, then requeue (FR restart-from-scratch).
+                if let details = try? JobRepository.loadJobForTransfer(
+                    database: database,
+                    id: request.jobID
+                ) {
+                    let filename = FilenameSanitizer.sanitize(details.suggestedFilename)
+                    let partial = details.destinationDirectory
+                        .appendingPathComponent("\(filename).partial")
+                    let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
+                    defer {
+                        if accessed {
+                            details.destinationDirectory.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                    try? FileManager.default.removeItem(at: partial)
+                }
+                try JobRepository.clearResourceIdentitySize(
+                    database: database,
+                    jobID: request.jobID
+                )
+                Task { await services.orchestrator?.clearProgress(jobID: request.jobID) }
+                newState = "queued"
+                reason = nil
+                Task { await services.orchestrator?.clearControl(jobID: request.jobID) }
+                Task { await services.orchestrator?.start() }
             }
             let revision = try JobRepository.updateJobState(
                 database: database,

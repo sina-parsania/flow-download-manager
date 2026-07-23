@@ -87,7 +87,28 @@ public final class LibraryModel: ObservableObject {
     }
 
     public func handleOpenURL(_ url: URL) {
+        if url.isFileURL {
+            handleDroppedFileURL(url)
+            return
+        }
         presentOpenURLLinks(OpenURLIngest.parse(url))
+    }
+
+    /// Prefills Add from a Finder/dock file open or a window drop (txt/csv).
+    public func handleDroppedFileURL(_ url: URL) {
+        do {
+            let text = try ImportTextIngest.readText(from: url)
+            presentClipboardLinks(text)
+        } catch {
+            lastErrorMessage = "Could not import the dropped file."
+        }
+    }
+
+    /// Prefills Add from plain-text drops onto the library window.
+    public func handleDroppedText(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        presentClipboardLinks(trimmed)
     }
 
     public func controlSelected(_ command: JobCommandKind) async {

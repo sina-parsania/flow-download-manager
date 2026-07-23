@@ -134,6 +134,13 @@ public final class MenuBarController: NSObject, ObservableObject {
         add.target = self
         menu.addItem(add)
         menu.addItem(.separator())
+        let pauseAll = NSMenuItem(title: "Pause All", action: #selector(pauseAllDownloads), keyEquivalent: "")
+        pauseAll.target = self
+        menu.addItem(pauseAll)
+        let resumeAll = NSMenuItem(title: "Resume All", action: #selector(resumeAllDownloads), keyEquivalent: "")
+        resumeAll.target = self
+        menu.addItem(resumeAll)
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(
             title: "Quit",
             action: #selector(NSApplication.terminate(_:)),
@@ -153,5 +160,15 @@ public final class MenuBarController: NSObject, ObservableObject {
     @objc private func addDownloads() {
         addHandler?()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func pauseAllDownloads() {
+        guard let library else { return }
+        Task { await library.pauseAll() }
+    }
+
+    @objc private func resumeAllDownloads() {
+        guard let library else { return }
+        Task { await library.resumeAll() }
     }
 }

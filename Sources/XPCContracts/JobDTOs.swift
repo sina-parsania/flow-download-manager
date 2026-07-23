@@ -356,6 +356,8 @@ public enum JobCommandKind: Int, Sendable {
     case resume = 2
     case cancel = 3
     case retry = 4
+    /// Wipe partial + clear identity size, then requeue (distinct from retry).
+    case restart = 5
 }
 
 @objc(DMJobCommandRequest)

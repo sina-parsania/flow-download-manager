@@ -32,7 +32,8 @@ public final class EngineClient: ObservableObject {
             capabilities: [
                 "enqueueBatch", "listJobs", "controlJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
-                "listOrganization", "upsertProject", "upsertTag", "setJobTags"
+                "listOrganization", "upsertProject", "upsertTag", "setJobTags",
+                "listCategoryRules", "upsertCategoryRule"
             ]
         )
         let server: ServerHello = try await withCheckedThrowingContinuation { cont in
@@ -59,14 +60,26 @@ public final class EngineClient: ObservableObject {
     public func enqueueBatch(
         source: String,
         displayName: String?,
-        items: [(url: String, categoryStableKey: String)]
+        items: [(url: String, categoryStableKey: String)],
+        credentialProfileID: String? = nil,
+        proxyProfileID: String? = nil,
+        cookieProfileID: String? = nil,
+        customHeadersJSON: String? = nil,
+        projectID: String? = nil,
+        scheduleStartAtISO8601: String? = nil
     ) async throws -> EnqueueBatchResponse {
         try await connect()
         let request = EnqueueBatchRequest(
             requestID: UUID().uuidString,
             source: source,
             displayName: displayName,
-            items: items.map { BatchURLItem(url: $0.url, categoryStableKey: $0.categoryStableKey) }
+            items: items.map { BatchURLItem(url: $0.url, categoryStableKey: $0.categoryStableKey) },
+            credentialProfileID: credentialProfileID,
+            proxyProfileID: proxyProfileID,
+            cookieProfileID: cookieProfileID,
+            customHeadersJSON: customHeadersJSON,
+            projectID: projectID,
+            scheduleStartAtISO8601: scheduleStartAtISO8601
         )
         return try await withCheckedThrowingContinuation { cont in
             guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
@@ -330,6 +343,63 @@ public final class EngineClient: ObservableObject {
                 return
             }
             proxy.setJobTags(request) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func listCategoryRules() async throws -> ListCategoryRulesResponse {
+        try await connect()
+        let requestID = UUID().uuidString
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.listCategoryRules(requestID: requestID) { response, error in
+                if let error {
+                    cont.resume(throwing: ClientError.remote(error))
+                } else if let response {
+                    cont.resume(returning: response)
+                } else {
+                    cont.resume(throwing: ClientError.decoding)
+                }
+            }
+        }
+    }
+
+    public func upsertCategoryRule(
+        predicateJSON: String,
+        categoryStableKey: String,
+        priority: Int,
+        enabled: Bool = true,
+        ruleID: String = UUID().uuidString.lowercased()
+    ) async throws -> UpsertCategoryRuleResponse {
+        try await connect()
+        let request = UpsertCategoryRuleRequest(
+            requestID: UUID().uuidString,
+            ruleID: ruleID,
+            priority: priority,
+            enabled: enabled,
+            predicateJSON: predicateJSON,
+            categoryStableKey: categoryStableKey
+        )
+        return try await withCheckedThrowingContinuation { cont in
+            guard let proxy = connection?.remoteObjectProxyWithErrorHandler({ error in
+                cont.resume(throwing: ClientError.remote(error as NSError))
+            }) as? EngineControlProtocol else {
+                cont.resume(throwing: ClientError.notConnected)
+                return
+            }
+            proxy.upsertCategoryRule(request) { response, error in
                 if let error {
                     cont.resume(throwing: ClientError.remote(error))
                 } else if let response {

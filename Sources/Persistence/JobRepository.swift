@@ -103,9 +103,21 @@ public enum JobRepository {
         database: EngineDatabase,
         source: String,
         displayName: String?,
-        items: [(url: String, categoryStableKey: String)]
+        items: [(url: String, categoryStableKey: String)],
+        credentialProfileID: String? = nil,
+        proxyProfileID: String? = nil,
+        cookieProfileID: String? = nil,
+        customHeadersJSON: String? = nil,
+        projectID: String? = nil,
+        scheduleStartAt: Date? = nil
     ) throws -> (batchID: String, jobIDs: [String]) {
         try database.pool.write { db in
+            if let projectID {
+                guard try ProjectRecord.fetchOne(db, key: projectID) != nil else {
+                    throw JobRepositoryError.unknownProject(projectID)
+                }
+            }
+
             let now = Date()
             let batchID = UUID().uuidString.lowercased()
             try BatchRecord(
@@ -115,6 +127,27 @@ public enum JobRepository {
                 originalItemCount: items.count,
                 displayName: displayName
             ).insert(db)
+
+            let sharedScheduleID: String?
+            let initialState: String
+            if let scheduleStartAt {
+                let scheduleID = UUID().uuidString.lowercased()
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                let payload = "{\"startAt\":\"\(formatter.string(from: scheduleStartAt))\"}"
+                try ScheduleRecord(
+                    id: scheduleID,
+                    recurrence: "once",
+                    timeZonePolicy: "utc",
+                    missedOccurrencePolicy: "runImmediately",
+                    constraints: payload
+                ).insert(db)
+                sharedScheduleID = scheduleID
+                initialState = "scheduled"
+            } else {
+                sharedScheduleID = nil
+                initialState = "queued"
+            }
 
             var jobIDs: [String] = []
             jobIDs.reserveCapacity(items.count)
@@ -143,17 +176,21 @@ public enum JobRepository {
                     id: jobID,
                     batchID: batchID,
                     resourceID: resourceID,
-                    state: "queued",
+                    state: initialState,
                     priority: 0,
                     queuePosition: position,
                     categoryID: categoryID,
-                    projectID: nil,
+                    projectID: projectID,
                     destinationProfileID: ProductionSeedIDs.destinationDownloads,
-                    scheduleID: nil,
+                    scheduleID: sharedScheduleID,
                     createdAt: now,
                     updatedAt: now,
                     revision: 1,
-                    terminalReason: nil
+                    terminalReason: nil,
+                    credentialProfileID: credentialProfileID,
+                    proxyProfileID: proxyProfileID,
+                    cookieProfileID: cookieProfileID,
+                    customHeadersJSON: customHeadersJSON
                 ).insert(db)
                 jobIDs.append(jobID)
                 position += 1
@@ -414,6 +451,7 @@ public enum JobRepository {
 
 public enum JobRepositoryError: Error, Equatable, Sendable {
     case unknownCategory(String)
+    case unknownProject(String)
     case jobNotFound(String)
     case revisionConflict(expected: Int, actual: Int)
 }

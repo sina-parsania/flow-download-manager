@@ -4,6 +4,7 @@ import Application
 import Domain
 import SwiftUI
 import UniformTypeIdentifiers
+import XPCContracts
 
 /// Add / review sheet: extract URLs, classify, enqueue via the agent (FR-ING).
 struct AddDownloadsSheet: View {
@@ -16,6 +17,16 @@ struct AddDownloadsSheet: View {
     @State private var isImportPresented = false
     @State private var isDropTargeted = false
 
+    @State private var credentials: [CredentialProfileSnapshot] = []
+    @State private var proxies: [ProxyProfileSnapshot] = []
+    @State private var projects: [ProjectSnapshot] = []
+    @State private var classificationRules: [CategoryRulesEngine.Rule] = []
+    @State private var selectedCredentialID = ""
+    @State private var selectedProxyID = ""
+    @State private var selectedProjectID = ""
+    @State private var useStartAt = false
+    @State private var startAt = Date().addingTimeInterval(3600)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Add Downloads")
@@ -27,7 +38,7 @@ struct AddDownloadsSheet: View {
 
             TextEditor(text: $input)
                 .font(.body.monospaced())
-                .frame(minHeight: 120)
+                .frame(minHeight: 100)
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(
@@ -47,6 +58,37 @@ struct AddDownloadsSheet: View {
                 Button("Import File…") { isImportPresented = true }
                 Spacer()
             }
+
+            Group {
+                Picker("Credential", selection: $selectedCredentialID) {
+                    Text("None").tag("")
+                    ForEach(credentials, id: \.id) { profile in
+                        Text(profile.displayName).tag(profile.id)
+                    }
+                }
+                Picker("Proxy", selection: $selectedProxyID) {
+                    Text("None").tag("")
+                    ForEach(proxies, id: \.id) { profile in
+                        Text(profile.displayName).tag(profile.id)
+                    }
+                }
+                Picker("Project", selection: $selectedProjectID) {
+                    Text("None").tag("")
+                    ForEach(projects, id: \.id) { project in
+                        Text(project.name).tag(project.id)
+                    }
+                }
+                Toggle("Start at", isOn: $useStartAt)
+                if useStartAt {
+                    DatePicker(
+                        "Start at",
+                        selection: $startAt,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .labelsHidden()
+                }
+            }
+            .disabled(isEnqueueing)
 
             if let extraction {
                 HStack(spacing: 12) {
@@ -76,7 +118,8 @@ struct AddDownloadsSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 560, height: 460)
+        .frame(width: 560, height: 580)
+        .task { await loadBindingOptions() }
         .fileImporter(
             isPresented: $isImportPresented,
             allowedContentTypes: [.plainText, .commaSeparatedText, .utf8PlainText],
@@ -100,6 +143,29 @@ struct AddDownloadsSheet: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title): \(value)")
+    }
+
+    @MainActor
+    private func loadBindingOptions() async {
+        do {
+            let profiles = try await library.engineClient.listProfiles()
+            credentials = profiles.credentials
+            proxies = profiles.proxies
+            let organization = try await library.engineClient.listOrganization()
+            projects = organization.projects
+            let rulesResponse = try await library.engineClient.listCategoryRules()
+            classificationRules = rulesResponse.rules.map {
+                CategoryRulesEngine.Rule(
+                    id: $0.id,
+                    priority: $0.priority,
+                    enabled: $0.enabled,
+                    predicateJSON: $0.predicateJSON,
+                    categoryStableKey: $0.categoryStableKey
+                )
+            }
+        } catch {
+            statusMessage = "Could not load profiles from the engine."
+        }
     }
 
     private func importFile(_ url: URL) {
@@ -176,6 +242,7 @@ struct AddDownloadsSheet: View {
         statusMessage = nil
         defer { isEnqueueing = false }
 
+        let rules = classificationRules
         let items: [(url: String, categoryStableKey: String)] = extraction.items.compactMap { item in
             guard item.status == .valid else { return nil }
             let raw = item.raw
@@ -183,7 +250,8 @@ struct AddDownloadsSheet: View {
             let classified = ClassificationEngine.classify(
                 filenameEvidence: URL(string: raw)?.lastPathComponent,
                 mimeEvidence: nil,
-                urlPath: path
+                urlPath: path,
+                rules: rules
             )
             return (raw, classified.stableKey)
         }
@@ -192,11 +260,22 @@ struct AddDownloadsSheet: View {
             return
         }
 
+        var scheduleISO: String?
+        if useStartAt {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            scheduleISO = formatter.string(from: startAt)
+        }
+
         do {
             let response = try await library.engineClient.enqueueBatch(
                 source: "paste",
                 displayName: nil,
-                items: items
+                items: items,
+                credentialProfileID: selectedCredentialID.isEmpty ? nil : selectedCredentialID,
+                proxyProfileID: selectedProxyID.isEmpty ? nil : selectedProxyID,
+                projectID: selectedProjectID.isEmpty ? nil : selectedProjectID,
+                scheduleStartAtISO8601: scheduleISO
             )
             statusMessage = "Queued \(response.acceptedCount) download(s)."
             await library.refreshFromEngine()

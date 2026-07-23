@@ -321,3 +321,178 @@ public final class SetJobTagsResponse: NSObject, NSSecureCoding, @unchecked Send
         coder.encode(jobID as NSString, forKey: "jobID")
     }
 }
+
+@objc(DMCategoryRuleSnapshot)
+public final class CategoryRuleSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let id: String
+    public let priority: Int
+    public let enabled: Bool
+    public let predicateJSON: String
+    public let categoryStableKey: String
+
+    public init(
+        id: String,
+        priority: Int,
+        enabled: Bool,
+        predicateJSON: String,
+        categoryStableKey: String
+    ) {
+        self.id = id
+        self.priority = priority
+        self.enabled = enabled
+        self.predicateJSON = predicateJSON
+        self.categoryStableKey = categoryStableKey
+    }
+
+    public required init?(coder: NSCoder) {
+        let id = coder.decodeObject(of: NSString.self, forKey: "id")
+        let predicateJSON = coder.decodeObject(of: NSString.self, forKey: "predicateJSON")
+        let categoryStableKey = coder.decodeObject(of: NSString.self, forKey: "categoryStableKey")
+        let enabled = coder.decodeBool(forKey: "enabled")
+        let priority = coder.decodeInteger(forKey: "priority")
+        guard let id, let predicateJSON, let categoryStableKey,
+              UUID(uuidString: id as String) != nil,
+              predicateJSON.length > 0, predicateJSON.length <= EngineXPC.maxPayloadStringLength,
+              categoryStableKey.length > 0, categoryStableKey.length <= 64
+        else { return nil }
+        self.id = id as String
+        self.priority = priority
+        self.enabled = enabled
+        self.predicateJSON = predicateJSON as String
+        self.categoryStableKey = categoryStableKey as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(id as NSString, forKey: "id")
+        coder.encode(priority, forKey: "priority")
+        coder.encode(enabled, forKey: "enabled")
+        coder.encode(predicateJSON as NSString, forKey: "predicateJSON")
+        coder.encode(categoryStableKey as NSString, forKey: "categoryStableKey")
+    }
+}
+
+@objc(DMListCategoryRulesResponse)
+public final class ListCategoryRulesResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let rules: [CategoryRuleSnapshot]
+
+    public init(requestID: String, rules: [CategoryRuleSnapshot]) {
+        self.requestID = requestID
+        self.rules = rules
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let rules = coder.decodeArrayOfObjects(ofClass: CategoryRuleSnapshot.self, forKey: "rules")
+        guard let requestID, let rules,
+              UUID(uuidString: requestID as String) != nil,
+              rules.count <= EngineXPC.maxCollectionCount
+        else { return nil }
+        self.requestID = requestID as String
+        self.rules = rules
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(rules as NSArray, forKey: "rules")
+    }
+}
+
+@objc(DMUpsertCategoryRuleRequest)
+public final class UpsertCategoryRuleRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let ruleID: String
+    public let priority: Int
+    public let enabled: Bool
+    public let predicateJSON: String
+    public let categoryStableKey: String
+
+    public init(
+        requestID: String,
+        ruleID: String,
+        priority: Int,
+        enabled: Bool,
+        predicateJSON: String,
+        categoryStableKey: String
+    ) {
+        self.requestID = requestID
+        self.ruleID = ruleID
+        self.priority = priority
+        self.enabled = enabled
+        self.predicateJSON = predicateJSON
+        self.categoryStableKey = categoryStableKey
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let ruleID = coder.decodeObject(of: NSString.self, forKey: "ruleID")
+        let predicateJSON = coder.decodeObject(of: NSString.self, forKey: "predicateJSON")
+        let categoryStableKey = coder.decodeObject(of: NSString.self, forKey: "categoryStableKey")
+        let enabled = coder.decodeBool(forKey: "enabled")
+        let priority = coder.decodeInteger(forKey: "priority")
+        guard let requestID, let ruleID, let predicateJSON, let categoryStableKey,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: ruleID as String) != nil,
+              predicateJSON.length > 0, predicateJSON.length <= EngineXPC.maxPayloadStringLength,
+              categoryStableKey.length > 0, categoryStableKey.length <= 64
+        else { return nil }
+        self.requestID = requestID as String
+        self.ruleID = ruleID as String
+        self.priority = priority
+        self.enabled = enabled
+        self.predicateJSON = predicateJSON as String
+        self.categoryStableKey = categoryStableKey as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(ruleID as NSString, forKey: "ruleID")
+        coder.encode(priority, forKey: "priority")
+        coder.encode(enabled, forKey: "enabled")
+        coder.encode(predicateJSON as NSString, forKey: "predicateJSON")
+        coder.encode(categoryStableKey as NSString, forKey: "categoryStableKey")
+    }
+}
+
+@objc(DMUpsertCategoryRuleResponse)
+public final class UpsertCategoryRuleResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let ruleID: String
+
+    public init(requestID: String, ruleID: String) {
+        self.requestID = requestID
+        self.ruleID = ruleID
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let ruleID = coder.decodeObject(of: NSString.self, forKey: "ruleID")
+        guard let requestID, let ruleID,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: ruleID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.ruleID = ruleID as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(ruleID as NSString, forKey: "ruleID")
+    }
+}

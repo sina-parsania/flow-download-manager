@@ -52,12 +52,37 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
     public let source: String
     public let displayName: String?
     public let items: [BatchURLItem]
+    /// Optional batch-level credential profile (applied to every job in the batch).
+    public let credentialProfileID: String?
+    public let proxyProfileID: String?
+    public let cookieProfileID: String?
+    public let customHeadersJSON: String?
+    public let projectID: String?
+    /// When set, jobs are created as `scheduled` with a one-shot schedule.
+    public let scheduleStartAtISO8601: String?
 
-    public init(requestID: String, source: String, displayName: String?, items: [BatchURLItem]) {
+    public init(
+        requestID: String,
+        source: String,
+        displayName: String?,
+        items: [BatchURLItem],
+        credentialProfileID: String? = nil,
+        proxyProfileID: String? = nil,
+        cookieProfileID: String? = nil,
+        customHeadersJSON: String? = nil,
+        projectID: String? = nil,
+        scheduleStartAtISO8601: String? = nil
+    ) {
         self.requestID = requestID
         self.source = source
         self.displayName = displayName
         self.items = items
+        self.credentialProfileID = credentialProfileID
+        self.proxyProfileID = proxyProfileID
+        self.cookieProfileID = cookieProfileID
+        self.customHeadersJSON = customHeadersJSON
+        self.projectID = projectID
+        self.scheduleStartAtISO8601 = scheduleStartAtISO8601
     }
 
     public required init?(coder: NSCoder) {
@@ -65,6 +90,15 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
         let source = coder.decodeObject(of: NSString.self, forKey: "source")
         let displayName = coder.decodeObject(of: NSString.self, forKey: "displayName")
         let items = coder.decodeArrayOfObjects(ofClass: BatchURLItem.self, forKey: "items")
+        let credentialProfileID = coder.decodeObject(of: NSString.self, forKey: "credentialProfileID")
+        let proxyProfileID = coder.decodeObject(of: NSString.self, forKey: "proxyProfileID")
+        let cookieProfileID = coder.decodeObject(of: NSString.self, forKey: "cookieProfileID")
+        let customHeadersJSON = coder.decodeObject(of: NSString.self, forKey: "customHeadersJSON")
+        let projectID = coder.decodeObject(of: NSString.self, forKey: "projectID")
+        let scheduleStartAtISO8601 = coder.decodeObject(
+            of: NSString.self,
+            forKey: "scheduleStartAtISO8601"
+        )
         guard let requestID, let source, let items,
               UUID(uuidString: requestID as String) != nil,
               source.length > 0, source.length <= EngineXPC.maxPayloadStringLength,
@@ -73,10 +107,36 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
         if let displayName, displayName.length > EngineXPC.maxPayloadStringLength {
             return nil
         }
+        if let credentialProfileID, UUID(uuidString: credentialProfileID as String) == nil {
+            return nil
+        }
+        if let proxyProfileID, UUID(uuidString: proxyProfileID as String) == nil {
+            return nil
+        }
+        if let cookieProfileID, UUID(uuidString: cookieProfileID as String) == nil {
+            return nil
+        }
+        if let customHeadersJSON, customHeadersJSON.length > EngineXPC.maxPayloadStringLength {
+            return nil
+        }
+        if let projectID, UUID(uuidString: projectID as String) == nil {
+            return nil
+        }
+        if let scheduleStartAtISO8601,
+           scheduleStartAtISO8601.length == 0
+           || scheduleStartAtISO8601.length > EngineXPC.maxPayloadStringLength {
+            return nil
+        }
         self.requestID = requestID as String
         self.source = source as String
         self.displayName = displayName.map { $0 as String }
         self.items = items
+        self.credentialProfileID = credentialProfileID.map { $0 as String }
+        self.proxyProfileID = proxyProfileID.map { $0 as String }
+        self.cookieProfileID = cookieProfileID.map { $0 as String }
+        self.customHeadersJSON = customHeadersJSON.map { $0 as String }
+        self.projectID = projectID.map { $0 as String }
+        self.scheduleStartAtISO8601 = scheduleStartAtISO8601.map { $0 as String }
     }
 
     public func encode(with coder: NSCoder) {
@@ -86,6 +146,24 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
             coder.encode(displayName as NSString, forKey: "displayName")
         }
         coder.encode(items as NSArray, forKey: "items")
+        if let credentialProfileID {
+            coder.encode(credentialProfileID as NSString, forKey: "credentialProfileID")
+        }
+        if let proxyProfileID {
+            coder.encode(proxyProfileID as NSString, forKey: "proxyProfileID")
+        }
+        if let cookieProfileID {
+            coder.encode(cookieProfileID as NSString, forKey: "cookieProfileID")
+        }
+        if let customHeadersJSON {
+            coder.encode(customHeadersJSON as NSString, forKey: "customHeadersJSON")
+        }
+        if let projectID {
+            coder.encode(projectID as NSString, forKey: "projectID")
+        }
+        if let scheduleStartAtISO8601 {
+            coder.encode(scheduleStartAtISO8601 as NSString, forKey: "scheduleStartAtISO8601")
+        }
     }
 }
 

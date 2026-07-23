@@ -15,6 +15,7 @@ public actor TransferOrchestrator {
     private let retryPolicy: RetryPolicy
     private let progressLedger: JobProgressLedger
     private let secretStore: any SecretStore
+    private let sleepAssertionHolder: any SleepAssertionHolding
     private let applicationSupportRoot: URL
     private let log = EngineLog.agent
     private var isRunning = false
@@ -22,6 +23,7 @@ public actor TransferOrchestrator {
     private var pausedJobIDs: Set<String> = []
     private var abortFlags: [String: TransferAbortFlag] = [:]
     private var attemptByJob: [String: Int] = [:]
+    private var sleepAssertions: [String: AnyObject] = [:]
 
     public init(
         database: EngineDatabase,
@@ -29,6 +31,7 @@ public actor TransferOrchestrator {
         retryPolicy: RetryPolicy = RetryPolicy(),
         progressLedger: JobProgressLedger = JobProgressLedger(),
         secretStore: any SecretStore = KeychainSecretStore(service: EngineXPC.machServiceName),
+        sleepAssertionHolder: any SleepAssertionHolding = ProcessInfoSleepAssertionHolder(),
         applicationSupportRoot: URL? = nil
     ) {
         self.database = database
@@ -36,6 +39,7 @@ public actor TransferOrchestrator {
         self.retryPolicy = retryPolicy
         self.progressLedger = progressLedger
         self.secretStore = secretStore
+        self.sleepAssertionHolder = sleepAssertionHolder
         if let applicationSupportRoot {
             self.applicationSupportRoot = applicationSupportRoot
         } else {
@@ -118,6 +122,7 @@ public actor TransferOrchestrator {
         defer {
             Task { await budget.endJob() }
             abortFlags[jobID] = nil
+            endSleepAssertion(for: jobID)
         }
 
         let abort = TransferAbortFlag()
@@ -152,6 +157,7 @@ public actor TransferOrchestrator {
                 database: database, id: jobID, state: "downloading",
                 terminalReason: nil, expectedRevision: nil
             )
+            beginSleepAssertion(for: jobID)
 
             let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
             defer {
@@ -433,6 +439,20 @@ public actor TransferOrchestrator {
             terminalReason: reason, expectedRevision: nil
         )
         attemptByJob[jobID] = nil
+    }
+
+    private func beginSleepAssertion(for jobID: String) {
+        endSleepAssertion(for: jobID)
+        if let token = sleepAssertionHolder.beginTransferAssertion(
+            reason: "DownloadManager transfer"
+        ) {
+            sleepAssertions[jobID] = token
+        }
+    }
+
+    private func endSleepAssertion(for jobID: String) {
+        guard let token = sleepAssertions.removeValue(forKey: jobID) else { return }
+        sleepAssertionHolder.endTransferAssertion(token)
     }
 
     private func uniquifiedURL(_ url: URL) -> URL {

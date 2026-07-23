@@ -90,6 +90,18 @@ public protocol EngineControlProtocol {
         _ request: SetJobTagsRequest,
         reply: @escaping @Sendable (SetJobTagsResponse?, NSError?) -> Void
     )
+
+    /// List user category classification rules (FR-CAT).
+    func listCategoryRules(
+        requestID: String,
+        reply: @escaping @Sendable (ListCategoryRulesResponse?, NSError?) -> Void
+    )
+
+    /// Create or replace a category rule.
+    func upsertCategoryRule(
+        _ request: UpsertCategoryRuleRequest,
+        reply: @escaping @Sendable (UpsertCategoryRuleResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.

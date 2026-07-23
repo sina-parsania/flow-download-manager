@@ -58,6 +58,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private var upsertProjectCache: [String: UpsertProjectResponse] = [:]
     private var upsertTagCache: [String: UpsertTagResponse] = [:]
     private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
+    private var listCategoryRulesCache: [String: ListCategoryRulesResponse] = [:]
+    private var upsertCategoryRuleCache: [String: UpsertCategoryRuleResponse] = [:]
     private var snapshotSequence: Int64 = 0
 
     init(services: EngineServices) {
@@ -82,7 +84,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             capabilities: [
                 "health", "enqueueBatch", "listJobs", "controlJob",
                 "upsertCredentialProfile", "upsertProxyProfile", "listProfiles",
-                "listOrganization", "upsertProject", "upsertTag", "setJobTags"
+                "listOrganization", "upsertProject", "upsertTag", "setJobTags",
+                "listCategoryRules", "upsertCategoryRule"
             ]
         ), nil)
     }
@@ -143,11 +146,27 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
 
         do {
             let items = request.items.map { ($0.url, $0.categoryStableKey) }
+            var scheduleStartAt: Date?
+            if let iso = request.scheduleStartAtISO8601 {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                guard let parsed = formatter.date(from: iso) else {
+                    reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed scheduleStartAt"))
+                    return
+                }
+                scheduleStartAt = parsed
+            }
             let result = try JobRepository.insertBatch(
                 database: database,
                 source: request.source,
                 displayName: request.displayName,
-                items: items
+                items: items,
+                credentialProfileID: request.credentialProfileID,
+                proxyProfileID: request.proxyProfileID,
+                cookieProfileID: request.cookieProfileID,
+                customHeadersJSON: request.customHeadersJSON,
+                projectID: request.projectID,
+                scheduleStartAt: scheduleStartAt
             )
             let response = EnqueueBatchResponse(
                 requestID: request.requestID,
@@ -638,6 +657,101 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "set job tags failed"))
+        }
+    }
+
+    func listCategoryRules(
+        requestID: String,
+        reply: @escaping @Sendable (ListCategoryRulesResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = listCategoryRulesCache[requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let rules = try CategoryRulesRepository.list(database: database)
+                .map {
+                    CategoryRuleSnapshot(
+                        id: $0.id,
+                        priority: $0.priority,
+                        enabled: $0.enabled,
+                        predicateJSON: $0.predicate,
+                        categoryStableKey: $0.action
+                    )
+                }
+            let response = ListCategoryRulesResponse(requestID: requestID, rules: rules)
+            lock.lock()
+            listCategoryRulesCache[requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "list category rules failed"))
+        }
+    }
+
+    func upsertCategoryRule(
+        _ request: UpsertCategoryRuleRequest,
+        reply: @escaping @Sendable (UpsertCategoryRuleResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return
+        }
+        if let cached = upsertCategoryRuleCache[request.requestID] {
+            lock.unlock()
+            reply(cached, nil)
+            return
+        }
+        lock.unlock()
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            try CategoryRulesRepository.upsert(
+                database: database,
+                id: request.ruleID,
+                priority: request.priority,
+                enabled: request.enabled,
+                predicateJSON: request.predicateJSON,
+                categoryStableKey: request.categoryStableKey
+            )
+            let response = UpsertCategoryRuleResponse(
+                requestID: request.requestID,
+                ruleID: request.ruleID
+            )
+            lock.lock()
+            upsertCategoryRuleCache[request.requestID] = response
+            lock.unlock()
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "category rule upsert failed"))
         }
     }
 

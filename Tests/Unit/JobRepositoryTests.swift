@@ -3,6 +3,7 @@
 import Foundation
 import GRDB
 import Persistence
+import SharedSecurity
 import XCTest
 
 final class JobRepositoryTests: XCTestCase {
@@ -61,6 +62,59 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertNil(details.proxyProfileID)
         XCTAssertNil(details.cookieProfileID)
         XCTAssertNil(details.customHeadersJSON)
+    }
+
+    func testInsertBatchPersistsProfilesProjectAndSchedule() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let projectID = try OrganizationRepository.createProject(
+            database: database,
+            name: "Film"
+        )
+        let store = InMemorySecretStore()
+        let credID = UUID().uuidString.lowercased()
+        let proxyID = UUID().uuidString.lowercased()
+        try ProfileRepository.upsertCredentialProfile(
+            database: database,
+            id: credID,
+            metadata: CredentialProfileMetadata(displayName: "Cred", username: "u"),
+            passwordUTF8: Data("p".utf8),
+            secretStore: store
+        )
+        try ProfileRepository.upsertProxyProfile(
+            database: database,
+            id: proxyID,
+            metadata: ProxyProfileMetadata(
+                displayName: "Proxy", kind: "http", host: "127.0.0.1", port: 8080
+            )
+        )
+        let startAt = Date().addingTimeInterval(3600)
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [(url: "https://example.test/a.mp4", categoryStableKey: "videos")],
+            credentialProfileID: credID,
+            proxyProfileID: proxyID,
+            cookieProfileID: nil,
+            customHeadersJSON: #"[{"name":"X-A","value":"1"}]"#,
+            projectID: projectID,
+            scheduleStartAt: startAt
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+        let rows = try JobRepository.fetchJobRows(database: database)
+        let job = try XCTUnwrap(rows.first?.job)
+        XCTAssertEqual(job.id, jobID)
+        XCTAssertEqual(job.state, "scheduled")
+        XCTAssertEqual(job.projectID, projectID)
+        XCTAssertEqual(job.credentialProfileID, credID)
+        XCTAssertEqual(job.proxyProfileID, proxyID)
+        XCTAssertEqual(job.customHeadersJSON, #"[{"name":"X-A","value":"1"}]"#)
+        XCTAssertNotNil(job.scheduleID)
+        XCTAssertEqual(rows.first?.projectName, "Film")
+        let queued = try JobRepository.fetchQueuedJobIDs(database: database, limit: 10)
+        XCTAssertTrue(queued.isEmpty)
     }
 
     func testUpdateJobStateWritesEventJournal() throws {

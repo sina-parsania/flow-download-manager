@@ -131,6 +131,27 @@ public enum EngineControlInterface {
             for: #selector(EngineControlProtocol.setJobTags(_:reply:)),
             argumentIndex: 0, ofReply: true
         )
+
+        interface.setClasses(
+            allowedClasses([
+                ListCategoryRulesResponse.self,
+                CategoryRuleSnapshot.self,
+                NSString.self,
+                NSArray.self
+            ]),
+            for: #selector(EngineControlProtocol.listCategoryRules(requestID:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([UpsertCategoryRuleRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertCategoryRule(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([UpsertCategoryRuleResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertCategoryRule(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
         return interface
     }
 

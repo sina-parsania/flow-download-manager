@@ -301,3 +301,33 @@ public struct JobTagRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
         self.tagID = tagID
     }
 }
+
+/// User category classification rule (FR-CAT). Seeded empty; priority ascending = first match wins.
+public struct CategoryRuleRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "category_rules"
+    public var id: String
+    public var priority: Int
+    public var enabled: Bool
+    public var predicate: String
+    public var action: String
+    public var createdByUser: Bool
+    public var revision: Int
+
+    public init(
+        id: String,
+        priority: Int,
+        enabled: Bool,
+        predicate: String,
+        action: String,
+        createdByUser: Bool,
+        revision: Int
+    ) {
+        self.id = id
+        self.priority = priority
+        self.enabled = enabled
+        self.predicate = predicate
+        self.action = action
+        self.createdByUser = createdByUser
+        self.revision = revision
+    }
+}

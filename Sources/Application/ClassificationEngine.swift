@@ -38,11 +38,27 @@ public enum ClassificationEngine {
     ///   - mimeEvidence: Response Content-Type when known.
     ///   - urlPathExtension: Extension derived from the URL path (no leading dot),
     ///     or a path/filename from which the extension is taken.
+    ///   - rules: Optional user rules; first match overrides the built-in maps.
     public static func classify(
         filenameEvidence: String?,
         mimeEvidence: String?,
-        urlPathExtension: String?
+        urlPathExtension: String?,
+        rules: [CategoryRulesEngine.Rule]? = nil
     ) -> ClassificationResult {
+        if let rules, !rules.isEmpty,
+           let match = CategoryRulesEngine.evaluate(
+               rules: rules,
+               filenameEvidence: filenameEvidence,
+               mimeEvidence: mimeEvidence,
+               urlPathExtension: urlPathExtension
+           ) {
+            return ClassificationResult(
+                stableKey: match.categoryStableKey,
+                confidence: .high,
+                evidence: match.evidence
+            )
+        }
+
         if let filename = filenameEvidence?.trimmingCharacters(in: .whitespacesAndNewlines),
            !filename.isEmpty,
            let ext = pathExtension(of: filename),
@@ -96,12 +112,14 @@ public enum ClassificationEngine {
     public static func classify(
         filenameEvidence: String?,
         mimeEvidence: String?,
-        urlPath: String?
+        urlPath: String?,
+        rules: [CategoryRulesEngine.Rule]? = nil
     ) -> ClassificationResult {
         classify(
             filenameEvidence: filenameEvidence,
             mimeEvidence: mimeEvidence,
-            urlPathExtension: urlPath
+            urlPathExtension: urlPath,
+            rules: rules
         )
     }
 

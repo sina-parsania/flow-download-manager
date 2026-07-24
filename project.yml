@@ -115,6 +115,7 @@ targets:
       - path: Sources/App
       - path: Resources/Localizable.xcstrings
       - path: Resources/Assets.xcassets
+      - path: Resources/Updates/appcast.xml
       # LaunchAgent plist embedded at Contents/Library/LaunchAgents/ for SMAppService.
       - path: Resources/LaunchAgents/org.downloadmanager.local.DownloadEngineAgent.plist
         buildPhase:

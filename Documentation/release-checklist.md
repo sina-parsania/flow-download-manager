@@ -35,8 +35,9 @@ success for the community path, not a broken release.
 
 - Public key: `SUPublicEDKey` in the app Info.plist  
 - Private key: maintainer Keychain only (`generate_keys`); never commit  
-- Feed: `docs/appcast.xml` served via raw GitHub (`SUFeedURL`)  
-- Helper: `Scripts/release/sparkle-appcast.sh`
+- Feed: `docs/appcast.xml` on `main` (`SUFeedURL`); bundled `Resources/Updates/appcast.xml` is a fallback when the remote feed is missing  
+- Helper: `Scripts/release/sparkle-appcast.sh`  
+- Until `docs/appcast.xml` is pushed, Check for Updates uses the bundled empty feed (“You’re up to date”) instead of erroring
 
 ## Do not
 

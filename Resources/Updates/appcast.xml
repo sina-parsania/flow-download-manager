@@ -1,14 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Sparkle 2 appcast for Flow Download Manager (published feed).
-
-  After push to main, SUFeedURL serves this file. Until then the app falls back
-  to the bundled Resources/Updates/appcast.xml so Check for Updates does not 404.
-
-  Regenerate when shipping a signed archive:
-
-    generate_appcast /path/to/release-dir -o docs/appcast.xml
--->
 <rss version="2.0"
      xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
      xmlns:dc="http://purl.org/dc/elements/1.1/">

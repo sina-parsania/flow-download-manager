@@ -65,5 +65,15 @@
 	<string>GPL-3.0-or-later</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/docs/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>/b6wI3YAIL72PL4z6IGRbUjTmCjdxQCzSZ9SXEFCqn8=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

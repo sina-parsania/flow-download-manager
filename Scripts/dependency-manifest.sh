@@ -14,6 +14,8 @@ RESOLVED="$(find . -name Package.resolved -not -path '*/.build/*' 2>/dev/null | 
 
 grdb_version="$(grep -A6 'GRDB.swift' "$RESOLVED" 2>/dev/null | grep -oE '"version" : "[0-9.]+"' | head -1 | grep -oE '[0-9.]+' || echo 'unknown')"
 grdb_revision="$(grep -A6 'GRDB.swift' "$RESOLVED" 2>/dev/null | grep -oE '"revision" : "[a-f0-9]+"' | head -1 | grep -oE '[a-f0-9]{7,}' || echo 'unknown')"
+sparkle_version="$(grep -A6 'Sparkle' "$RESOLVED" 2>/dev/null | grep -oE '"version" : "[0-9.]+"' | head -1 | grep -oE '[0-9.]+' || echo 'unknown')"
+sparkle_revision="$(grep -A6 'Sparkle' "$RESOLVED" 2>/dev/null | grep -oE '"revision" : "[a-f0-9]+"' | head -1 | grep -oE '[a-f0-9]{7,}' || echo 'unknown')"
 
 cat > "$OUT" <<JSON
 {
@@ -29,11 +31,21 @@ cat > "$OUT" <<JSON
       "source": "https://github.com/groue/GRDB.swift",
       "linkRelationship": "static (SwiftPM)",
       "nativeTransitive": "system SQLite only"
+    },
+    {
+      "name": "Sparkle",
+      "version": "$sparkle_version",
+      "revision": "$sparkle_revision",
+      "expectedVersion": "2.9.4",
+      "spdxLicense": "MIT",
+      "source": "https://github.com/sparkle-project/Sparkle",
+      "linkRelationship": "embedded framework (SwiftPM)",
+      "nativeTransitive": "none"
     }
   ],
   "developerOnlyTools": ["xcodegen", "swiftformat", "swiftlint"],
-  "plannedLaterPhases": ["libcurl", "libtorrent", "yt-dlp", "yt-dlp-ejs", "Deno", "FFmpeg", "Sparkle"]
+  "plannedLaterPhases": ["libtorrent", "yt-dlp", "yt-dlp-ejs", "Deno", "FFmpeg"]
 }
 JSON
 
-echo "wrote $OUT (GRDB $grdb_version)"
+echo "wrote $OUT (GRDB $grdb_version, Sparkle $sparkle_version)"

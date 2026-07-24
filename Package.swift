@@ -57,7 +57,8 @@ let package = Package(
         .executable(name: "ChromeNativeHost", targets: ["ChromeNativeHostMain"])
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1")
+        .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.4")
     ],
     targets: [
         // Objective-C SPI shim isolating NSXPCConnection.auditToken.
@@ -166,7 +167,8 @@ let package = Package(
             name: "Presentation",
             dependencies: [
                 "Domain", "XPCContracts", "SharedObservability", "Application",
-                "TorrentCore", "MediaIsolation"
+                "TorrentCore", "MediaIsolation",
+                .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "Sources/Presentation",
             swiftSettings: strict

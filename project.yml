@@ -44,6 +44,9 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift
     exactVersion: 7.11.1
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.4
 
 targets:
 
@@ -121,6 +124,8 @@ targets:
     dependencies:
       - package: DownloadKit
         product: Presentation
+      - package: Sparkle
+        product: Sparkle
       - target: DownloadEngineAgent
         embed: true
         codeSign: true
@@ -150,6 +155,12 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: "GPL-3.0-or-later"
         NSPrincipalClass: NSApplication
+        # Sparkle 2 — EdDSA public key (private key stays in maintainer Keychain).
+        SUFeedURL: https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/docs/appcast.xml
+        SUPublicEDKey: /b6wI3YAIL72PL4z6IGRbUjTmCjdxQCzSZ9SXEFCqn8=
+        SUEnableAutomaticChecks: true
+        SUAutomaticallyUpdate: true
+        SUScheduledCheckInterval: 86400
         # Local-dev URL scheme only (FR-ING dock / URL handoff). Not for production distribution.
         CFBundleURLTypes:
           - CFBundleURLName: org.downloadmanager.local.dev-scheme

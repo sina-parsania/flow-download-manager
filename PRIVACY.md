@@ -139,6 +139,12 @@ it:
 Until those releases ship, these features do not exist in the app and this
 section describes intended policy only.
 
+**Application updates (Sparkle).** Check for Updates (and scheduled automatic
+checks) contact the project appcast on GitHub to see whether a newer build
+exists. If you continue, Sparkle downloads that build and installs it on your
+Mac. The project does not receive analytics from this path; GitHub’s policies
+apply to those HTTPS requests.
+
 ## 6. Third parties
 
 The project does not sell, rent, trade, or otherwise share your data with third

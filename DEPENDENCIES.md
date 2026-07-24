@@ -17,6 +17,7 @@ Build-time and developer tooling is listed separately and is **not** distributed
 | Component | Version/commit | SPDX license | Source | Link relationship | Notes |
 | --- | --- | --- | --- | --- | --- |
 | GRDB.swift | 7.11.1 (exact pin) | MIT | https://github.com/groue/GRDB.swift | Static link via Swift Package Manager | Uses the system SQLite provided by macOS. |
+| Sparkle | 2.9.4 (exact pin) | MIT | https://github.com/sparkle-project/Sparkle | Embedded framework via Swift Package Manager | In-app update checks, download, and install from the signed appcast (`docs/appcast.xml`). EdDSA public key in Info.plist; private key is maintainer-only. |
 | curl (libcurl) | 8.21.0 | curl | https://curl.se/download/curl-8.21.0.tar.xz | Static link (`VendorBuild/prefix/arm64`) | Built by `make vendor-libcurl`. SHA-256 `aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6`. |
 | OpenSSL | 3.5.1 | Apache-2.0 | https://github.com/openssl/openssl/releases/download/openssl-3.5.1/openssl-3.5.1.tar.gz | Static link into libcurl + libssh2 | TLS for libcurl; crypto for libssh2. Apple SecTrust enabled for OS trust store. SHA-256 `529043b15cffa5f36077a4d0af83f3de399807181d607441d734196d889b641f`. |
 | nghttp2 | 1.66.0 | MIT | https://github.com/nghttp2/nghttp2/releases/download/v1.66.0/nghttp2-1.66.0.tar.xz | Static link into libcurl | HTTP/2. SHA-256 `00ba1bdf0ba2c74b2a4fe6c8b1069dc9d82f82608af24442d430df97c6f9e631`. |
@@ -53,7 +54,6 @@ They are installed via Homebrew by `make bootstrap-tools`.
 - libtorrent
 - yt-dlp / yt-dlp-ejs / Deno
 - FFmpeg
-- Sparkle
 
 Until a component from this list appears in the **Shipped runtime dependencies**
 table with a concrete version and license, it is not part of the product.

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparkle 2 appcast for Flow Download Manager.
+
+  Publish updates by attaching a signed .zip (or .dmg) of Flow Download Manager.app
+  to a GitHub Release, then regenerating this file:
+
+    generate_appcast /path/to/release-dir -o docs/appcast.xml
+
+  Private EdDSA key must be in the maintainer Keychain (`generate_keys`).
+  Never commit the private key. Public key is SUPublicEDKey in Info.plist.
+
+  Feed URL (Info.plist SUFeedURL):
+  https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/docs/appcast.xml
+-->
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Flow Download Manager</title>
+    <link>https://github.com/sina-parsania/flow-download-manager</link>
+    <description>In-app updates for Flow Download Manager</description>
+    <language>en</language>
+    <!-- Items are added by generate_appcast when a new signed build is published. -->
+  </channel>
+</rss>

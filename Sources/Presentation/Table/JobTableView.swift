@@ -40,6 +40,11 @@ public struct JobTableView: NSViewRepresentable {
             column.title = spec.title
             column.width = spec.width
             column.minWidth = spec.minWidth
+            // Header click cycles ascending ↔ descending via sort descriptors.
+            column.sortDescriptorPrototype = NSSortDescriptor(
+                key: spec.identifier.rawValue,
+                ascending: true
+            )
             tableView.addTableColumn(column)
         }
         tableView.delegate = context.coordinator
@@ -72,6 +77,9 @@ public struct JobTableView: NSViewRepresentable {
         weak var tableView: NSTableView?
         @Binding private var selectedID: JobRowModel.ID?
         private var rowByID: [JobRowModel.ID: JobRowModel] = [:]
+        private var sourceRows: [JobRowModel] = []
+        private var sortKey: JobTableSortKey?
+        private var sortAscending = true
         private var isApplyingSelection = false
 
         init(selectedID: Binding<JobRowModel.ID?>) {
@@ -79,10 +87,16 @@ public struct JobTableView: NSViewRepresentable {
         }
 
         func apply(rows: [JobRowModel], animate: Bool) {
+            sourceRows = rows
             rowByID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let ordered: [JobRowModel] = if let sortKey {
+                JobTableSorting.sorted(rows, by: sortKey, ascending: sortAscending)
+            } else {
+                rows
+            }
             var snapshot = NSDiffableDataSourceSnapshot<Section, JobRowModel.ID>()
             snapshot.appendSections([.main])
-            snapshot.appendItems(rows.map(\.id), toSection: .main)
+            snapshot.appendItems(ordered.map(\.id), toSection: .main)
             dataSource?.apply(snapshot, animatingDifferences: animate)
         }
 
@@ -108,6 +122,25 @@ public struct JobTableView: NSViewRepresentable {
             guard !isApplyingSelection, let tableView, let dataSource else { return }
             let row = tableView.selectedRow
             selectedID = row >= 0 ? dataSource.itemIdentifier(forRow: row) : nil
+        }
+
+        public func tableView(
+            _ tableView: NSTableView,
+            sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]
+        ) {
+            _ = oldDescriptors
+            guard let descriptor = tableView.sortDescriptors.first,
+                  let keyRaw = descriptor.key,
+                  let key = JobTableSortKey(rawValue: keyRaw)
+            else {
+                sortKey = nil
+                apply(rows: sourceRows, animate: true)
+                return
+            }
+            sortKey = key
+            sortAscending = descriptor.ascending
+            apply(rows: sourceRows, animate: true)
+            syncSelection(selectedID)
         }
     }
 }

@@ -319,6 +319,46 @@ public enum EngineControlInterface {
             for: #selector(EngineControlProtocol.getJobTransferSettings(_:reply:)),
             argumentIndex: 0, ofReply: true
         )
+
+        interface.setClasses(
+            allowedClasses([NSString.self]),
+            for: #selector(EngineControlProtocol.listHostSettings(requestID:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([
+                ListHostSettingsResponse.self,
+                HostSettingSnapshot.self,
+                NSString.self,
+                NSArray.self
+            ]),
+            for: #selector(EngineControlProtocol.listHostSettings(requestID:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([UpsertHostSettingRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.upsertHostSetting(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([
+                UpsertHostSettingResponse.self,
+                HostSettingSnapshot.self,
+                NSString.self
+            ]),
+            for: #selector(EngineControlProtocol.upsertHostSetting(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+        interface.setClasses(
+            allowedClasses([DeleteHostSettingRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.deleteHostSetting(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([DeleteHostSettingResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.deleteHostSetting(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
         return interface
     }
 

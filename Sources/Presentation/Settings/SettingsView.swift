@@ -253,6 +253,57 @@ public struct SettingsView: View {
                 }
             }
 
+            Section("Per-host settings") {
+                Text(
+                    "Override connections, speed, user-agent, or credentials for a "
+                        + "hostname. Per-download Compose options still win."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+                if model.hostSettings.isEmpty {
+                    Text("No host overrides yet.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.hostSettings, id: \.host) { setting in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(setting.host)
+                                .font(.body.weight(.medium))
+                            Text(model.hostSettingSummary(setting))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Remove", role: .destructive) {
+                                Task { await model.deleteHostSetting(setting.host) }
+                            }
+                            .disabled(model.isBusy)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                DisclosureGroup("Add host override", isExpanded: $model.showAddHostSetting) {
+                    TextField("Host (example.com)", text: $model.hostSettingHost)
+                        .accessibilityLabel("Host name for override")
+                    TextField("Max connections (1–32)", text: $model.hostSettingConnectionsText)
+                        .accessibilityLabel("Maximum connections for this host")
+                    TextField("Speed limit MB/s (blank = none)", text: $model.hostSettingSpeedText)
+                        .accessibilityLabel("Speed limit megabytes per second for this host")
+                    TextField("User-Agent (optional)", text: $model.hostSettingUserAgent)
+                        .accessibilityLabel("Custom user agent for this host")
+                    Picker("Credential profile", selection: $model.hostSettingCredentialID) {
+                        Text("None").tag("")
+                        ForEach(model.credentials, id: \.id) { profile in
+                            Text(profile.displayName).tag(profile.id)
+                        }
+                    }
+                    Button("Save host override") {
+                        Task { await model.saveHostSetting() }
+                    }
+                    .disabled(!model.canSaveHostSetting || model.isBusy)
+                }
+            }
+
             Section("About") {
                 LabeledContent("Product", value: "Flow Download Manager")
                 LabeledContent(
@@ -283,12 +334,14 @@ private final class SettingsModel: ObservableObject {
     @Published var projects: [ProjectSnapshot] = []
     @Published var tags: [TagSnapshot] = []
     @Published var categoryRules: [CategoryRuleSnapshot] = []
+    @Published var hostSettings: [HostSettingSnapshot] = []
     @Published var showAddCredential = false
     @Published var showAddProxy = false
     @Published var showAddCookie = false
     @Published var showAddProject = false
     @Published var showAddTag = false
     @Published var showAddRule = false
+    @Published var showAddHostSetting = false
     @Published var credentialDisplayName = ""
     @Published var credentialUsername = ""
     @Published var credentialPassword = ""
@@ -304,6 +357,11 @@ private final class SettingsModel: ObservableObject {
     @Published var tagName = ""
     @Published var ruleExtension = ""
     @Published var ruleCategoryKey = "other"
+    @Published var hostSettingHost = ""
+    @Published var hostSettingConnectionsText = ""
+    @Published var hostSettingSpeedText = ""
+    @Published var hostSettingUserAgent = ""
+    @Published var hostSettingCredentialID = ""
     @Published var zipAutoExtractEnabled = true
     @Published var statusMessage: String?
     @Published var statusIsError = false
@@ -331,6 +389,28 @@ private final class SettingsModel: ObservableObject {
 
     var canSaveBandwidth: Bool {
         Self.bytesPerSecond(fromMegabytesText: bandwidthMaxMegabytesText) != nil
+    }
+
+    var canSaveHostSetting: Bool {
+        let host = hostSettingHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return false }
+        let connectionsText = hostSettingConnectionsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let speedText = hostSettingSpeedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userAgent = hostSettingUserAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasConnections = !connectionsText.isEmpty
+        let hasSpeed = !speedText.isEmpty
+        let hasUA = !userAgent.isEmpty
+        let hasCredential = !hostSettingCredentialID.isEmpty
+        guard hasConnections || hasSpeed || hasUA || hasCredential else { return false }
+        if hasConnections {
+            guard let value = Int(connectionsText), (1 ... 32).contains(value) else { return false }
+        }
+        if hasSpeed {
+            guard Self.bytesPerSecond(fromMegabytesText: speedText).map({ $0 > 0 }) == true else {
+                return false
+            }
+        }
+        return true
     }
 
     /// Parses the MB/s field into the bytes-per-second value the engine stores.
@@ -414,6 +494,8 @@ private final class SettingsModel: ObservableObject {
             suppressZipSettingSave = true
             zipAutoExtractEnabled = zipSetting.value
             suppressZipSettingSave = false
+            let hosts = try await engineClient.listHostSettings()
+            hostSettings = hosts.settings
             statusMessage = nil
             statusIsError = false
         } catch {
@@ -587,5 +669,72 @@ private final class SettingsModel: ObservableObject {
             statusMessage = "Unable to save category rule."
             statusIsError = true
         }
+    }
+
+    func saveHostSetting() async {
+        guard canSaveHostSetting else { return }
+        isBusy = true
+        defer { isBusy = false }
+        let connectionsText = hostSettingConnectionsText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let speedText = hostSettingSpeedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userAgent = hostSettingUserAgent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let credentialID = hostSettingCredentialID.isEmpty ? nil : hostSettingCredentialID
+        do {
+            _ = try await engineClient.upsertHostSetting(
+                host: hostSettingHost.trimmingCharacters(in: .whitespacesAndNewlines),
+                maxConnections: connectionsText.isEmpty ? nil : Int(connectionsText),
+                maxBytesPerSecond: speedText.isEmpty
+                    ? nil
+                    : Self.bytesPerSecond(fromMegabytesText: speedText),
+                userAgent: userAgent.isEmpty ? nil : userAgent,
+                credentialProfileID: credentialID,
+                clearUserAgent: userAgent.isEmpty,
+                clearCredentialProfileID: credentialID == nil
+            )
+            hostSettingHost = ""
+            hostSettingConnectionsText = ""
+            hostSettingSpeedText = ""
+            hostSettingUserAgent = ""
+            hostSettingCredentialID = ""
+            showAddHostSetting = false
+            statusMessage = "Host override saved."
+            statusIsError = false
+            await reload()
+        } catch {
+            statusMessage = "Unable to save host override."
+            statusIsError = true
+        }
+    }
+
+    func deleteHostSetting(_ host: String) async {
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            _ = try await engineClient.deleteHostSetting(host: host)
+            statusMessage = "Host override removed."
+            statusIsError = false
+            await reload()
+        } catch {
+            statusMessage = "Unable to remove host override."
+            statusIsError = true
+        }
+    }
+
+    func hostSettingSummary(_ setting: HostSettingSnapshot) -> String {
+        var parts: [String] = []
+        if let connections = setting.maxConnections {
+            parts.append("\(connections) connections")
+        }
+        if let rate = setting.maxBytesPerSecond, rate > 0 {
+            parts.append(Self.megabytesText(fromBytesPerSecond: rate) + " MB/s")
+        }
+        if let userAgent = setting.userAgent, !userAgent.isEmpty {
+            parts.append("custom UA")
+        }
+        if let credentialID = setting.credentialProfileID {
+            let name = credentials.first { $0.id == credentialID }?.displayName ?? "credentials"
+            parts.append(name)
+        }
+        return parts.isEmpty ? "no overrides" : parts.joined(separator: " · ")
     }
 }

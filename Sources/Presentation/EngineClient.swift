@@ -118,7 +118,8 @@ public final class EngineClient: ObservableObject {
                 "setJobCategory", "setJobFilename",
                 "getBoolSetting", "setBoolSetting",
                 "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents",
-                "getJobTransferSettings"
+                "getJobTransferSettings",
+                "listHostSettings", "upsertHostSetting", "deleteHostSetting"
             ]
         )
         do {
@@ -501,6 +502,47 @@ public final class EngineClient: ObservableObject {
         )
         return try await perform { proxy, reply in
             proxy.getJobTransferSettings(request, reply: reply)
+        }
+    }
+
+    public func listHostSettings() async throws -> ListHostSettingsResponse {
+        let requestID = UUID().uuidString
+        return try await perform { proxy, reply in
+            proxy.listHostSettings(requestID: requestID, reply: reply)
+        }
+    }
+
+    public func upsertHostSetting(
+        host: String,
+        maxConnections: Int?,
+        maxBytesPerSecond: Int64?,
+        userAgent: String?,
+        credentialProfileID: String?,
+        clearUserAgent: Bool = false,
+        clearCredentialProfileID: Bool = false
+    ) async throws -> UpsertHostSettingResponse {
+        let request = UpsertHostSettingRequest(
+            requestID: UUID().uuidString,
+            host: host,
+            maxConnections: maxConnections,
+            maxBytesPerSecond: maxBytesPerSecond,
+            userAgent: userAgent,
+            credentialProfileID: credentialProfileID,
+            clearUserAgent: clearUserAgent,
+            clearCredentialProfileID: clearCredentialProfileID
+        )
+        return try await perform { proxy, reply in
+            proxy.upsertHostSetting(request, reply: reply)
+        }
+    }
+
+    public func deleteHostSetting(host: String) async throws -> DeleteHostSettingResponse {
+        let request = DeleteHostSettingRequest(
+            requestID: UUID().uuidString,
+            host: host
+        )
+        return try await perform { proxy, reply in
+            proxy.deleteHostSetting(request, reply: reply)
         }
     }
 

@@ -158,7 +158,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 "setJobCategory", "setJobFilename",
                 "getBoolSetting", "setBoolSetting",
                 "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents", "setJobPriority",
-                "deleteJob", "getJobTransferSettings"
+                "deleteJob", "getJobTransferSettings",
+                "listHostSettings", "upsertHostSetting", "deleteHostSetting"
             ]
         ), nil)
     }
@@ -1327,6 +1328,137 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "job transfer settings unavailable"))
+        }
+    }
+
+    func listHostSettings(
+        requestID: String,
+        reply: @escaping @Sendable (ListHostSettingsResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        if gate(requestID: requestID, reply: reply) { return }
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let settings = try HostSettingRepository.list(database: database).map {
+                HostSettingSnapshot(
+                    host: $0.host,
+                    maxConnections: $0.maxConnections,
+                    maxBytesPerSecond: $0.maxBytesPerSecond,
+                    userAgent: $0.userAgent,
+                    credentialProfileID: $0.credentialProfileID
+                )
+            }
+            let response = ListHostSettingsResponse(requestID: requestID, settings: settings)
+            remember(requestID, response, isMutation: false)
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "list host settings failed"))
+        }
+    }
+
+    func upsertHostSetting(
+        _ request: UpsertHostSettingRequest,
+        reply: @escaping @Sendable (UpsertHostSettingResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        if let connections = request.maxConnections, !(1 ... 32).contains(connections) {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxConnections"))
+            return
+        }
+        if let rate = request.maxBytesPerSecond, rate <= 0 {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxBytesPerSecond"))
+            return
+        }
+
+        do {
+            let stored = try HostSettingRepository.upsert(
+                database: database,
+                setting: HostSettingRepository.Setting(
+                    host: request.host,
+                    maxConnections: request.maxConnections,
+                    maxBytesPerSecond: request.maxBytesPerSecond,
+                    userAgent: request.clearUserAgent ? nil : request.userAgent,
+                    credentialProfileID: request.clearCredentialProfileID
+                        ? nil
+                        : request.credentialProfileID
+                )
+            )
+            let snapshot = HostSettingSnapshot(
+                host: stored.host,
+                maxConnections: stored.maxConnections,
+                maxBytesPerSecond: stored.maxBytesPerSecond,
+                userAgent: stored.userAgent,
+                credentialProfileID: stored.credentialProfileID
+            )
+            let response = UpsertHostSettingResponse(
+                requestID: request.requestID,
+                setting: snapshot
+            )
+            remember(request.requestID, response, isMutation: true)
+            reply(response, nil)
+        } catch HostSettingRepositoryError.invalidHost {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid host"))
+        } catch HostSettingRepositoryError.invalidMaxConnections {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxConnections"))
+        } catch HostSettingRepositoryError.invalidMaxBytesPerSecond {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxBytesPerSecond"))
+        } catch HostSettingRepositoryError.invalidUserAgent {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid userAgent"))
+        } catch HostSettingRepositoryError.invalidCredentialProfileID,
+            HostSettingRepositoryError.unknownCredentialProfileID {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid credentialProfileID"))
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "host setting upsert failed"))
+        }
+    }
+
+    func deleteHostSetting(
+        _ request: DeleteHostSettingRequest,
+        reply: @escaping @Sendable (DeleteHostSettingResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let deleted = try HostSettingRepository.delete(database: database, host: request.host)
+            let host = HostSettingRepository.normalizeHost(request.host) ?? request.host.lowercased()
+            let response = DeleteHostSettingResponse(
+                requestID: request.requestID,
+                host: host,
+                deleted: deleted
+            )
+            remember(request.requestID, response, isMutation: true)
+            reply(response, nil)
+        } catch HostSettingRepositoryError.invalidHost {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid host"))
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "host setting delete failed"))
         }
     }
 

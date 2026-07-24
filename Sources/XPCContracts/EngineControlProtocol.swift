@@ -193,6 +193,24 @@ public protocol EngineControlProtocol {
         _ request: GetJobTransferSettingsRequest,
         reply: @escaping @Sendable (GetJobTransferSettingsResponse?, NSError?) -> Void
     )
+
+    /// List user per-host transfer overrides (connections, speed, UA, credentials).
+    func listHostSettings(
+        requestID: String,
+        reply: @escaping @Sendable (ListHostSettingsResponse?, NSError?) -> Void
+    )
+
+    /// Create or replace a per-host transfer override.
+    func upsertHostSetting(
+        _ request: UpsertHostSettingRequest,
+        reply: @escaping @Sendable (UpsertHostSettingResponse?, NSError?) -> Void
+    )
+
+    /// Delete a per-host transfer override.
+    func deleteHostSetting(
+        _ request: DeleteHostSettingRequest,
+        reply: @escaping @Sendable (DeleteHostSettingResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.

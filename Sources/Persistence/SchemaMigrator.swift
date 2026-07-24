@@ -20,6 +20,18 @@ public enum SchemaMigrator {
         registerV2(&migrator)
         registerV3(&migrator)
         registerV4(&migrator)
+        registerV5(&migrator)
+        return migrator
+    }
+
+    /// Migrator that stops after v4 — used by migration round-trip tests.
+    public static var v4Only: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = false
+        registerV1(&migrator)
+        registerV2(&migrator)
+        registerV3(&migrator)
+        registerV4(&migrator)
         return migrator
     }
 
@@ -65,6 +77,9 @@ public enum SchemaMigrator {
 
     /// Stable identifier for the v4 migration (per-job transfer limits).
     public static let v4Identifier = "v4-per-job-transfer-limits"
+
+    /// Stable identifier for the v5 migration (user per-host transfer settings).
+    public static let v5Identifier = "v5-host-settings"
 
     private static func registerV1(_ migrator: inout DatabaseMigrator) {
         // CHECK domains sourced from the Domain enums so DB and code cannot drift.
@@ -297,6 +312,22 @@ public enum SchemaMigrator {
             try db.alter(table: "jobs") { t in
                 t.add(column: "maxBytesPerSecond", .integer)
                 t.add(column: "preferredConnectionCount", .integer)
+            }
+        }
+    }
+
+    /// User-controlled per-host overrides. Distinct from `host_observations`,
+    /// which are expiring automatic hints and never treated as proof.
+    private static func registerV5(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration(v5Identifier) { db in
+            try db.create(table: "host_settings") { t in
+                t.primaryKey("host", .text)
+                t.column("maxConnections", .integer)
+                t.column("maxBytesPerSecond", .integer)
+                t.column("userAgent", .text)
+                t.column("credentialProfileID", .text)
+                    .references("credential_profiles", onDelete: .setNull)
+                t.column("updatedAt", .datetime).notNull()
             }
         }
     }

@@ -170,6 +170,28 @@ final class PerJobTransferLimitsTests: XCTestCase {
         )
     }
 
+    func testHostLimitWinsOverGlobalWhenNoPerJobRate() {
+        XCTAssertEqual(
+            TransferOrchestrator.effectiveMaxBytesPerSecond(
+                perJob: nil,
+                hostLimit: 2_000_000,
+                globalPolicyLimit: 1_000_000
+            ),
+            2_000_000
+        )
+    }
+
+    func testPerJobStillWinsOverHostAndGlobal() {
+        XCTAssertEqual(
+            TransferOrchestrator.effectiveMaxBytesPerSecond(
+                perJob: 9_000_000,
+                hostLimit: 2_000_000,
+                globalPolicyLimit: 1_000_000
+            ),
+            9_000_000
+        )
+    }
+
     // MARK: - Retry eligibility
 
     func testChecksumMismatchIsNotRetried() {

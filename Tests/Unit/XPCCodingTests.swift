@@ -455,4 +455,42 @@ final class XPCCodingTests: XCTestCase {
         let decodedRename = try roundTrip(renameRequest, as: SetJobFilenameRequest.self)
         XCTAssertEqual(decodedRename?.filename, "renamed.zip")
     }
+
+    func testHostSettingDTORoundTrip() throws {
+        let snapshot = HostSettingSnapshot(
+            host: "cdn.example.test",
+            maxConnections: 8,
+            maxBytesPerSecond: 3_000_000,
+            userAgent: "FlowTest/1.0",
+            credentialProfileID: UUID().uuidString
+        )
+        let decoded = try roundTrip(snapshot, as: HostSettingSnapshot.self)
+        XCTAssertEqual(decoded?.host, "cdn.example.test")
+        XCTAssertEqual(decoded?.maxConnections, 8)
+        XCTAssertEqual(decoded?.maxBytesPerSecond, 3_000_000)
+        XCTAssertEqual(decoded?.userAgent, "FlowTest/1.0")
+        XCTAssertEqual(decoded?.credentialProfileID, snapshot.credentialProfileID)
+
+        let request = UpsertHostSettingRequest(
+            requestID: UUID().uuidString,
+            host: "cdn.example.test",
+            maxConnections: 4,
+            maxBytesPerSecond: nil,
+            userAgent: nil,
+            credentialProfileID: nil,
+            clearUserAgent: true,
+            clearCredentialProfileID: true
+        )
+        let decodedRequest = try roundTrip(request, as: UpsertHostSettingRequest.self)
+        XCTAssertEqual(decodedRequest?.maxConnections, 4)
+        XCTAssertTrue(decodedRequest?.clearUserAgent == true)
+
+        let list = ListHostSettingsResponse(
+            requestID: UUID().uuidString,
+            settings: [snapshot]
+        )
+        let decodedList = try roundTrip(list, as: ListHostSettingsResponse.self)
+        XCTAssertEqual(decodedList?.settings.count, 1)
+        XCTAssertEqual(decodedList?.settings.first?.host, "cdn.example.test")
+    }
 }

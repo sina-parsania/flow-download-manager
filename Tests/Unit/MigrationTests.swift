@@ -178,8 +178,9 @@ final class MigrationTests: XCTestCase {
             XCTAssertFalse(names.contains("preferredConnectionCount"))
         }
 
-        let v4 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
-        XCTAssertTrue(try v4.isAtCurrentSchemaVersion())
+        let v4 = try EngineDatabase(url: url, migrator: SchemaMigrator.v4Only)
+        XCTAssertTrue(try v4.tableNames().contains("jobs"))
+        XCTAssertFalse(try v4.tableNames().contains("host_settings"))
         XCTAssertEqual(try v4.count(JobRecord.self), 1)
 
         // Pre-v4 jobs keep NULL overrides, which is exactly the old behaviour.
@@ -188,6 +189,18 @@ final class MigrationTests: XCTestCase {
         }
         XCTAssertNil(job?.maxBytesPerSecond)
         XCTAssertNil(job?.preferredConnectionCount)
+    }
+
+    func testV4ToV5AddsHostSettingsTable() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let v4 = try EngineDatabase(url: url, migrator: SchemaMigrator.v4Only)
+        XCTAssertFalse(try v4.tableNames().contains("host_settings"))
+
+        let v5 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
+        XCTAssertTrue(try v5.isAtCurrentSchemaVersion())
+        XCTAssertTrue(try v5.tableNames().contains("host_settings"))
     }
 
     func testInterruptedMigrationRollsBack() throws {

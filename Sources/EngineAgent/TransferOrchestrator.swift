@@ -236,6 +236,9 @@ public actor TransferOrchestrator {
             }
 
             let host = URL(string: details.canonicalURL)?.host ?? "unknown"
+            let hostSetting = try? HostSettingRepository.get(database: database, host: host)
+            let preferredConnections = details.preferredConnectionCount
+                ?? hostSetting?.maxConnections
             // Acquire capacity before any state flip. A failed grant must leave
             // the job queued without thrashing connecting→downloading→queued.
             guard await budget.tryAcquireSocket(host: host) else {
@@ -249,7 +252,7 @@ public actor TransferOrchestrator {
             let extraSegmentSockets = await budget.reserveSockets(
                 host: host,
                 upTo: Self.requestedExtraSockets(
-                    preferredConnectionCount: details.preferredConnectionCount
+                    preferredConnectionCount: preferredConnections
                 )
             )
             defer {
@@ -311,7 +314,7 @@ public actor TransferOrchestrator {
                 return
             }
 
-            let options = try buildDownloadOptions(from: details)
+            let options = try buildDownloadOptions(from: details, hostSetting: hostSetting)
 
             // libcurl calls back once per write chunk from N segment threads.
             // Spawning a Task per callback flooded this actor — the same actor
@@ -335,7 +338,7 @@ public actor TransferOrchestrator {
                 options: options,
                 abortFlag: abort,
                 hostMaxSegments: Self.effectiveHostMaxSegments(
-                    preferredConnectionCount: details.preferredConnectionCount,
+                    preferredConnectionCount: preferredConnections,
                     socketBudget: 1 + extraSegmentSockets
                 ),
                 onProgress: { bytes in liveBytes.record(bytes) }
@@ -478,9 +481,13 @@ public actor TransferOrchestrator {
         }
     }
 
-    private func buildDownloadOptions(from details: TransferJobDetails) throws -> TransferCore.DownloadOptions {
+    private func buildDownloadOptions(
+        from details: TransferJobDetails,
+        hostSetting: HostSettingRepository.Setting?
+    ) throws -> TransferCore.DownloadOptions {
         var options = TransferCore.DownloadOptions()
-        if let credentialID = details.credentialProfileID {
+        let credentialID = details.credentialProfileID ?? hostSetting?.credentialProfileID
+        if let credentialID {
             options.userpwd = try ProfileRepository.loadUserpwd(
                 database: database,
                 profileID: credentialID,
@@ -501,12 +508,24 @@ public actor TransferOrchestrator {
             )
         }
         let parsedHeaders = try HeaderValidator.parseExtraHeadersJSON(details.customHeadersJSON)
-        options.extraHeaders = parsedHeaders.map {
+        var headers = parsedHeaders.map {
             TransferCore.HTTPHeader(name: $0.name, value: $0.value)
         }
+        // Host UA only when the job did not already set User-Agent. libcurl's
+        // header list overrides CURLOPT_USERAGENT when the name is present.
+        if let userAgent = hostSetting?.userAgent, !userAgent.isEmpty {
+            let alreadySet = headers.contains {
+                $0.name.compare("User-Agent", options: [.caseInsensitive]) == .orderedSame
+            }
+            if !alreadySet {
+                headers.insert(TransferCore.HTTPHeader(name: "User-Agent", value: userAgent), at: 0)
+            }
+        }
+        options.extraHeaders = headers
         // `DownloadOptions.maxBytesPerSecond == 0` means unlimited.
         options.maxBytesPerSecond = try Self.effectiveMaxBytesPerSecond(
             perJob: details.maxBytesPerSecond,
+            hostLimit: hostSetting?.maxBytesPerSecond,
             globalPolicyLimit: activeGlobalBandwidthLimit()
         ) ?? 0
         return options
@@ -525,11 +544,17 @@ public actor TransferOrchestrator {
         return policy.maxBytesPerSecond
     }
 
-    /// A per-job limit wins over the global policy; with no per-job value the
-    /// result is exactly the global policy's limit, as before this option existed.
-    static func effectiveMaxBytesPerSecond(perJob: Int64?, globalPolicyLimit: Int64?) -> Int64? {
+    /// Precedence: per-job > per-host > global calendar policy.
+    static func effectiveMaxBytesPerSecond(
+        perJob: Int64?,
+        hostLimit: Int64? = nil,
+        globalPolicyLimit: Int64?
+    ) -> Int64? {
         if let perJob, perJob > 0 {
             return perJob
+        }
+        if let hostLimit, hostLimit > 0 {
+            return hostLimit
         }
         return globalPolicyLimit
     }

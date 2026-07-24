@@ -200,6 +200,33 @@ public struct HostObservationRecord: Codable, FetchableRecord, PersistableRecord
     }
 }
 
+/// User-edited per-host overrides (connections, speed, UA, credentials).
+public struct HostSettingRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "host_settings"
+    public var host: String
+    public var maxConnections: Int?
+    public var maxBytesPerSecond: Int64?
+    public var userAgent: String?
+    public var credentialProfileID: String?
+    public var updatedAt: Date
+
+    public init(
+        host: String,
+        maxConnections: Int?,
+        maxBytesPerSecond: Int64?,
+        userAgent: String?,
+        credentialProfileID: String?,
+        updatedAt: Date
+    ) {
+        self.host = host
+        self.maxConnections = maxConnections
+        self.maxBytesPerSecond = maxBytesPerSecond
+        self.userAgent = userAgent
+        self.credentialProfileID = credentialProfileID
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct EventRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "events"
     public var sequence: Int64?

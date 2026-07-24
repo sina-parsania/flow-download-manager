@@ -15,7 +15,7 @@ Goal: free source + unsigned DMG others can run with one Gatekeeper bypass.
 7. Prefer tagging a reviewed commit; never attach signing secrets / Sparkle private keys
 
 **A community release is done** when the above are published. Gatekeeper warnings
-are expected and documented. This is the track v0.2.0 shipped on.
+are expected and documented. This is the track v0.3.0 ships on.
 
 ## Track B — Optional Developer ID (paid Apple Program)
 
@@ -37,7 +37,9 @@ success for the community path, not a broken release.
 - Private key: maintainer Keychain only (`generate_keys`); never commit  
 - Feed: `docs/appcast.xml` on `main` (`SUFeedURL`); bundled `Resources/Updates/appcast.xml` is a fallback when the remote feed is missing  
 - Helper: `Scripts/release/sparkle-appcast.sh`  
-- Until `docs/appcast.xml` is pushed, Check for Updates uses the bundled empty feed (“You’re up to date”) instead of erroring
+- Until `docs/appcast.xml` is on `origin/main`, Check for Updates shows a local
+  “You’re up to date” alert instead of Sparkle’s retrieval error; after publish,
+  an empty signed feed still means up to date until the next Sparkle zip lands
 
 ## Do not
 

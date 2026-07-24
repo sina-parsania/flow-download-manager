@@ -4,12 +4,12 @@ This document describes how Flow Download Manager ("Flow") handles data. It is
 an engineering privacy policy for a local-first application, not legal advice. A
 qualified privacy reviewer must review it before public release.
 
-**Project status.** Flow v0.2.0 has shipped as an installable community build.
-Downloading, the library/history, and the Chrome companion are live; browser
-cookie transfer, media, and torrent features have not shipped. This policy
-describes the data-handling architecture as built, and the commitments the
-remaining features are being built to honor. It is revised as each release ships
-and its actual behavior is verified against network capture.
+**Project status.** Flow v0.3.0 is the current community build. Downloading, the
+library/history, Chrome companion, and optional Sparkle update checks are live;
+full media download and torrent transfer have not shipped. This policy describes
+the data-handling architecture as built, and the commitments the remaining
+features are being built to honor. It is revised as each release ships and its
+actual behavior is verified against network capture.
 
 **Platform.** Native macOS 14.0 or later on Apple Silicon (arm64), distributed
 from GitHub rather than the Mac App Store; community builds are unsigned /

@@ -8,9 +8,9 @@ Developer ID signing and notarization are supported but not required. Flow runs
 as a main app plus a per-user `DownloadEngineAgent` that communicate over an
 authenticated, versioned XPC interface.
 
-**Flow v0.2.0 has shipped** as an installable community release, so this policy
-governs software that real users are running today: the shipping download
-features, the codebase and its architecture, and the release pipeline.
+**Flow v0.3.0** is the current community release, so this policy governs software
+that real users are running today: the shipping download features, in-app update
+checks, the codebase and its architecture, and the release pipeline.
 
 We take security seriously and appreciate coordinated, good-faith reports.
 

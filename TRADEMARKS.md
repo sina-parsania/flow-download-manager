@@ -63,7 +63,7 @@ your own choosing.
 
 ## Status
 
-Flow ships publicly today as a community build (v0.2.0). This policy states the
+Flow ships publicly today as a community build (v0.3.0). This policy states the
 rules for the marks as published; the specific mark owner and any registered-mark
 details are still placeholders and remain to be finalized.
 

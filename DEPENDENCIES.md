@@ -4,9 +4,9 @@ This document is the authoritative dependency manifest for **Flow Download
 Manager** ("Flow", native macOS 14.0+, Apple Silicon / arm64 only). It records
 every third-party component and the exact terms under which it is used.
 
-Project status: current as of **v0.2.0**, the shipping community build. The
-manifest below covers GRDB.swift and the pinned static libcurl stack used for
-transfer networking.
+Project status: current as of **v0.3.0**, the shipping community build. The
+manifest below covers GRDB.swift, Sparkle, and the pinned static libcurl stack
+used for transfer networking.
 
 Scope of "shipped runtime dependency": a component whose code is distributed to
 end users inside the released product (linked, embedded, or bundled).

@@ -25,7 +25,7 @@ Useful flags:
 | Flag | Effect |
 | --- | --- |
 | `--system` | Install to `/Applications` (may need admin) |
-| `--tag v0.2.0` | Pin a release tag |
+| `--tag v0.3.0` | Pin a release tag |
 | `--dir ~/Apps` | Custom install parent directory |
 | `--no-open` | Install only |
 | `--dmg /path/to.dmg` | Install from a local DMG (skip download) |

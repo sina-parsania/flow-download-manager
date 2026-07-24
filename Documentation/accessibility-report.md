@@ -1,6 +1,6 @@
 # Accessibility report — automated lane
 
-Status (as of v0.2.0): the automated accessibility foundation covers the shipping
+Status (as of v0.3.0): the automated accessibility foundation covers the shipping
 controls; the interactive VoiceOver/keyboard scripts below still require a human
 UI lane and remain the one open accessibility item.
 

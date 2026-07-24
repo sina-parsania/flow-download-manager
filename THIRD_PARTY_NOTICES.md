@@ -8,7 +8,7 @@ test, or release the software but not distributed to users are not listed here.
 Each component is reproduced below under its own heading with its exact license
 text, as required by that component's license.
 
-Flow v0.2.0 ships GRDB.swift, Sparkle, and the pinned static libcurl stack
+Flow v0.3.0 ships GRDB.swift, Sparkle, and the pinned static libcurl stack
 (curl, OpenSSL, nghttp2, libssh2). Additional components will be added here with
 their exact notices as later releases ship.
 

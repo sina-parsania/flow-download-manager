@@ -5,11 +5,11 @@ native macOS download manager (macOS 14.0+, Apple Silicon only) built as a main
 app plus a per-user `DownloadEngineAgent` communicating over an authenticated,
 versioned XPC interface.
 
-**Flow v0.2.0 has shipped** as an installable community build (see
-[`CHANGELOG.md`](CHANGELOG.md)), so contributions land on software people are
-running: fixes and features in the transfer engine and UI, plus the build
-system, policies, tests, and tooling that keep releases shippable. Contributions
-are accepted under **GPL-3.0-or-later** (see [License](#license)).
+**Flow v0.3.0** is the current community build (see [`CHANGELOG.md`](CHANGELOG.md)),
+so contributions land on software people are running: fixes and features in the
+transfer engine and UI, plus the build system, policies, tests, and tooling that
+keep releases shippable. Contributions are accepted under **GPL-3.0-or-later**
+(see [License](#license)).
 
 Before writing code, read [`AGENTS.md`](AGENTS.md) — it is the authoritative
 operating guide and defines the module layering and architecture boundaries that

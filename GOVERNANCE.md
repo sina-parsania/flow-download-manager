@@ -4,7 +4,7 @@ How **Flow Download Manager** ("Flow") is maintained, how decisions are made, an
 how releases are authorized. This document is normative repository policy: it
 describes the governing model and process, not the delivered user features —
 those live in [`README.md`](README.md) and [`CHANGELOG.md`](CHANGELOG.md). Flow
-ships today as a community build (v0.2.0), so these rules govern releases that
+ships today as a community build (v0.3.0), so these rules govern releases that
 reach real users.
 
 It complements, and does not override, the operating contracts already in the

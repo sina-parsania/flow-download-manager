@@ -53,4 +53,30 @@ final class TransferBudgetTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(seconds, 0.25)
         XCTAssertLessThan(seconds, 4.0)
     }
+
+    func testFairConnectionCapSplitsPerHostAcrossJobs() async {
+        let ledger = TransferBudgetLedger(maxActiveJobs: 5, maxTotalSockets: 96, maxSocketsPerHost: 32)
+        await ledger.beginHostJob("cdn.example")
+        let alone = await ledger.fairConnectionCap(forHost: "cdn.example")
+        XCTAssertEqual(alone, 32)
+
+        await ledger.beginHostJob("cdn.example")
+        await ledger.beginHostJob("cdn.example")
+        await ledger.beginHostJob("cdn.example")
+        let fourWay = await ledger.fairConnectionCap(forHost: "cdn.example")
+        XCTAssertEqual(fourWay, 8)
+
+        // Four jobs each taking the default 8 connections fill the host without
+        // starving later siblings for sockets.
+        var granted = 0
+        for _ in 0 ..< 4 {
+            let primary = await ledger.tryAcquireSocket(host: "cdn.example")
+            XCTAssertTrue(primary)
+            let extras = await ledger.reserveSockets(host: "cdn.example", upTo: 7)
+            granted += 1 + extras
+        }
+        XCTAssertEqual(granted, 32)
+        let overflow = await ledger.tryAcquireSocket(host: "cdn.example")
+        XCTAssertFalse(overflow)
+    }
 }

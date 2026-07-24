@@ -8,6 +8,7 @@ public actor TransferBudgetLedger {
         public var activeJobs: Int
         public var openSockets: Int
         public var socketsByHost: [String: Int]
+        public var jobsByHost: [String: Int]
     }
 
     private let maxActiveJobs: Int
@@ -17,6 +18,7 @@ public actor TransferBudgetLedger {
     private var activeJobs = 0
     private var openSockets = 0
     private var socketsByHost: [String: Int] = [:]
+    private var jobsByHost: [String: Int] = [:]
 
     public init(maxActiveJobs: Int = 5, maxTotalSockets: Int = 96, maxSocketsPerHost: Int = 32) {
         self.maxActiveJobs = maxActiveJobs
@@ -25,11 +27,20 @@ public actor TransferBudgetLedger {
     }
 
     public func snapshot() -> Snapshot {
-        Snapshot(activeJobs: activeJobs, openSockets: openSockets, socketsByHost: socketsByHost)
+        Snapshot(
+            activeJobs: activeJobs,
+            openSockets: openSockets,
+            socketsByHost: socketsByHost,
+            jobsByHost: jobsByHost
+        )
     }
 
     public func maxActiveJobsLimit() -> Int {
         maxActiveJobs
+    }
+
+    public func maxSocketsPerHostLimit() -> Int {
+        maxSocketsPerHost
     }
 
     public func availableJobSlots() -> Int {
@@ -44,6 +55,24 @@ public actor TransferBudgetLedger {
 
     public func endJob() {
         if activeJobs > 0 { activeJobs -= 1 }
+    }
+
+    /// Count a transfer against a host so siblings can fair-share the per-host
+    /// socket ceiling. Call after ``tryBeginJob()`` and before socket acquire.
+    public func beginHostJob(_ host: String) {
+        jobsByHost[host, default: 0] += 1
+    }
+
+    public func endHostJob(_ host: String) {
+        let next = jobsByHost[host, default: 0] - 1
+        jobsByHost[host] = next > 0 ? next : nil
+    }
+
+    /// Equal split of the per-host socket ceiling across jobs currently counted
+    /// on that host (including the caller after ``beginHostJob``).
+    public func fairConnectionCap(forHost host: String) -> Int {
+        let peers = max(1, jobsByHost[host, default: 0])
+        return max(1, maxSocketsPerHost / peers)
     }
 
     public func tryAcquireSocket(host: String) -> Bool {

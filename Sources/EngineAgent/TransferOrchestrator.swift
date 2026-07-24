@@ -239,21 +239,25 @@ public actor TransferOrchestrator {
             let hostSetting = try? HostSettingRepository.get(database: database, host: host)
             let preferredConnections = details.preferredConnectionCount
                 ?? hostSetting?.maxConnections
+            await budget.beginHostJob(host)
             // Acquire capacity before any state flip. A failed grant must leave
             // the job queued without thrashing connecting→downloading→queued.
             guard await budget.tryAcquireSocket(host: host) else {
+                await budget.endHostJob(host)
                 try await Task.sleep(nanoseconds: 200_000_000)
                 return
             }
-            // Reserve segment sockets so concurrent jobs to one host respect
-            // the per-host and total caps; the grant bounds segment count.
-            // A job that asked for fewer connections reserves fewer, so it does
-            // not hold sockets a sibling transfer could use.
+            // Fair-share the per-host socket ceiling across concurrent jobs to
+            // the same CDN. Without this, the first job reserved up to 31 extras
+            // and siblings starved at ~one connection (uneven speed in the UI).
+            let fairCap = await budget.fairConnectionCap(forHost: host)
+            let connectionTarget = Self.connectionTarget(
+                preferredConnectionCount: preferredConnections,
+                fairHostCap: fairCap
+            )
             let extraSegmentSockets = await budget.reserveSockets(
                 host: host,
-                upTo: Self.requestedExtraSockets(
-                    preferredConnectionCount: preferredConnections
-                )
+                upTo: max(0, connectionTarget - 1)
             )
             defer {
                 let budget = self.budget
@@ -262,6 +266,7 @@ public actor TransferOrchestrator {
                 Task.detached {
                     await budget.releaseSocket(host: hostToRelease)
                     await budget.releaseSockets(host: hostToRelease, count: extra)
+                    await budget.endHostJob(hostToRelease)
                 }
             }
 
@@ -338,7 +343,7 @@ public actor TransferOrchestrator {
                 options: options,
                 abortFlag: abort,
                 hostMaxSegments: Self.effectiveHostMaxSegments(
-                    preferredConnectionCount: preferredConnections,
+                    preferredConnectionCount: connectionTarget,
                     socketBudget: 1 + extraSegmentSockets
                 ),
                 onProgress: { bytes in liveBytes.record(bytes) }
@@ -559,12 +564,25 @@ public actor TransferOrchestrator {
         return globalPolicyLimit
     }
 
-    /// Extra sockets worth reserving for one job's segments. `nil` keeps the
-    /// historical "ask for the full 31" behaviour; a preference asks for only
-    /// what it can use, still capped at 31 so one job cannot exceed the host cap.
+    /// Default parallel connections when the job/host did not set a preference.
+    /// Kept well below the per-host ceiling (32) so several concurrent downloads
+    /// to one CDN each get a usable share instead of one job taking every slot.
+    static let defaultConnectionsPerJob = 8
+
+    /// Resolve how many connections one job may open on a host.
+    ///
+    /// - `preferredConnectionCount` (job or host setting) wins when present.
+    /// - Otherwise use ``defaultConnectionsPerJob``.
+    /// - Always clamp to `fairHostCap` (per-host ceiling ÷ jobs on that host).
+    static func connectionTarget(preferredConnectionCount: Int?, fairHostCap: Int) -> Int {
+        let fair = max(1, fairHostCap)
+        let want = preferredConnectionCount.map { max(1, $0) } ?? defaultConnectionsPerJob
+        return min(want, fair)
+    }
+
+    /// Extra sockets to reserve after the primary acquire (`target - 1`).
     static func requestedExtraSockets(preferredConnectionCount: Int?) -> Int {
-        guard let preferredConnectionCount else { return 31 }
-        return min(31, max(0, preferredConnectionCount - 1))
+        max(0, connectionTarget(preferredConnectionCount: preferredConnectionCount, fairHostCap: 32) - 1)
     }
 
     /// Segment ceiling handed to `SegmentedTransfer`. The socket reservation is

@@ -251,9 +251,28 @@ final class PerJobTransferLimitsTests: XCTestCase {
     }
 
     func testSocketReservationAsksForOnlyWhatThePreferenceNeeds() {
-        XCTAssertEqual(TransferOrchestrator.requestedExtraSockets(preferredConnectionCount: nil), 31)
+        XCTAssertEqual(TransferOrchestrator.requestedExtraSockets(preferredConnectionCount: nil), 7)
         XCTAssertEqual(TransferOrchestrator.requestedExtraSockets(preferredConnectionCount: 1), 0)
         XCTAssertEqual(TransferOrchestrator.requestedExtraSockets(preferredConnectionCount: 8), 7)
         XCTAssertEqual(TransferOrchestrator.requestedExtraSockets(preferredConnectionCount: 64), 31)
+    }
+
+    func testConnectionTargetDefaultsAndFairCap() {
+        XCTAssertEqual(
+            TransferOrchestrator.connectionTarget(preferredConnectionCount: nil, fairHostCap: 32),
+            TransferOrchestrator.defaultConnectionsPerJob
+        )
+        XCTAssertEqual(
+            TransferOrchestrator.connectionTarget(preferredConnectionCount: nil, fairHostCap: 4),
+            4
+        )
+        XCTAssertEqual(
+            TransferOrchestrator.connectionTarget(preferredConnectionCount: 16, fairHostCap: 6),
+            6
+        )
+        XCTAssertEqual(
+            TransferOrchestrator.connectionTarget(preferredConnectionCount: 3, fairHostCap: 32),
+            3
+        )
     }
 }

@@ -42,10 +42,11 @@ Full Gatekeeper notes: [Documentation/install-from-github.md](Documentation/inst
 | | |
 | --- | --- |
 | **Native stack** | SwiftUI + a dedicated `DownloadEngineAgent` over authenticated XPC — the UI never owns sockets or partial files. |
-| **Transfers that resume** | Segmented HTTP(S) with on-disk segment maps; relaunch doesn’t throw your progress away. |
+| **Transfers that resume** | Segmented HTTP(S) with validator-bound `.segmap` resume; relaunch doesn’t throw progress away or stitch a changed resource. |
+| **Resilient on bad links** | Stall-aware retries, jittered backoff, hedged tail (losing replica cancelled), optional per-host connection/speed/UA/credential overrides. |
 | **Background by design** | Engine stays available while Flow is open (app-scoped XPC on ad-hoc builds; LaunchAgent path for signed installs). |
 | **Board-first UI** | Pin cards, inspector, projects & tags — built for people who live in a download queue. |
-| **Browser companion** | Chrome MV3 extension + embedded native messaging host. |
+| **Browser companion** | Chrome MV3 extension + embedded native messaging host. Safari is developer-only until signed. |
 | **Honest licensing** | GPL-3.0-or-later. Build it, fork it, ship improvements back. |
 
 ---
@@ -77,7 +78,14 @@ make release-sbom
 make release-dmg-unsigned
 ```
 
-Artifacts land under `Artifacts/release/` (DMG + SHA-256). Optional Developer ID notarization exists for maintainers who already have credentials (`make release-notarize`) — **not required** for community GitHub releases.
+Artifacts land under `Artifacts/release/` (DMG + SHA-256). Optional Developer ID path for maintainers who already have credentials:
+
+```bash
+DM_CODESIGN_IDENTITY='Developer ID Application: …' make release-codesign APP=/path/to/DownloadManager.app
+make release-notarize DMG=/path/to/signed.dmg
+```
+
+Both scripts **fail closed** without credentials — that is expected for community releases, not a broken gate. See [Documentation/release-checklist.md](Documentation/release-checklist.md).
 
 ---
 
@@ -94,9 +102,9 @@ Layering is strict: `Domain` → `XPCContracts` → `Persistence` / `EngineAgent
 
 ## Status
 
-**v0.2.0** — community-stable path for daily use on Apple Silicon: universal transfer, Flow board UI, resume/segment maps, bundled XPC engine for ad-hoc installs, Chrome native host plumbing.
+**v0.2.0** is the latest GitHub Release tag. `main` is ahead with resilient-engine work, per-host settings, App Intents, and Compose torrent / yt-dlp inspection — see [CHANGELOG.md](CHANGELOG.md) **Unreleased**.
 
-Still evolving: VoiceOver pass, optional notarization, richer media/torrent runtimes.
+Still evolving / deferred by ADR: VoiceOver pass, libtorrent (magnets stay unsupported), bundled yt-dlp without checksummed VendorBuild manifests, signed Safari extension, optional notarization.
 
 ---
 

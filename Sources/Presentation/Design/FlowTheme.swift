@@ -226,6 +226,65 @@ public enum FlowTheme {
     }
 }
 
+/// AppKit colors for the dense list table — same citrus language as ``FlowPalette``,
+/// resolved from the user’s appearance preference (not the system accent blue).
+@MainActor
+enum FlowAppKitChrome {
+    static var palette: FlowPalette {
+        let raw = UserDefaults.standard.string(forKey: FlowAppearanceMode.userDefaultsKey)
+            ?? FlowAppearanceMode.system.rawValue
+        let mode = FlowAppearanceMode(rawValue: raw) ?? .system
+        return FlowPalette.resolved(mode: mode)
+    }
+
+    static var signal: NSColor {
+        nsColor(palette.signal)
+    }
+
+    static var signalDeep: NSColor {
+        nsColor(palette.signalDeep)
+    }
+
+    /// Soft citrus wash for selected rows (readable label colors stay as-is).
+    static var selectionFill: NSColor {
+        let p = palette
+        if p.isDark {
+            return NSColor(srgbRed: 0.55, green: 0.82, blue: 0.12, alpha: 0.32)
+        }
+        return NSColor(srgbRed: 0.52, green: 0.78, blue: 0.08, alpha: 0.26)
+    }
+
+    static var selectionFillInactive: NSColor {
+        selectionFill.withAlphaComponent(palette.isDark ? 0.18 : 0.14)
+    }
+
+    static var progressTrack: NSColor {
+        if palette.isDark {
+            return NSColor.white.withAlphaComponent(0.12)
+        }
+        return NSColor.black.withAlphaComponent(0.08)
+    }
+
+    static var statusActive: NSColor {
+        signalDeep
+    }
+
+    static var statusSuccess: NSColor {
+        if palette.isDark {
+            return NSColor(srgbRed: 0.35, green: 0.82, blue: 0.68, alpha: 1)
+        }
+        return NSColor(srgbRed: 0.12, green: 0.55, blue: 0.42, alpha: 1)
+    }
+
+    static var statusFailure: NSColor {
+        nsColor(palette.ember)
+    }
+
+    private static func nsColor(_ color: Color) -> NSColor {
+        NSColor(color)
+    }
+}
+
 /// Soft luminous field that sits behind the library — one composition, not a dashboard grid.
 public struct FlowAtmosphere: View {
     @Environment(\.flowPalette) private var palette

@@ -317,6 +317,11 @@ public struct JobTableView: NSViewRepresentable {
             return spec.makeCell(tableView, displayedRows[row])
         }
 
+        public func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            _ = row
+            return FlowTableRowView()
+        }
+
         public func tableViewSelectionDidChange(_ notification: Notification) {
             guard !isApplyingSelection, let tableView else { return }
             let indexes = tableView.selectedRowIndexes

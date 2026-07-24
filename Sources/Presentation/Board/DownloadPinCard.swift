@@ -188,8 +188,11 @@ struct DownloadPinCard: View {
             Circle()
                 .trim(from: 0, to: fraction ?? (row.statusRole == .success ? 1 : 0))
                 .stroke(
-                    palette.signal,
-                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                    AngularGradient(
+                        colors: [palette.signal, palette.signalDeep, palette.signal],
+                        center: .center
+                    ),
+                    style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
             badgeCenter(fraction: fraction)

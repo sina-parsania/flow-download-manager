@@ -144,11 +144,11 @@ struct JobColumn {
 
     private static func color(for role: JobRowModel.StatusRole) -> NSColor {
         switch role {
-        case .active: return .controlAccentColor
+        case .active: return FlowAppKitChrome.statusActive
         case .queued: return .secondaryLabelColor
         case .paused: return .secondaryLabelColor
-        case .success: return .systemGreen
-        case .failure: return .systemRed
+        case .success: return FlowAppKitChrome.statusSuccess
+        case .failure: return FlowAppKitChrome.statusFailure
         }
     }
 }
@@ -210,21 +210,84 @@ final class NameCellView: NSTableCellView {
     }
 }
 
+/// Citrus gradient progress bar — replaces the system-accent `NSProgressIndicator`.
+@MainActor
+final class FlowProgressBarView: NSView {
+    var fraction: Double = 0 {
+        didSet {
+            let clamped = max(0, min(1, fraction))
+            if clamped != fraction {
+                fraction = clamped
+                return
+            }
+            needsDisplay = true
+        }
+    }
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let height = min(bounds.height, 8)
+        let track = NSRect(
+            x: bounds.minX,
+            y: bounds.midY - height / 2,
+            width: bounds.width,
+            height: height
+        )
+        let radius = height / 2
+        let trackPath = NSBezierPath(roundedRect: track, xRadius: radius, yRadius: radius)
+        FlowAppKitChrome.progressTrack.setFill()
+        trackPath.fill()
+
+        let fillWidth = track.width * CGFloat(fraction)
+        guard fillWidth > 0.5 else { return }
+        let fillRect = NSRect(
+            x: track.minX,
+            y: track.minY,
+            width: max(fillWidth, height),
+            height: track.height
+        )
+        let fillPath = NSBezierPath(roundedRect: fillRect, xRadius: radius, yRadius: radius)
+        if let gradient = NSGradient(
+            starting: FlowAppKitChrome.signal,
+            ending: FlowAppKitChrome.signalDeep
+        ) {
+            gradient.draw(in: fillPath, angle: 0)
+        } else {
+            FlowAppKitChrome.signalDeep.setFill()
+            fillPath.fill()
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
 /// Reusable progress cell: a determinate bar plus a monospaced-digit label.
 /// Honors Reduce Motion by never animating (progress reflects throttled snapshots
 /// — `03-design-system-ui-ux.md` §5).
 @MainActor
 final class ProgressCellView: NSTableCellView {
-    private let bar = NSProgressIndicator()
+    private let bar = FlowProgressBarView()
     private let label = NSTextField(labelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.style = .bar
-        bar.isIndeterminate = false
-        bar.minValue = 0
-        bar.maxValue = 1
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         label.textColor = .secondaryLabelColor
@@ -239,10 +302,11 @@ final class ProgressCellView: NSTableCellView {
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            bar.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            bar.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            bar.heightAnchor.constraint(equalToConstant: 8),
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            label.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 2)
+            label.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 3)
         ])
     }
 
@@ -255,9 +319,8 @@ final class ProgressCellView: NSTableCellView {
     /// accessibility *value*, so VoiceOver announces the change instead of treating
     /// every update as a differently named element.
     func configure(fraction: Double?, text: String) {
-        let clamped = fraction.map { max(0, min(1, $0)) }
-        bar.isIndeterminate = false
-        bar.doubleValue = clamped ?? 0
+        let clamped = fraction.map { max(0, min(1, $0)) } ?? 0
+        bar.fraction = clamped
         label.stringValue = text
         setAccessibilityLabel("Progress")
         setAccessibilityValue(text)
@@ -266,5 +329,30 @@ final class ProgressCellView: NSTableCellView {
         bar.setAccessibilityValueDescription(text)
         label.setAccessibilityLabel("Progress")
         label.setAccessibilityValueDescription(text)
+    }
+}
+
+/// Selected-row chrome in Flow citrus instead of the system accent blue.
+@MainActor
+final class FlowTableRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        let inset = bounds.insetBy(dx: 2, dy: 1)
+        let path = NSBezierPath(roundedRect: inset, xRadius: 8, yRadius: 8)
+        let fill = isEmphasized
+            ? FlowAppKitChrome.selectionFill
+            : FlowAppKitChrome.selectionFillInactive
+        fill.setFill()
+        path.fill()
+    }
+
+    override var interiorBackgroundStyle: NSView.BackgroundStyle {
+        // Keep standard label colors — wash is soft enough without forced white text.
+        .normal
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 }

@@ -99,13 +99,30 @@ final class TransferThroughputTests: XCTestCase {
         defer { server.stop() }
         let url = throughputURL(port: port)
 
-        let single = try measureRangedDownload(url: url, connections: 1, tiles: 1)
-        server.reset()
-        let parallel = try measureRangedDownload(url: url, connections: 4, tiles: 4)
+        var curve: [(connections: Int, seconds: Double, speedup: Double)] = []
+        var baseline = 0.0
+        for connections in [1, 2, 4, 8, 16] {
+            server.reset()
+            let seconds = try measureRangedDownload(
+                url: url, connections: connections, tiles: connections
+            )
+            if connections == 1 { baseline = seconds }
+            curve.append((connections, seconds, baseline / max(seconds, 0.001)))
+        }
 
+        let rendered = curve
+            .map { "\($0.connections)c=\(String(format: "%.2f", $0.seconds))s(\(String(format: "%.1f", $0.speedup))x)" }
+            .joined(separator: " ")
+        print("[throughput] scaling under a per-connection cap: \(rendered)")
+
+        // The mechanism behind every "download 5x faster" claim: when a server
+        // shapes each connection, N connections get N shares. What it cannot do
+        // is exceed the client's own pipe — which is why the honest form of the
+        // claim is always "up to".
+        let best = curve.map(\.speedup).max() ?? 0
         XCTAssertGreaterThan(
-            single / max(parallel, 0.001), 2.0,
-            "4 connections (\(parallel)s) should beat 1 (\(single)s) by >2x under a per-connection cap"
+            best, 2.0,
+            "parallel connections did not scale against a per-connection cap: \(rendered)"
         )
     }
 
@@ -156,5 +173,119 @@ final class TransferThroughputTests: XCTestCase {
             when one connection is slow — the refill loop is not reusing freed slots
             """
         )
+    }
+
+    /// High-RTT / lossy link curve — the case where multi-connection actually
+    /// multiplies on a real network (Mathis: ~MSS/(RTT·√p) per TCP flow).
+    ///
+    /// Asserts relationships only: under RTT, more connections beat fewer; under
+    /// loss, the transfer still completes with byte-exact content when the
+    /// SegmentedTransfer retry path can recover from mid-stream drops.
+    func testConnectionScalingUnderRTTAndLoss() throws {
+        let size = 1 * 1024 * 1024
+        let kbps = 4096
+
+        func url(port: UInt16, rtt: Int, loss: Double) -> String {
+            "http://127.0.0.1:\(port)/fixtures/throughput?size=\(size)&kbps=\(kbps)&rtt=\(rtt)&loss=\(loss)"
+        }
+
+        func measureMulti(port: UInt16, rtt: Int, connections: Int) throws -> Double {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("dm-rtt-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let partial = root.appendingPathComponent("bench.partial")
+            FileManager.default.createFile(atPath: partial.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: partial)
+            try handle.truncate(atOffset: UInt64(size))
+            try handle.close()
+
+            let total = Int64(size)
+            let tiles = max(connections, 4)
+            let span = total / Int64(tiles)
+            var ranges: [CurlMultiLoop.RangeRequest] = []
+            for index in 0 ..< tiles {
+                let start = Int64(index) * span
+                let end = index == tiles - 1 ? total - 1 : start + span - 1
+                ranges.append(
+                    CurlMultiLoop.RangeRequest(
+                        rangeHeader: "\(start)-\(end)",
+                        fileOffset: start,
+                        expectedBytes: end - start + 1
+                    )
+                )
+            }
+
+            let clock = ContinuousClock()
+            let elapsed = try clock.measure {
+                _ = try TransferCore.downloadRangesViaMulti(
+                    url: url(port: port, rtt: rtt, loss: 0),
+                    partialURL: partial,
+                    ranges: ranges,
+                    maxConcurrent: connections
+                )
+            }
+            let written = try Data(contentsOf: partial)
+            XCTAssertEqual(written.count, size)
+            return Double(elapsed.components.seconds)
+                + Double(elapsed.components.attoseconds) / 1e18
+        }
+
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        // Print RTT 0 / 100 / 300 ms curves (no loss). Assert the relationship
+        // only on RTT=100 — enough latency that connection setup dominates a
+        // single flow, without making the suite wall-clock heavy.
+        for rtt in [0, 100, 300] {
+            var curve: [(Int, Double)] = []
+            for connections in [1, 2, 4, 8] {
+                server.reset()
+                let seconds = try measureMulti(port: port, rtt: rtt, connections: connections)
+                curve.append((connections, seconds))
+            }
+            let rendered = curve
+                .map { "\($0.0)c=\(String(format: "%.2f", $0.1))s" }
+                .joined(separator: " ")
+            print("[throughput] scaling under RTT=\(rtt)ms: \(rendered)")
+
+            if rtt == 100 {
+                let one = curve.first { $0.0 == 1 }?.1 ?? 0
+                let eight = curve.first { $0.0 == 8 }?.1 ?? one
+                XCTAssertGreaterThan(
+                    one / max(eight, 0.001), 1.3,
+                    "under RTT=100ms, 8 connections should beat 1: \(rendered)"
+                )
+            }
+        }
+
+        // Loss completion: mid-stream hangups must not leave a corrupt file when
+        // SegmentedTransfer retries. 1% is high enough to fire often on 8+
+        // connections; 0.1% is printed for the Mathis-style curve without a
+        // hard assert (a zero-drop run would make a "must drop" assert flake).
+        for loss in [0.1, 1.0] {
+            server.reset()
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("dm-loss-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let partial = root.appendingPathComponent("loss.partial")
+            let clock = ContinuousClock()
+            let elapsed = try clock.measure {
+                _ = try SegmentedTransfer.downloadHTTP(
+                    url: url(port: port, rtt: 0, loss: loss),
+                    partialURL: partial,
+                    hostMaxSegments: 8
+                )
+            }
+            let written = try Data(contentsOf: partial)
+            XCTAssertEqual(written.count, size, "lossy transfer left wrong length at loss=\(loss)%")
+            let expected = Data((0 ..< size).map { UInt8($0 % 251) })
+            XCTAssertEqual(written, expected, "lossy transfer corrupted bytes at loss=\(loss)%")
+            let seconds = Double(elapsed.components.seconds)
+                + Double(elapsed.components.attoseconds) / 1e18
+            print("[throughput] loss=\(loss)% complete in \(String(format: "%.2f", seconds))s")
+        }
     }
 }

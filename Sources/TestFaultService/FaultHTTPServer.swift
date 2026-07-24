@@ -18,8 +18,11 @@ import Network
 ///   GET /fixtures/truncated      -> Content-Length larger than the bytes sent
 ///   GET /fixtures/large          -> 2 MiB ranged body (real multi-segment plans)
 ///   GET /fixtures/throughput     -> ranged body with a per-connection rate cap;
-///                                    `?size=&kbps=&slowFirst=&slowKbps=` — the
-///                                    throughput/tail benchmark fixture
+///                                    `?size=&kbps=&slowFirst=&slowKbps=&rtt=&loss=`
+///                                    — throughput / RTT / loss fixture
+///   GET /fixtures/flaky          -> ranged body, but the first `drops`
+///                                    connections hang up mid-body;
+///                                    `?size=&drops=` — the bad-link fixture
 ///   GET /status/<code>           -> responds with that status code
 ///   POST /control/reset          -> clears request log + counters
 ///   GET  /control/logs           -> newline-delimited request log
@@ -44,6 +47,9 @@ public final class FaultHTTPServer: @unchecked Sendable {
     /// Counts connections served by `/fixtures/throughput`, so `slowFirst` can
     /// deterministically pick which connections are rate-starved.
     private var throughputConnections = 0
+    /// Connections served by `/fixtures/flaky`, so the first N can be dropped
+    /// deterministically.
+    private var flakyConnections = 0
 
     public private(set) var port: UInt16 = 0
 
@@ -95,6 +101,7 @@ public final class FaultHTTPServer: @unchecked Sendable {
         requestLog.removeAll()
         etagCounter = 0
         throughputConnections = 0
+        flakyConnections = 0
         lock.unlock()
     }
 
@@ -204,7 +211,9 @@ public final class FaultHTTPServer: @unchecked Sendable {
             connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
 
         default:
-            if path.hasPrefix("/fixtures/throughput") {
+            if path.hasPrefix("/fixtures/flaky") {
+                serveFlaky(path: path, rangeHeader: rangeHeader, on: connection)
+            } else if path.hasPrefix("/fixtures/throughput") {
                 serveThroughput(path: path, rangeHeader: rangeHeader, on: connection)
             } else if path.hasPrefix("/status/"), let code = Int(path.dropFirst("/status/".count)) {
                 send(status: code, reason: reason(for: code), body: Data("status \(code)".utf8), on: connection)
@@ -216,19 +225,28 @@ public final class FaultHTTPServer: @unchecked Sendable {
 
     // MARK: throughput fixture
 
-    /// `GET /fixtures/throughput?size=<bytes>&kbps=<cap>&slowFirst=<n>&slowKbps=<cap>`
+    /// `GET /fixtures/throughput?size=<bytes>&kbps=<cap>&slowFirst=<n>&slowKbps=<cap>&rtt=<ms>&loss=<percent>`
     ///
     /// Range-capable body of `size` bytes. `kbps` caps each connection's send
     /// rate; the first `slowFirst` connections are capped at `slowKbps` instead.
     /// The per-connection cap is what makes segmented throughput measurable:
     /// without it a loopback transfer finishes instantly and parallelism is
     /// invisible. `slowFirst` reproduces the straggler that dominates the tail.
+    ///
+    /// `rtt` delays the first byte of every connection by that many milliseconds
+    /// (one-way), modelling high-latency links. `loss` is the percent chance
+    /// (0–100) that a connection hangs up after roughly one third of its payload
+    /// — independent per connection, so N connections see independent draws.
     private func serveThroughput(path: String, rangeHeader: String?, on connection: NWConnection) {
         let query = Self.queryItems(path)
         let size = query["size"].flatMap(Int.init) ?? (8 * 1024 * 1024)
         let kbps = query["kbps"].flatMap(Int.init) ?? 0
         let slowFirst = query["slowFirst"].flatMap(Int.init) ?? 0
         let slowKbps = query["slowKbps"].flatMap(Int.init) ?? 0
+        let rttMs = max(0, query["rtt"].flatMap(Int.init) ?? 0)
+        // Fractional percents are intentional (TASK 2: 0.1% / 1%). A connection
+        // drops when a uniform draw in [0, 100) lands below `loss`.
+        let lossPercent = min(100.0, max(0.0, query["loss"].flatMap(Double.init) ?? 0))
         guard size > 0, size <= 512 * 1024 * 1024 else {
             send(status: 400, reason: "Bad Request", body: Data(), on: connection)
             return
@@ -247,6 +265,7 @@ public final class FaultHTTPServer: @unchecked Sendable {
         lock.unlock()
 
         let rate = index < slowFirst ? slowKbps : kbps
+        let dropMidStream = lossPercent > 0 && Double.random(in: 0 ..< 100) < lossPercent
 
         let range = rangeHeader.flatMap { Self.parseRange($0, total: body.count) }
         let payload = range.map { body.subdata(in: $0) } ?? body
@@ -259,22 +278,53 @@ public final class FaultHTTPServer: @unchecked Sendable {
         headers += "ETag: \(Self.strongETag)\r\n"
         headers += "Connection: close\r\n\r\n"
 
-        connection.send(content: Data(headers.utf8), completion: .contentProcessed { [weak self] _ in
-            self?.sendThrottled(payload, from: 0, kbps: rate, on: connection)
-        })
+        let hangUpAfter: Int? = dropMidStream ? max(1, payload.count / 3) : nil
+        let headerData = Data(headers.utf8)
+        let beginSend: @Sendable () -> Void = { [weak self] in
+            guard let self else { return }
+            connection.send(content: headerData, completion: .contentProcessed { _ in
+                self.sendThrottled(
+                    payload,
+                    from: 0,
+                    kbps: rate,
+                    hangUpAfter: hangUpAfter,
+                    on: connection
+                )
+            })
+        }
+        if rttMs > 0 {
+            queue.asyncAfter(deadline: .now() + .milliseconds(rttMs), execute: beginSend)
+        } else {
+            beginSend()
+        }
     }
 
     /// Sends `body` in chunks, pacing each chunk so the connection averages
     /// `kbps` kilobytes/second. `kbps <= 0` sends at full speed.
-    private func sendThrottled(_ body: Data, from offset: Int, kbps: Int, on connection: NWConnection) {
+    /// When `hangUpAfter` is set, the connection closes once that many bytes
+    /// have been written — modelling a mid-transfer drop without rewriting the
+    /// Content-Length (the client sees a short read).
+    private func sendThrottled(
+        _ body: Data,
+        from offset: Int,
+        kbps: Int,
+        hangUpAfter: Int? = nil,
+        on connection: NWConnection
+    ) {
+        if let hangUpAfter, offset >= hangUpAfter {
+            connection.cancel()
+            return
+        }
         guard offset < body.count else {
             connection.cancel()
             return
         }
         let chunkSize = kbps > 0 ? min(64 * 1024, kbps * 1024) : 256 * 1024
-        let end = min(offset + chunkSize, body.count)
+        let uncappedEnd = min(offset + chunkSize, body.count)
+        let end = hangUpAfter.map { min(uncappedEnd, $0) } ?? uncappedEnd
         let chunk = body.subdata(in: offset ..< end)
         let delay: TimeInterval = kbps > 0 ? Double(chunk.count) / Double(kbps * 1024) : 0
+        let nextOffset = end
 
         connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
             guard let self, error == nil else {
@@ -283,11 +333,61 @@ public final class FaultHTTPServer: @unchecked Sendable {
             }
             if delay > 0 {
                 queue.asyncAfter(deadline: .now() + delay) {
-                    self.sendThrottled(body, from: end, kbps: kbps, on: connection)
+                    self.sendThrottled(body, from: nextOffset, kbps: kbps, hangUpAfter: hangUpAfter, on: connection)
                 }
             } else {
-                sendThrottled(body, from: end, kbps: kbps, on: connection)
+                sendThrottled(body, from: nextOffset, kbps: kbps, hangUpAfter: hangUpAfter, on: connection)
             }
+        })
+    }
+
+    /// `GET /fixtures/flaky?size=<bytes>&drops=<n>`
+    ///
+    /// Range-capable, but the first `drops` connections send only part of the
+    /// body and then close abruptly — a mid-transfer disconnect, the defining
+    /// behaviour of a bad link. Later connections behave normally, so a client
+    /// that retries and resumes correctly finishes with the right bytes and one
+    /// that does not, does not.
+    private func serveFlaky(path: String, rangeHeader: String?, on connection: NWConnection) {
+        let query = Self.queryItems(path)
+        let size = query["size"].flatMap(Int.init) ?? (2 * 1024 * 1024)
+        let drops = query["drops"].flatMap(Int.init) ?? 2
+        guard size > 0, size <= 64 * 1024 * 1024 else {
+            send(status: 400, reason: "Bad Request", body: Data(), on: connection)
+            return
+        }
+
+        lock.lock()
+        let body: Data
+        if let cached = throughputBodies[size] {
+            body = cached
+        } else {
+            body = Data((0 ..< size).map { UInt8($0 % 251) })
+            throughputBodies[size] = body
+        }
+        let index = flakyConnections
+        flakyConnections += 1
+        lock.unlock()
+
+        let range = rangeHeader.flatMap { Self.parseRange($0, total: body.count) }
+        let payload = range.map { body.subdata(in: $0) } ?? body
+        var headers = range.map {
+            "HTTP/1.1 206 Partial Content\r\n"
+                + "Content-Range: bytes \($0.lowerBound)-\($0.upperBound - 1)/\(body.count)\r\n"
+        } ?? "HTTP/1.1 200 OK\r\n"
+        headers += "Content-Length: \(payload.count)\r\n"
+        headers += "Accept-Ranges: bytes\r\n"
+        headers += "ETag: \(Self.strongETag)\r\n"
+        headers += "Connection: close\r\n\r\n"
+
+        // Declare the full length, then hang up early. The client sees a short
+        // read, exactly as it would on a dropped link.
+        let truncated = index < drops
+        let toSend = truncated ? payload.prefix(max(1, payload.count / 3)) : payload
+        var response = Data(headers.utf8)
+        response.append(toSend)
+        connection.send(content: response, completion: .contentProcessed { _ in
+            connection.cancel()
         })
     }
 

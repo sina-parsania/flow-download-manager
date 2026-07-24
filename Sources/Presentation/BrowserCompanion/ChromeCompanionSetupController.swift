@@ -148,7 +148,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
         let bundledCandidates = [
             resourceRoot?.appendingPathComponent("ChromeCompanion/chrome", isDirectory: true),
             resourceRoot?.appendingPathComponent("ChromeCompanion", isDirectory: true)
-        ].compactMap { $0 }
+        ].compactMap(\.self)
         for url in bundledCandidates {
             if FileManager.default.fileExists(atPath: url.appendingPathComponent("manifest.json").path) {
                 return url

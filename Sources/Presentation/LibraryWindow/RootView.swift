@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Application
+import Domain
 import SwiftUI
 import UniformTypeIdentifiers
 import XPCContracts
@@ -10,7 +11,7 @@ public struct RootView: View {
     @ObservedObject private var model: LibraryModel
     @ObservedObject private var launchAgent: LaunchAgentModel
     @State private var isDropTargeted = false
-    @State private var pendingDiskDeleteID: JobRowModel.ID?
+    @State private var pendingDiskDeleteIDs: Set<JobRowModel.ID> = []
     @State private var isClearFailedPresented = false
     @Environment(\.flowPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -56,7 +57,7 @@ public struct RootView: View {
                             },
                             onDeleteFromDisk: {
                                 guard let id = model.selectedID else { return }
-                                pendingDiskDeleteID = id
+                                pendingDiskDeleteIDs = [id]
                             }
                         )
                         .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
@@ -73,24 +74,35 @@ public struct RootView: View {
         .confirmationDialog(
             "Remove files?",
             isPresented: Binding(
-                get: { pendingDiskDeleteID != nil },
-                set: { if !$0 { pendingDiskDeleteID = nil } }
+                get: { !pendingDiskDeleteIDs.isEmpty },
+                set: { if !$0 { pendingDiskDeleteIDs = [] } }
             ),
             titleVisibility: .visible
         ) {
             Button("Remove Files", role: .destructive) {
-                guard let id = pendingDiskDeleteID else { return }
-                pendingDiskDeleteID = nil
-                Task { await model.remove(jobID: id, deleteFiles: true) }
+                let ids = pendingDiskDeleteIDs
+                pendingDiskDeleteIDs = []
+                Task {
+                    for id in ids {
+                        await model.remove(jobID: id, deleteFiles: true)
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {
-                pendingDiskDeleteID = nil
+                pendingDiskDeleteIDs = []
             }
         } message: {
-            let name = pendingDiskDeleteID.flatMap { id in
-                model.rows.first(where: { $0.id == id })?.name
-            } ?? "this download"
-            Text("This permanently deletes “\(name)” from your download folder and removes it from Flow.")
+            let count = pendingDiskDeleteIDs.count
+            if count <= 1 {
+                let name = pendingDiskDeleteIDs.first.flatMap { id in
+                    model.rows.first(where: { $0.id == id })?.name
+                } ?? "this download"
+                Text("This permanently deletes “\(name)” from your download folder and removes it from Flow.")
+            } else {
+                Text(
+                    "This permanently deletes \(count) downloads from your download folder and removes them from Flow."
+                )
+            }
         }
         .confirmationDialog(
             "Clear failed downloads?",
@@ -167,6 +179,7 @@ public struct RootView: View {
                         DownloadBoardView(
                             rows: model.visibleRows,
                             selectedID: $model.selectedID,
+                            selectedIDs: $model.selectedIDs,
                             onCommand: { id, command in
                                 Task { await model.control(jobID: id, command: command) }
                             },
@@ -177,19 +190,38 @@ public struct RootView: View {
                                 Task { await model.remove(jobID: id, deleteFiles: false) }
                             },
                             onDeleteFromDisk: { id in
-                                pendingDiskDeleteID = id
+                                pendingDiskDeleteIDs = [id]
                             }
                         )
                     case .list:
-                        JobTableView(rows: model.visibleRows, selectedID: $model.selectedID)
-                            .padding(12)
-                            .background(
-                                palette.plateFill,
-                                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            )
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 16)
-                            .accessibilityLabel("Download list")
+                        JobTableView(
+                            rows: model.visibleRows,
+                            selectedID: $model.selectedID,
+                            selectedIDs: $model.selectedIDs,
+                            onCommand: { command in
+                                Task { await model.controlSelected(command) }
+                            },
+                            onRemoveFromList: {
+                                Task { await model.removeSelectedTerminal(deleteFiles: false) }
+                            },
+                            onRemoveFiles: {
+                                let ids = Set(model.selectedRows.map(\.id))
+                                guard !ids.isEmpty else { return }
+                                pendingDiskDeleteIDs = ids
+                            },
+                            onRevealInFinder: {
+                                guard let id = model.selectedID else { return }
+                                Task { await model.revealInFinder(jobID: id) }
+                            }
+                        )
+                        .padding(12)
+                        .background(
+                            palette.plateFill,
+                            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                        .accessibilityLabel("Download list")
                     }
                 }
             }
@@ -304,7 +336,7 @@ public struct RootView: View {
                 Label("Pause", systemImage: "pause.fill")
             }
             .disabled(!canPause)
-            .help("Pause selected download")
+            .help(selectionHelp("Pause"))
 
             Button {
                 Task { await model.controlSelected(.resume) }
@@ -312,15 +344,15 @@ public struct RootView: View {
                 Label("Resume", systemImage: "play.fill")
             }
             .disabled(!canResume)
-            .help("Resume selected download")
+            .help(selectionHelp("Resume"))
 
             Button {
                 Task { await model.controlSelected(.cancel) }
             } label: {
                 Label("Cancel", systemImage: "xmark.circle")
             }
-            .disabled(model.selectedRow == nil)
-            .help("Cancel selected download")
+            .disabled(!canCancel)
+            .help(selectionHelp("Cancel"))
 
             Button {
                 Task { await model.controlSelected(.retry) }
@@ -328,7 +360,7 @@ public struct RootView: View {
                 Label("Retry", systemImage: "arrow.clockwise")
             }
             .disabled(!canRetry)
-            .help("Retry selected download (keep partial)")
+            .help(selectionHelp("Retry"))
 
             Button {
                 Task { await model.controlSelected(.restart) }
@@ -336,7 +368,7 @@ public struct RootView: View {
                 Label("Restart", systemImage: "arrow.counterclockwise")
             }
             .disabled(!canRestart)
-            .help("Restart selected download from scratch (wipe partial)")
+            .help(selectionHelp("Restart"))
 
             Button {
                 Task { await model.pauseAll() }
@@ -359,14 +391,15 @@ public struct RootView: View {
                     Task { await model.removeSelectedTerminal(deleteFiles: false) }
                 }
                 Button("Remove Files…", role: .destructive) {
-                    guard let id = model.selectedID else { return }
-                    pendingDiskDeleteID = id
+                    let ids = Set(model.selectedRows.map(\.id))
+                    guard !ids.isEmpty else { return }
+                    pendingDiskDeleteIDs = ids
                 }
             } label: {
                 Label("Remove", systemImage: "trash")
             }
             .disabled(!canRemove)
-            .accessibilityLabel("Remove selected download")
+            .accessibilityLabel("Remove selected downloads")
             .help("Remove from list only, or delete the file from disk too")
 
             Button {
@@ -390,32 +423,44 @@ public struct RootView: View {
         }
     }
 
+    private var selectedStates: [JobState] {
+        model.selectedRows.map(\.state)
+    }
+
     private var canPause: Bool {
-        guard let state = model.selectedRow?.state else { return false }
-        return [.queued, .connecting, .downloading, .scheduled].contains(state)
+        BulkJobCommandFilter.anyCanPause(selectedStates)
     }
 
     private var canResume: Bool {
-        model.selectedRow?.state == .paused
+        BulkJobCommandFilter.anyCanResume(selectedStates)
+    }
+
+    private var canCancel: Bool {
+        BulkJobCommandFilter.anyCanCancel(selectedStates)
     }
 
     private var canRetry: Bool {
-        guard let state = model.selectedRow?.state else { return false }
-        return state == .failed || state == .cancelled
+        BulkJobCommandFilter.anyCanRetry(selectedStates)
     }
 
     private var canRestart: Bool {
-        guard let state = model.selectedRow?.state else { return false }
-        return state == .paused || state == .failed || state == .cancelled
+        BulkJobCommandFilter.anyCanRestart(selectedStates)
     }
 
     private var canRemove: Bool {
-        guard let state = model.selectedRow?.state else { return false }
-        return DeleteJobGuard.allowsDelete(state)
+        BulkJobCommandFilter.anyCanRemove(selectedStates)
     }
 
     private var hasFailed: Bool {
         model.rows.contains { DeleteJobGuard.allowsClearFailed($0.state) }
+    }
+
+    private func selectionHelp(_ verb: String) -> String {
+        let count = model.selectedRows.count
+        if count <= 1 {
+            return "\(verb) selected download"
+        }
+        return "\(verb) \(count) selected downloads"
     }
 
     private func handleWindowDrop(_ providers: [NSItemProvider]) -> Bool {

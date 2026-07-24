@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Application
 import Domain
 import SwiftUI
 import XPCContracts
@@ -245,28 +246,23 @@ struct DownloadPinCard: View {
     }
 
     private var canPause: Bool {
-        switch row.state {
-        case .downloading, .connecting, .queued, .ready, .verifying, .merging, .postProcessing:
-            return true
-        default:
-            return false
-        }
+        BulkJobCommandFilter.canPause(row.state)
     }
 
     private var canResume: Bool {
-        row.state == .paused || row.state == .retryWaiting
+        BulkJobCommandFilter.canResume(row.state)
     }
 
     private var canCancel: Bool {
-        !JobState.terminalStates.contains(row.state)
+        BulkJobCommandFilter.canCancel(row.state)
     }
 
     private var canRetry: Bool {
-        row.state == .failed || row.state == .cancelled
+        BulkJobCommandFilter.canRetry(row.state)
     }
 
     private var canRestart: Bool {
-        row.state == .paused || row.state == .failed || row.state == .cancelled
+        BulkJobCommandFilter.canRestart(row.state)
     }
 
     private var accessibilitySummary: String {

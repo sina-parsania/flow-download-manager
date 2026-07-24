@@ -411,12 +411,17 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         )
         let live = progressMap[job.id]
         let total = live?.totalBytes ?? resource.expectedSize
-        let transferred = live?.bytesTransferred ?? 0
         let isLiveTransfer = job.state == "downloading"
             || job.state == "connecting"
             || job.state == "verifying"
             || job.state == "merging"
             || job.state == "postProcessing"
+        let transferred: Int64 = if job.state == "completed" {
+            // Prefer the known total once the live ledger is cleared after finish.
+            total ?? live?.bytesTransferred ?? 0
+        } else {
+            live?.bytesTransferred ?? 0
+        }
         let speed = isLiveTransfer ? (live?.speedBytesPerSecond ?? 0) : 0
         let fraction: Double? = if job.state == "completed" {
             live?.progressFraction ?? 1.0

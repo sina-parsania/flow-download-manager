@@ -8,6 +8,7 @@ import XPCContracts
 public struct DownloadBoardView: View {
     public let rows: [JobRowModel]
     @Binding public var selectedID: JobRowModel.ID?
+    @Binding public var selectedIDs: Set<JobRowModel.ID>
     public var onCommand: ((JobRowModel.ID, JobCommandKind) -> Void)?
     public var onRevealInFinder: ((JobRowModel.ID) -> Void)?
     public var onRemoveFromLibrary: ((JobRowModel.ID) -> Void)?
@@ -16,6 +17,7 @@ public struct DownloadBoardView: View {
     public init(
         rows: [JobRowModel],
         selectedID: Binding<JobRowModel.ID?>,
+        selectedIDs: Binding<Set<JobRowModel.ID>> = .constant([]),
         onCommand: ((JobRowModel.ID, JobCommandKind) -> Void)? = nil,
         onRevealInFinder: ((JobRowModel.ID) -> Void)? = nil,
         onRemoveFromLibrary: ((JobRowModel.ID) -> Void)? = nil,
@@ -23,6 +25,7 @@ public struct DownloadBoardView: View {
     ) {
         self.rows = rows
         _selectedID = selectedID
+        _selectedIDs = selectedIDs
         self.onCommand = onCommand
         self.onRevealInFinder = onRevealInFinder
         self.onRemoveFromLibrary = onRemoveFromLibrary
@@ -35,8 +38,11 @@ public struct DownloadBoardView: View {
                 ForEach(rows) { row in
                     DownloadPinCard(
                         row: row,
-                        isSelected: selectedID == row.id,
-                        onSelect: { selectedID = row.id },
+                        isSelected: selectedIDs.contains(row.id) || selectedID == row.id,
+                        onSelect: {
+                            selectedID = row.id
+                            selectedIDs = [row.id]
+                        },
                         onCommand: { command in onCommand?(row.id, command) },
                         onRevealInFinder: { onRevealInFinder?(row.id) },
                         onRemoveFromLibrary: { onRemoveFromLibrary?(row.id) },

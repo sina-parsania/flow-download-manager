@@ -1,35 +1,74 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import AppKit
+import Application
+import Domain
 import SwiftUI
+import XPCContracts
 
-/// AppKit-backed, virtualized download table bridged into SwiftUI
-/// (`02-architecture.md` §14, `03-design-system-ui-ux.md` §5).
-///
-/// Uses a classic `NSTableViewDataSource` (not DiffableDataSource) so column
-/// header sorting can reorder rows with a plain `reloadData`. Diffable snapshots
-/// on macOS often keep item order stable when only the sequence of existing IDs
-/// changes — which made the sort arrows appear while rows stayed put.
+/// Selects the right-clicked row when it is not already part of the selection,
+/// so the context menu always targets the row under the pointer.
+private final class JobListTableView: NSTableView {
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let local = convert(event.locationInWindow, from: nil)
+        let row = row(at: local)
+        if row >= 0, !selectedRowIndexes.contains(row) {
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        return super.menu(for: event)
+    }
+}
+
+/// AppKit-backed download table with multi-select, column sorting, and a
+/// right-click context menu for bulk Pause / Resume / Cancel / Remove.
 @MainActor
 public struct JobTableView: NSViewRepresentable {
     public let rows: [JobRowModel]
     @Binding public var selectedID: JobRowModel.ID?
+    @Binding public var selectedIDs: Set<JobRowModel.ID>
+    public var onCommand: ((JobCommandKind) -> Void)?
+    public var onRemoveFromList: (() -> Void)?
+    public var onRemoveFiles: (() -> Void)?
+    public var onRevealInFinder: (() -> Void)?
 
-    public init(rows: [JobRowModel], selectedID: Binding<JobRowModel.ID?>) {
+    public init(
+        rows: [JobRowModel],
+        selectedID: Binding<JobRowModel.ID?>,
+        selectedIDs: Binding<Set<JobRowModel.ID>>,
+        onCommand: ((JobCommandKind) -> Void)? = nil,
+        onRemoveFromList: (() -> Void)? = nil,
+        onRemoveFiles: (() -> Void)? = nil,
+        onRevealInFinder: (() -> Void)? = nil
+    ) {
         self.rows = rows
         _selectedID = selectedID
+        _selectedIDs = selectedIDs
+        self.onCommand = onCommand
+        self.onRemoveFromList = onRemoveFromList
+        self.onRemoveFiles = onRemoveFiles
+        self.onRevealInFinder = onRevealInFinder
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator(selectedID: $selectedID)
+        Coordinator(
+            selectedID: $selectedID,
+            selectedIDs: $selectedIDs,
+            onCommand: onCommand,
+            onRemoveFromList: onRemoveFromList,
+            onRemoveFiles: onRemoveFiles,
+            onRevealInFinder: onRevealInFinder
+        )
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
-        let tableView = NSTableView()
+        let tableView = JobListTableView()
         tableView.style = .inset
         tableView.usesAlternatingRowBackgroundColors = true
         tableView.rowHeight = 40
         tableView.allowsMultipleSelection = true
+        tableView.allowsEmptySelection = true
+        // Click-drag across rows extends the selection (with multi-select on).
+        tableView.allowsTypeSelect = true
         tableView.allowsColumnReordering = true
         tableView.allowsColumnResizing = true
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -50,6 +89,7 @@ public struct JobTableView: NSViewRepresentable {
         context.coordinator.tableView = tableView
         tableView.dataSource = context.coordinator
         tableView.delegate = context.coordinator
+        tableView.menu = context.coordinator.makeContextMenu()
         context.coordinator.replaceRows(rows, reload: true)
 
         let scrollView = NSScrollView()
@@ -61,31 +101,53 @@ public struct JobTableView: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.onCommand = onCommand
+        context.coordinator.onRemoveFromList = onRemoveFromList
+        context.coordinator.onRemoveFiles = onRemoveFiles
+        context.coordinator.onRevealInFinder = onRevealInFinder
         context.coordinator.replaceRows(rows, reload: true)
-        context.coordinator.syncSelection(selectedID)
+        context.coordinator.syncSelection(selectedIDs, primary: selectedID)
     }
 
     @MainActor
-    public final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    public final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
         weak var tableView: NSTableView?
         @Binding private var selectedID: JobRowModel.ID?
+        @Binding private var selectedIDs: Set<JobRowModel.ID>
+        var onCommand: ((JobCommandKind) -> Void)?
+        var onRemoveFromList: (() -> Void)?
+        var onRemoveFiles: (() -> Void)?
+        var onRevealInFinder: (() -> Void)?
         private var sourceRows: [JobRowModel] = []
         private var displayedRows: [JobRowModel] = []
         private var sortKey: JobTableSortKey?
         private var sortAscending = true
         private var isApplyingSelection = false
 
-        init(selectedID: Binding<JobRowModel.ID?>) {
+        init(
+            selectedID: Binding<JobRowModel.ID?>,
+            selectedIDs: Binding<Set<JobRowModel.ID>>,
+            onCommand: ((JobCommandKind) -> Void)?,
+            onRemoveFromList: (() -> Void)?,
+            onRemoveFiles: (() -> Void)?,
+            onRevealInFinder: (() -> Void)?
+        ) {
             _selectedID = selectedID
+            _selectedIDs = selectedIDs
+            self.onCommand = onCommand
+            self.onRemoveFromList = onRemoveFromList
+            self.onRemoveFiles = onRemoveFiles
+            self.onRevealInFinder = onRevealInFinder
         }
 
         func replaceRows(_ rows: [JobRowModel], reload: Bool) {
             sourceRows = rows
             displayedRows = ordered(rows)
             guard reload, let tableView else { return }
-            let previousID = selectedID
+            let keep = selectedIDs
+            let primary = selectedID
             tableView.reloadData()
-            syncSelection(previousID)
+            syncSelection(keep, primary: primary)
         }
 
         private func ordered(_ rows: [JobRowModel]) -> [JobRowModel] {
@@ -93,15 +155,129 @@ public struct JobTableView: NSViewRepresentable {
             return JobTableSorting.sorted(rows, by: sortKey, ascending: sortAscending)
         }
 
-        func syncSelection(_ id: JobRowModel.ID?) {
+        func syncSelection(_ ids: Set<JobRowModel.ID>, primary: JobRowModel.ID?) {
             guard let tableView else { return }
             isApplyingSelection = true
             defer { isApplyingSelection = false }
-            if let id, let row = displayedRows.firstIndex(where: { $0.id == id }) {
-                tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            } else if id == nil {
-                tableView.deselectAll(nil)
+            var indexes = IndexSet()
+            for (index, row) in displayedRows.enumerated() where ids.contains(row.id) {
+                indexes.insert(index)
             }
+            if indexes.isEmpty {
+                tableView.deselectAll(nil)
+            } else {
+                tableView.selectRowIndexes(indexes, byExtendingSelection: false)
+                if let primary,
+                   let focus = displayedRows.firstIndex(where: { $0.id == primary }) {
+                    tableView.scrollRowToVisible(focus)
+                }
+            }
+        }
+
+        func makeContextMenu() -> NSMenu {
+            let menu = NSMenu(title: "Downloads")
+            menu.delegate = self
+            menu.autoenablesItems = false
+            return menu
+        }
+
+        public func menuNeedsUpdate(_ menu: NSMenu) {
+            menu.removeAllItems()
+            let states = selectedDisplayedRows().map(\.state)
+            let hasSelection = !states.isEmpty
+
+            func item(_ title: String, action: Selector, enabled: Bool) -> NSMenuItem {
+                let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                entry.target = self
+                entry.isEnabled = enabled
+                return entry
+            }
+
+            menu.addItem(item(
+                "Pause",
+                action: #selector(contextPause),
+                enabled: hasSelection && BulkJobCommandFilter.anyCanPause(states)
+            ))
+            menu.addItem(item(
+                "Resume",
+                action: #selector(contextResume),
+                enabled: hasSelection && BulkJobCommandFilter.anyCanResume(states)
+            ))
+            menu.addItem(item(
+                "Cancel",
+                action: #selector(contextCancel),
+                enabled: hasSelection && BulkJobCommandFilter.anyCanCancel(states)
+            ))
+            menu.addItem(.separator())
+            menu.addItem(item(
+                "Retry",
+                action: #selector(contextRetry),
+                enabled: hasSelection && BulkJobCommandFilter.anyCanRetry(states)
+            ))
+            menu.addItem(item(
+                "Restart",
+                action: #selector(contextRestart),
+                enabled: hasSelection && BulkJobCommandFilter.anyCanRestart(states)
+            ))
+            menu.addItem(.separator())
+            menu.addItem(item(
+                "Open in Finder",
+                action: #selector(contextReveal),
+                enabled: hasSelection && onRevealInFinder != nil
+            ))
+            menu.addItem(.separator())
+            menu.addItem(item(
+                "Remove from List",
+                action: #selector(contextRemoveList),
+                enabled: hasSelection && BulkJobCommandFilter.anyCanRemove(states)
+            ))
+            let removeFiles = item(
+                "Remove Files…",
+                action: #selector(contextRemoveFiles),
+                enabled: hasSelection && BulkJobCommandFilter.anyCanRemove(states)
+            )
+            removeFiles.isAlternate = false
+            menu.addItem(removeFiles)
+        }
+
+        private func selectedDisplayedRows() -> [JobRowModel] {
+            guard let tableView else { return [] }
+            return tableView.selectedRowIndexes.compactMap { index in
+                guard index >= 0, index < displayedRows.count else { return nil }
+                return displayedRows[index]
+            }
+        }
+
+        @objc private func contextPause() {
+            onCommand?(.pause)
+        }
+
+        @objc private func contextResume() {
+            onCommand?(.resume)
+        }
+
+        @objc private func contextCancel() {
+            onCommand?(.cancel)
+        }
+
+        @objc private func contextRetry() {
+            onCommand?(.retry)
+        }
+
+        @objc private func contextRestart() {
+            onCommand?(.restart)
+        }
+
+        @objc private func contextReveal() {
+            onRevealInFinder?()
+        }
+
+        @objc private func contextRemoveList() {
+            onRemoveFromList?()
+        }
+
+        @objc private func contextRemoveFiles() {
+            onRemoveFiles?()
         }
 
         // MARK: NSTableViewDataSource
@@ -126,8 +302,26 @@ public struct JobTableView: NSViewRepresentable {
 
         public func tableViewSelectionDidChange(_ notification: Notification) {
             guard !isApplyingSelection, let tableView else { return }
-            let row = tableView.selectedRow
-            selectedID = (row >= 0 && row < displayedRows.count) ? displayedRows[row].id : nil
+            let indexes = tableView.selectedRowIndexes
+            let ids = Set(indexes.compactMap { index -> JobRowModel.ID? in
+                guard index >= 0, index < displayedRows.count else { return nil }
+                return displayedRows[index].id
+            })
+            selectedIDs = ids
+            if let row = Optional(tableView.selectedRow),
+               row >= 0, row < displayedRows.count {
+                selectedID = displayedRows[row].id
+            } else {
+                selectedID = ids.first
+            }
+        }
+
+        /// Right-click on an unselected row selects it before the menu opens.
+        public func tableView(
+            _ tableView: NSTableView,
+            didClick tableColumn: NSTableColumn
+        ) {
+            _ = tableColumn
         }
 
         @objc

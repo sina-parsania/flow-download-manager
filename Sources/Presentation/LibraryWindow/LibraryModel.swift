@@ -35,7 +35,17 @@ public enum LibraryFilter: Hashable, Sendable {
 @MainActor
 public final class LibraryModel: ObservableObject {
     @Published public var rows: [JobRowModel]
-    @Published public var selectedID: JobRowModel.ID?
+    /// Primary selection (inspector + single-target menus). Always a member of
+    /// ``selectedIDs`` when the set is non-empty.
+    @Published public var selectedID: JobRowModel.ID? {
+        didSet { reconcilePrimarySelection() }
+    }
+
+    /// Multi-select set used by the list table and bulk toolbar actions.
+    @Published public var selectedIDs: Set<JobRowModel.ID> = [] {
+        didSet { reconcilePrimarySelection() }
+    }
+
     /// Bound directly to the search field, so typing stays responsive.
     @Published public var searchText: String = "" {
         didSet { scheduleSearchDebounce() }
@@ -112,6 +122,37 @@ public final class LibraryModel: ObservableObject {
         return rows.first { $0.id == selectedID }
     }
 
+    public var selectedRows: [JobRowModel] {
+        let ids = selectedIDs
+        guard !ids.isEmpty else { return selectedRow.map { [$0] } ?? [] }
+        return rows.filter { ids.contains($0.id) }
+    }
+
+    private var isReconcilingSelection = false
+
+    private func reconcilePrimarySelection() {
+        guard !isReconcilingSelection else { return }
+        isReconcilingSelection = true
+        defer { isReconcilingSelection = false }
+        if selectedIDs.isEmpty {
+            if let selectedID {
+                selectedIDs = [selectedID]
+            }
+            return
+        }
+        if let selectedID, selectedIDs.contains(selectedID) {
+            return
+        }
+        selectedID = selectedIDs.sorted { $0.uuidString < $1.uuidString }.first
+    }
+
+    public func select(ids: Set<JobRowModel.ID>, primary: JobRowModel.ID?) {
+        isReconcilingSelection = true
+        selectedIDs = ids
+        selectedID = primary ?? ids.sorted { $0.uuidString < $1.uuidString }.first
+        isReconcilingSelection = false
+    }
+
     public enum EmptyReason: Sendable { case noDownloads, noMatches, engineUnavailable }
 
     public var emptyReason: EmptyReason? {
@@ -168,8 +209,19 @@ public final class LibraryModel: ObservableObject {
     }
 
     public func controlSelected(_ command: JobCommandKind) async {
-        guard let row = selectedRow else { return }
-        await control(jobID: row.id, command: command)
+        let targets = selectedRows.filter { Self.isEligible($0.state, for: command) }
+        guard !targets.isEmpty else { return }
+        for row in targets {
+            do {
+                _ = try await engineClient.controlJob(
+                    jobID: row.id.uuidString.lowercased(),
+                    command: command
+                )
+            } catch {
+                lastErrorMessage = "Could not \(String(describing: command)) the download."
+            }
+        }
+        await refreshFromEngine(forceFull: true)
     }
 
     public func control(jobID: JobRowModel.ID, command: JobCommandKind) async {
@@ -178,9 +230,19 @@ public final class LibraryModel: ObservableObject {
                 jobID: jobID.uuidString.lowercased(),
                 command: command
             )
-            await refreshFromEngine()
+            await refreshFromEngine(forceFull: true)
         } catch {
             lastErrorMessage = "Could not \(String(describing: command)) the download."
+        }
+    }
+
+    private static func isEligible(_ state: JobState, for command: JobCommandKind) -> Bool {
+        switch command {
+        case .pause: return BulkJobCommandFilter.canPause(state)
+        case .resume: return BulkJobCommandFilter.canResume(state)
+        case .cancel: return BulkJobCommandFilter.canCancel(state)
+        case .retry: return BulkJobCommandFilter.canRetry(state)
+        case .restart: return BulkJobCommandFilter.canRestart(state)
         }
     }
 
@@ -193,8 +255,9 @@ public final class LibraryModel: ObservableObject {
                 jobID: jobID.uuidString.lowercased(),
                 deleteFiles: deleteFiles
             )
-            if selectedID == jobID { selectedID = nil }
-            await refreshFromEngine()
+            selectedIDs.remove(jobID)
+            if selectedID == jobID { selectedID = selectedIDs.first }
+            await refreshFromEngine(forceFull: true)
         } catch {
             lastErrorMessage = deleteFiles
                 ? "Could not delete the download from disk."
@@ -275,8 +338,11 @@ public final class LibraryModel: ObservableObject {
     }
 
     public func removeSelectedTerminal(deleteFiles: Bool = false) async {
-        guard let row = selectedRow else { return }
-        await remove(jobID: row.id, deleteFiles: deleteFiles)
+        let targets = selectedRows.filter { BulkJobCommandFilter.canRemove($0.state) }
+        guard !targets.isEmpty else { return }
+        for row in targets {
+            await remove(jobID: row.id, deleteFiles: deleteFiles)
+        }
     }
 
     public func clearFailed() async {

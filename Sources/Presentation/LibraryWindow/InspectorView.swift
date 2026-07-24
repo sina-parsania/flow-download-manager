@@ -753,29 +753,23 @@ struct InspectorView: View {
     private static let priorityCeiling = 20
 
     private static func canPause(_ state: JobState) -> Bool {
-        switch state {
-        case .downloading, .connecting, .queued, .ready, .scheduled,
-             .verifying, .merging, .postProcessing, .retryWaiting:
-            return true
-        default:
-            return false
-        }
+        BulkJobCommandFilter.canPause(state)
     }
 
     private static func canResume(_ state: JobState) -> Bool {
-        state == .paused || state == .retryWaiting
+        BulkJobCommandFilter.canResume(state)
     }
 
     private static func canCancel(_ state: JobState) -> Bool {
-        !JobState.terminalStates.contains(state)
+        BulkJobCommandFilter.canCancel(state)
     }
 
     private static func canRetry(_ state: JobState) -> Bool {
-        state == .failed || state == .cancelled
+        BulkJobCommandFilter.canRetry(state)
     }
 
     private static func canRestart(_ state: JobState) -> Bool {
-        state == .paused || state == .failed || state == .cancelled
+        BulkJobCommandFilter.canRestart(state)
     }
 }
 

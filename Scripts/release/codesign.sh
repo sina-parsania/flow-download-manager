@@ -26,10 +26,12 @@ fi
 IDENTITY="$DM_CODESIGN_IDENTITY"
 
 sign() {
-  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$1"
+  local target="$1"
+  shift
+  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$@" "$target"
 }
 
-# Deepest first: XPC service, helpers, then the app bundle.
+# Deepest first: XPC service, helpers, Sparkle, then the app bundle.
 AGENT_XPC="$APP/Contents/XPCServices/DownloadEngineAgent.xpc"
 [[ -d "$AGENT_XPC" ]] && sign "$AGENT_XPC"
 
@@ -39,7 +41,21 @@ NATIVE_HOST="$APP/Contents/MacOS/ChromeNativeHost"
 AGENT_BIN="$APP/Contents/MacOS/DownloadEngineAgent"
 [[ -f "$AGENT_BIN" ]] && sign "$AGENT_BIN"
 
-sign "$APP"
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE" ]]; then
+  sign "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
+  sign "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
+  sign "$SPARKLE/Versions/B/Updater.app"
+  sign "$SPARKLE/Versions/B/Autoupdate"
+  sign "$SPARKLE"
+fi
+
+ENTITLEMENTS="$(cd "$(dirname "$0")/../.." && pwd)/Configuration/DownloadManager.entitlements"
+if [[ -f "$ENTITLEMENTS" ]]; then
+  sign "$APP" --entitlements "$ENTITLEMENTS"
+else
+  sign "$APP"
+fi
 codesign --verify --deep --strict --verbose=2 "$APP"
 spctl --assess --type execute --verbose=4 "$APP" || true
 echo "signed: $APP"

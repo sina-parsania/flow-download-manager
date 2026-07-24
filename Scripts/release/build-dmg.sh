@@ -33,6 +33,34 @@ SHA="$DMG.sha256"
 rm -rf "$STAGE" "$DMG" "$SHA"
 mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/${DISPLAY_APP_NAME}.app"
+STAGED_APP="$STAGE/${DISPLAY_APP_NAME}.app"
+ENTITLEMENTS="$ROOT/Configuration/DownloadManager.entitlements"
+
+# Ad-hoc re-seal: sign nested Sparkle helpers, then the app with entitlements.
+# `--deep` alone drops/mis-applies entitlements; sign the app last explicitly.
+SPARKLE="$STAGED_APP/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE" ]]; then
+  codesign --force --sign - --options runtime "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
+  codesign --force --sign - --options runtime "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
+  codesign --force --sign - --options runtime "$SPARKLE/Versions/B/Updater.app"
+  codesign --force --sign - --options runtime "$SPARKLE/Versions/B/Autoupdate"
+  codesign --force --sign - --options runtime "$SPARKLE"
+fi
+for helper in \
+  "$STAGED_APP/Contents/XPCServices/DownloadEngineAgent.xpc" \
+  "$STAGED_APP/Contents/MacOS/DownloadEngineAgent" \
+  "$STAGED_APP/Contents/MacOS/ChromeNativeHost"; do
+  if [[ -e "$helper" ]]; then
+    codesign --force --sign - --options runtime "$helper"
+  fi
+done
+if [[ -f "$ENTITLEMENTS" ]]; then
+  codesign --force --sign - --options runtime --entitlements "$ENTITLEMENTS" "$STAGED_APP"
+else
+  codesign --force --sign - "$STAGED_APP"
+fi
+codesign --verify --deep --strict "$STAGED_APP"
+
 ln -s /Applications "$STAGE/Applications"
 
 hdiutil create -volname "Flow Download Manager" -srcfolder "$STAGE" -ov -format UDZO "$DMG"

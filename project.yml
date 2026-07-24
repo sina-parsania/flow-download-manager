@@ -144,13 +144,19 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(DM_APP_BUNDLE_ID)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Configuration/DownloadManager.entitlements
+    entitlements:
+      path: Configuration/DownloadManager.entitlements
+      properties:
+        # Ad-hoc + Hardened Runtime otherwise rejects Sparkle.framework (different Team IDs).
+        com.apple.security.cs.disable-library-validation: true
     info:
       path: Configuration/DownloadManager-Info.plist
       properties:
         CFBundleDisplayName: Flow Download Manager
         CFBundleName: Flow Download Manager
         CFBundleShortVersionString: "0.3.0"
-        CFBundleVersion: "2"
+        CFBundleVersion: "3"
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.utilities

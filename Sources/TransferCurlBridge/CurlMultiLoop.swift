@@ -27,6 +27,27 @@ public enum CurlMultiLoop {
         public let contentType: String?
         public let etag: String?
         public let contentRange: String?
+        /// True when this easy was asked to stop because a replica already won
+        /// the same byte range. A short `bytesWritten` is expected — not a failure.
+        public let stoppedByRequest: Bool
+
+        public init(
+            httpStatus: Int,
+            bytesWritten: Int64,
+            finalURL: String?,
+            contentType: String?,
+            etag: String?,
+            contentRange: String?,
+            stoppedByRequest: Bool = false
+        ) {
+            self.httpStatus = httpStatus
+            self.bytesWritten = bytesWritten
+            self.finalURL = finalURL
+            self.contentType = contentType
+            self.etag = etag
+            self.contentRange = contentRange
+            self.stoppedByRequest = stoppedByRequest
+        }
     }
 
     public enum MultiError: Error, Equatable, Sendable {
@@ -63,10 +84,23 @@ public enum CurlMultiLoop {
         extraHeadersPayload: String? = nil,
         onProgress: (@Sendable (Int64) -> Void)? = nil,
         onSegmentProgress: (@Sendable (Int, Int64) -> Void)? = nil,
-        maxConcurrent: Int? = nil
+        maxConcurrent: Int? = nil,
+        // Same group id ⇒ replicas of one ledger entry. When one finishes in
+        // full, siblings in the group are asked to stop so the loser does not
+        // download the whole chunk. `nil` means every range is its own group.
+        replicaGroupByRangeIndex: [Int]? = nil
     ) throws -> [Outcome] {
         guard !ranges.isEmpty else { throw MultiError.emptyRequests }
+        if let replicaGroupByRangeIndex {
+            guard replicaGroupByRangeIndex.count == ranges.count else {
+                throw MultiError.emptyRequests
+            }
+        }
         try CurlBridge.initialize()
+
+        func groupID(for index: Int) -> Int {
+            replicaGroupByRangeIndex?[index] ?? index
+        }
 
         let directory = partialURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -214,11 +248,28 @@ public enum CurlMultiLoop {
                                 guard result.code == CURLE_OK else {
                                     throw MultiError.curl(result.code)
                                 }
+
+                                let wrote = Int64(result.bytesWritten)
+                                let stopped = result.stoppedByRequest != 0
+                                if stopped {
+                                    // Hedge loser: short read is success. Do not
+                                    // enforce expectedBytes and do not stop siblings.
+                                    outcomesByIndex[index] = Outcome(
+                                        httpStatus: Int(result.httpStatus),
+                                        bytesWritten: wrote,
+                                        finalURL: result.finalURL.map { String(cString: $0) },
+                                        contentType: result.contentType.map { String(cString: $0) },
+                                        etag: result.etag.map { String(cString: $0) },
+                                        contentRange: result.contentRange.map { String(cString: $0) },
+                                        stoppedByRequest: true
+                                    )
+                                    return
+                                }
+
                                 let status = Int(result.httpStatus)
                                 guard status == 206 || status == 200 else {
                                     throw MultiError.httpStatus(status)
                                 }
-                                let wrote = Int64(result.bytesWritten)
                                 if let expected = ranges[index].expectedBytes, wrote != expected {
                                     throw MultiError.incompleteWrite(expected: expected, wrote: wrote)
                                 }
@@ -228,8 +279,17 @@ public enum CurlMultiLoop {
                                     finalURL: result.finalURL.map { String(cString: $0) },
                                     contentType: result.contentType.map { String(cString: $0) },
                                     etag: result.etag.map { String(cString: $0) },
-                                    contentRange: result.contentRange.map { String(cString: $0) }
+                                    contentRange: result.contentRange.map { String(cString: $0) },
+                                    stoppedByRequest: false
                                 )
+
+                                // A full winner asks every live replica of the same
+                                // ledger entry to stop — they keep what they already
+                                // wrote, but do not finish downloading the chunk.
+                                let wonGroup = groupID(for: index)
+                                for (liveIndex, liveDownload) in liveByIndex where groupID(for: liveIndex) == wonGroup {
+                                    DMCurlEasyDownloadRequestStop(liveDownload)
+                                }
                             }
 
                             /// Drains every `CURLMSG_DONE` available right now, then refills
@@ -262,13 +322,17 @@ public enum CurlMultiLoop {
                                     } catch {
                                         if firstError == nil { firstError = error }
                                     }
-                                    guard firstError == nil, let next = pending.first else { continue }
+                                    // Keep refilling even after a failure. On a
+                                    // lossy link the common case is one range
+                                    // dropping while the rest are healthy;
+                                    // draining the queue on the first error turns
+                                    // a single blip into a stalled pass. The error
+                                    // is still reported once everything settles.
+                                    // Do not start new work after a job-wide abort.
+                                    if firstError as? MultiError == .aborted { continue }
+                                    guard let next = pending.first else { continue }
                                     pending.removeFirst()
                                     try startEasy(next)
-                                }
-
-                                if firstError != nil {
-                                    pending.removeAll()
                                 }
                                 return completed.count
                             }
@@ -315,7 +379,19 @@ public enum CurlMultiLoop {
         }
 
         let outcomes = outcomesByIndex.compactMap(\.self)
+        // Every range must report — winners with full bytes, stopped hedges with
+        // a short read. Missing slots mean the multi map desynced.
         guard outcomes.count == ranges.count else {
+            throw MultiError.curl(CURLE_FAILED_INIT)
+        }
+        // Each replica group needs at least one full (non-stopped) completion.
+        // Otherwise a group of hedges could all stop each other and leave a hole.
+        var fullGroups = Set<Int>()
+        for (index, outcome) in outcomes.enumerated() where !outcome.stoppedByRequest {
+            fullGroups.insert(groupID(for: index))
+        }
+        let allGroups = Set((0 ..< ranges.count).map(groupID(for:)))
+        guard fullGroups == allGroups else {
             throw MultiError.curl(CURLE_FAILED_INIT)
         }
 

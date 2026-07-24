@@ -139,11 +139,17 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
         XCTAssertEqual(data, FaultHTTPServer.fixtureBody)
     }
 
-    /// A range failure must surface as that range's error and must stop the
-    /// pending queue rather than being masked by an abort of the whole loop.
-    /// With `maxConcurrent: 1` the first range fails before ranges 1 and 2 are
-    /// ever started, so their file regions must still be untouched.
-    func testFailedRangeStopsRefillAndSurfacesRangeError() throws {
+    /// A range failure surfaces as that range's own error, and must NOT stop the
+    /// rest of the work.
+    ///
+    /// The contract here deliberately changed. Stopping the pending queue on the
+    /// first error is right for a clean link — fail fast, don't pile on — and
+    /// wrong for a bad one, where the common case is a single range dropping
+    /// while the others are healthy. Draining the queue on every blip turned one
+    /// hiccup into a stalled pass, so on a link that drops regularly the download
+    /// made almost no net progress. Refilling now continues; the error is still
+    /// reported once everything settles.
+    func testFailedRangeStillSurfacesWhileOtherRangesKeepRunning() throws {
         let server = FaultHTTPServer()
         let port = try server.start()
         defer { server.stop() }
@@ -165,7 +171,8 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
 
         let third = total / 3
         // Range 0 declares one byte fewer than the server will send, so it fails
-        // its expected-bytes check. Ranges 1 and 2 are correct but must not run.
+        // its expected-bytes check. Ranges 1 and 2 are correct and must still be
+        // served — a sibling failing is not a reason to abandon them.
         let ranges = [
             CurlMultiLoop.RangeRequest(
                 rangeHeader: "0-\(third - 1)", fileOffset: 0, expectedBytes: third - 1
@@ -195,11 +202,20 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
             }
         }
 
-        // Ranges 1 and 2 were never started, so their regions are still zeroed.
+        // The healthy ranges were still served despite range 0 failing: their
+        // bytes are on disk. This is the property that keeps a flaky link making
+        // forward progress instead of restarting the same pass forever.
         let data = try Data(contentsOf: partial)
         XCTAssertEqual(data.count, Int(total))
-        let untouched = data.suffix(from: Int(third))
-        XCTAssertTrue(untouched.allSatisfy { $0 == 0 }, "pending ranges ran after a failure")
+        let healthy = data.suffix(from: Int(third))
+        XCTAssertFalse(
+            healthy.allSatisfy { $0 == 0 },
+            "healthy ranges were abandoned because a sibling failed"
+        )
+        XCTAssertEqual(
+            Array(healthy), Array(FaultHTTPServer.fixtureBody.suffix(from: Int(third))),
+            "healthy ranges wrote the wrong bytes"
+        )
     }
 
     func testSegmentedTransferOptionalCurlMultiPath() throws {
@@ -224,5 +240,62 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
         XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.largeBody.count))
         let data = try Data(contentsOf: partial)
         XCTAssertEqual(data, FaultHTTPServer.largeBody)
+    }
+
+    /// When two easies race the same byte range, the first to finish asks the
+    /// other to stop. The loser reports `stoppedByRequest` with a short read —
+    /// never an error — and the file stays byte-exact. Without this cancel the
+    /// loser would download the whole chunk twice.
+    func testHedgeLoserStopsAfterWinnerCompletes() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-hedge-stop-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Cap one connection so the race is visible: the fast peer wins, the
+        // slow one is still mid-chunk when RequestStop fires.
+        let size = 512 * 1024
+        let url = "http://127.0.0.1:\(port)/fixtures/throughput?size=\(size)&kbps=800&slowFirst=1&slowKbps=40"
+        let expected = Int64(size)
+        let partial = root.appendingPathComponent("hedge.partial")
+        FileManager.default.createFile(atPath: partial.path, contents: nil)
+        let fd = partial.path.withCString { path in open(path, O_RDWR) }
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        defer { if fd >= 0 { close(fd) } }
+        XCTAssertEqual(ftruncate(fd, off_t(expected)), 0)
+
+        let range = CurlMultiLoop.RangeRequest(
+            rangeHeader: "0-\(expected - 1)",
+            fileOffset: 0,
+            expectedBytes: expected
+        )
+        let outcomes = try TransferCore.downloadRangesViaMulti(
+            url: url,
+            partialURL: partial,
+            ranges: [range, range],
+            maxConcurrent: 2,
+            replicaGroupByRangeIndex: [0, 0]
+        )
+
+        XCTAssertEqual(outcomes.count, 2)
+        let winners = outcomes.filter { !$0.stoppedByRequest }
+        let losers = outcomes.filter(\.stoppedByRequest)
+        XCTAssertEqual(winners.count, 1, "exactly one full winner")
+        XCTAssertEqual(losers.count, 1, "exactly one stopped replica")
+        XCTAssertEqual(winners[0].bytesWritten, expected)
+        XCTAssertLessThan(
+            losers[0].bytesWritten,
+            expected,
+            "loser transferred a full chunk — RequestStop never fired"
+        )
+
+        // Deterministic body from FaultHTTPServer.throughputBodies formula.
+        let expectedBody = Data((0 ..< size).map { UInt8($0 % 251) })
+        let data = try Data(contentsOf: partial)
+        XCTAssertEqual(data, expectedBody)
     }
 }

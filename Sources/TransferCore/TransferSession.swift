@@ -19,6 +19,9 @@ public enum TransferCore {
     }
 
     public struct DownloadOptions: Sendable, Equatable {
+        /// 8 s, not 15: on a high-RTT or lossy path a second attempt through the
+        /// retry loop beats one long wait, and a dead slot held for 15 s is a
+        /// connection not carrying bytes.
         public var connectTimeoutMilliseconds: Int
         public var transferTimeoutMilliseconds: Int
         public var maxRedirects: Int
@@ -34,7 +37,7 @@ public enum TransferCore {
         public var maxBytesPerSecond: Int64
 
         public init(
-            connectTimeoutMilliseconds: Int = 15000,
+            connectTimeoutMilliseconds: Int = 8000,
             transferTimeoutMilliseconds: Int = 0,
             maxRedirects: Int = 10,
             userpwd: String? = nil,
@@ -190,7 +193,14 @@ public enum TransferCore {
         abortFlag: TransferAbortFlag? = nil,
         onProgress: ProgressHandler? = nil
     ) throws -> TransferOutcome {
-        let existing = (try? partialURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) ?? 0
+        // Uncached on purpose — see SegmentedTransfer.fileSize(at:). A cached
+        // NSURL size read after a wipe reports the pre-wipe bytes.
+        let existing: Int64 = {
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: partialURL.path),
+                  let size = attributes[.size] as? NSNumber
+            else { return 0 }
+            return size.int64Value
+        }()
         guard existing > 0 else {
             return try downloadSingleStream(
                 url: url,

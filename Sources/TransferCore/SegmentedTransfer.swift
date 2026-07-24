@@ -61,6 +61,76 @@ public enum SegmentedTransfer {
         return max(connectionCount, min(maxChunks, byMinChunk))
     }
 
+    /// Adds duplicate work for the largest remaining chunks once slots go idle.
+    ///
+    /// At the tail `remaining.count` drops below the connection limit, so slots
+    /// sit unused while the job waits on whichever connection is slowest. Racing
+    /// a second connection over the same byte range costs nothing in concurrency
+    /// — the slot was idle — and the slow connection is never killed, so it keeps
+    /// contributing and may still win.
+    ///
+    /// Safe because a replica writes the *same bytes at the same offsets* of a
+    /// resource whose identity the validator already pinned, so the duplicate
+    /// `pwrite` is idempotent, and `SegmentLedger.record` keeps a monotonic
+    /// `max()` per entry, so double reporting cannot inflate progress.
+    ///
+    /// The cost is bandwidth: without a cancel the loser downloads its chunk in
+    /// full, so this is capped hard and only spends genuinely idle slots.
+    static func hedged(
+        _ remaining: [SegmentLedger.Work],
+        connectionLimit: Int,
+        maxHedges: Int = 2,
+        minimumChunk: Int64 = 1024 * 1024
+    ) -> [SegmentLedger.Work] {
+        var idleSlots = connectionLimit - remaining.count
+        guard idleSlots > 0, remaining.count > 1 else { return remaining }
+
+        let candidates = remaining
+            .filter { ($0.request.expectedBytes ?? 0) >= minimumChunk }
+            .sorted { ($0.request.expectedBytes ?? 0) > ($1.request.expectedBytes ?? 0) }
+
+        var work = remaining
+        for candidate in candidates {
+            guard idleSlots > 0, work.count - remaining.count < maxHedges else { break }
+            work.append(candidate)
+            idleSlots -= 1
+        }
+        return work
+    }
+
+    /// Backoff delay for a stalled pass, with full jitter.
+    ///
+    /// Jitter is the point, not the exponent. Without it, every segment that
+    /// dropped on the same network blip retries at the same instant and
+    /// recreates the burst that killed them. Full jitter — a uniform draw over
+    /// the whole window rather than half of it — is the variant that spreads a
+    /// synchronised herd best.
+    static func backoffSeconds(
+        stall: Int,
+        base: Double = 0.5,
+        cap: Double = 30,
+        random: (ClosedRange<Double>) -> Double = { Double.random(in: $0) }
+    ) -> Double {
+        let exponent = min(max(stall, 1), 16)
+        let window = min(cap, base * pow(2, Double(exponent - 1)))
+        return random(0 ... max(window, 0))
+    }
+
+    /// Current size of `url`, or 0 when it does not exist.
+    ///
+    /// Deliberately not `URL.resourceValues(forKeys:)`: that bridges to `NSURL`,
+    /// which caches per URL value. This function reads a partial's size, wipes the
+    /// file when a resume is rejected, then reads the size again from the same
+    /// `URL` — and the second read returned the stale pre-wipe size. Every wipe
+    /// path therefore fell into the legacy contiguous-prefix branch and threw
+    /// `incompleteWrite` instead of starting a clean download.
+    private static func fileSize(at url: URL) -> Int64 {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? NSNumber
+        else { return 0 }
+        return size.int64Value
+    }
+
     /// Sidecar path recording which byte ranges of the partial are actually on
     /// disk. The partial's file size is meaningless once preallocated.
     public static func segmentMapURL(for partialURL: URL) -> URL {
@@ -92,16 +162,35 @@ public enum SegmentedTransfer {
 
         // Segment-map resume: the authoritative record of downloaded ranges.
         if preferResume, let ledger = SegmentLedger.load(sidecarURL: sidecarURL) {
-            let partialSize = (try? partialURL.resourceValues(forKeys: [.fileSizeKey]))?
-                .fileSize.map(Int64.init) ?? 0
+            let partialSize = fileSize(at: partialURL)
             if partialSize == ledger.total {
                 // Probe live. A transient probe failure (network down at relaunch,
                 // 5xx/429, etc.) MUST NOT discard the partial — propagate the error
                 // so the job's retry/requeue path keeps the bytes on disk and
                 // resumes later.
                 let probe = try TransferCore.probeRangeSupport(url: url, options: options)
-                if probe.httpStatus == 206,
-                   TransferCore.totalLength(from: probe) == ledger.total {
+                // Length alone is not identity. A resource that changed but kept
+                // its byte count would be resumed into, stitching old bytes to
+                // new ones and yielding a right-sized corrupt file that passes
+                // every later check. Compare the stored validator first.
+                let verdict = (ledger.validator ?? ResourceValidator(
+                    etag: nil, lastModified: nil, totalBytes: ledger.total
+                )).compare(
+                    probeETag: probe.etag,
+                    probeLastModified: probe.lastModified,
+                    probeTotalBytes: TransferCore.totalLength(from: probe)
+                )
+                if case let .changed(reason) = verdict {
+                    // Discard rather than stitch. The bytes on disk belong to a
+                    // version of this resource that no longer exists.
+                    _ = reason
+                    try? FileManager.default.removeItem(at: sidecarURL)
+                    try? FileManager.default.removeItem(at: partialURL)
+                } else if probe.httpStatus == 206 || probe.httpStatus == 200,
+                          TransferCore.totalLength(from: probe) == ledger.total {
+                    // Many hosts answer the Range: 0-0 probe with 200 while still
+                    // honouring later ranged GETs for the map. Rejecting 200 here
+                    // left a valid partial on disk and failed the job forever.
                     let connectionCount = preferredSegmentCount(
                         totalBytes: ledger.remainingBytes(),
                         hostMaxSegments: hostMaxSegments
@@ -120,11 +209,9 @@ public enum SegmentedTransfer {
                     )
                 }
                 // Probe reached the server but disagreed. Only wipe when the
-                // remote length is known and clearly different; a 200/non-206
-                // with the same (or unknown) length is treated as transient so
-                // we keep the map + partial for the next attempt.
-                if let remoteTotal = TransferCore.totalLength(from: probe),
-                   remoteTotal != ledger.total {
+                // remote length is known and clearly different.
+                else if let remoteTotal = TransferCore.totalLength(from: probe),
+                        remoteTotal != ledger.total {
                     try? FileManager.default.removeItem(at: sidecarURL)
                     try? FileManager.default.removeItem(at: partialURL)
                 } else {
@@ -137,7 +224,7 @@ public enum SegmentedTransfer {
             }
         }
 
-        let existing = (try? partialURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize.map(Int64.init) ?? 0
+        let existing = fileSize(at: partialURL)
 
         // Legacy contiguous-prefix partial (single-stream era): fill the tail
         // with multiple connections when the server allows ranges.
@@ -198,7 +285,14 @@ public enum SegmentedTransfer {
             total: total,
             baseOffset: 0,
             entries: tile(from: 0, total: total, count: chunks),
-            sidecarURL: sidecarURL
+            sidecarURL: sidecarURL,
+            // Bind the map to what the server said this resource is right now, so
+            // a later resume can tell "same file" from "same size".
+            validator: ResourceValidator(
+                etag: probe.etag,
+                lastModified: probe.lastModified,
+                totalBytes: total
+            )
         )
         // Save the map before preallocating: once the file is truncated to
         // `total`, only the map can say what is really on disk.
@@ -249,7 +343,12 @@ public enum SegmentedTransfer {
             total: total,
             baseOffset: existing,
             entries: tile(from: existing, total: total, count: chunks),
-            sidecarURL: segmentMapURL(for: partialURL)
+            sidecarURL: segmentMapURL(for: partialURL),
+            validator: ResourceValidator(
+                etag: probe.etag,
+                lastModified: probe.lastModified,
+                totalBytes: total
+            )
         )
         try ledger.saveNow()
         try preallocate(partialURL: partialURL, size: total)
@@ -297,10 +396,23 @@ public enum SegmentedTransfer {
             : nil
         var segmentOptions = options
         segmentOptions.maxBytesPerSecond = 0
-        let maxAttempts = 3
-        var attempt = 0
+        // Budget is spent on *stalls*, not on errors. A pass that moved bytes
+        // proves the link works, however many individual ranges hiccuped, so it
+        // resets the counter. The old rule — 3 failures for the entire job —
+        // made a multi-gigabyte download on a lossy link impossible: three blips
+        // over an hour and the whole thing failed permanently.
+        let maxConsecutiveStalls = 10
+        var consecutiveStalls = 0
         // Host-clamped connection cap for the live multi loop. Chunk count in
         // the ledger may be finer (S1 tiling); this only bounds concurrency.
+        // Start at the ceiling, back off on trouble, recover on success.
+        //
+        // NOT classic AIMD-from-below: a healthy download is a *single* pass, so
+        // anything that ramps up between passes never ramps at all — it would
+        // just cap every clean transfer at the starting value. Additive increase
+        // only earns its keep on a link that stalled and is recovering, which is
+        // exactly when multiple passes happen.
+        let ceiling = maxConcurrent
         var connectionLimit = maxConcurrent
         while true {
             if abortFlag?.isSet == true {
@@ -309,18 +421,23 @@ public enum SegmentedTransfer {
             }
             let remaining = ledger.remainingWork()
             if remaining.isEmpty { break }
-            let entryIndices = remaining.map(\.entryIndex)
-            let bases = remaining.map(\.baseWritten)
+            let work = hedged(remaining, connectionLimit: connectionLimit)
+            let entryIndices = work.map(\.entryIndex)
+            let bases = work.map(\.baseWritten)
             let progressOffset = ledger.baseOffset
+            let bytesBeforePass = ledger.downloadedBytes()
             do {
                 try runSegmentedRanges(
                     url: url,
                     partialURL: partialURL,
-                    ranges: remaining.map(\.request),
+                    ranges: work.map(\.request),
                     options: segmentOptions,
                     abortFlag: abortFlag,
                     useCurlMulti: useCurlMulti,
                     maxConcurrent: connectionLimit,
+                    // Same ledger entry ⇒ same group. CurlMultiLoop stops losers
+                    // when one replica finishes the range in full.
+                    replicaGroupByRangeIndex: entryIndices,
                     onSegmentProgress: { segment, written in
                         guard segment >= 0, segment < entryIndices.count else { return }
                         let done = ledger.record(
@@ -336,20 +453,33 @@ public enum SegmentedTransfer {
                         governor?.noteProgress(totalWritten: done)
                     }
                 )
-                // Both transports verified expected byte counts per range.
-                ledger.markCompleted(entryIndices: entryIndices)
+                // Unique entries only — hedges share an entryIndex.
+                ledger.markCompleted(entryIndices: Array(Set(entryIndices)))
+                // Additive increase, for a link recovering from a stall: each
+                // clean pass earns one connection back, up to the ceiling it
+                // started from. On a healthy link there is only one pass and this
+                // never fires, which is correct — it was never throttled.
+                consecutiveStalls = 0
+                connectionLimit = min(connectionLimit + 1, ceiling)
             } catch {
                 ledger.flush()
                 if abortFlag?.isSet == true { throw TransferCore.TransferError.aborted }
                 if case TransferCore.TransferError.aborted = error { throw error }
-                attempt += 1
-                guard attempt < maxAttempts else { throw error }
-                Thread.sleep(forTimeInterval: Double(attempt))
-                connectionLimit = preferredSegmentCount(
-                    totalBytes: ledger.remainingBytes(),
-                    hostMaxSegments: hostMaxSegments
-                )
+
+                if ledger.downloadedBytes() > bytesBeforePass {
+                    consecutiveStalls = 0
+                } else {
+                    consecutiveStalls += 1
+                }
+                guard consecutiveStalls < maxConsecutiveStalls else { throw error }
+
+                // Multiplicative decrease. Errors on a congested path mean the
+                // link cannot carry this many connections; adding more makes it
+                // worse. Floor of 2 so a rough patch cannot collapse the job to
+                // single-stream and leave it there.
+                connectionLimit = max(2, min(connectionLimit / 2, ceiling))
                 ledger.resplit(targetCount: connectionLimit)
+                Thread.sleep(forTimeInterval: backoffSeconds(stall: consecutiveStalls))
             }
         }
 
@@ -391,6 +521,7 @@ public enum SegmentedTransfer {
         abortFlag: TransferAbortFlag?,
         useCurlMulti: Bool,
         maxConcurrent: Int? = nil,
+        replicaGroupByRangeIndex: [Int]? = nil,
         onSegmentProgress: (@Sendable (Int, Int64) -> Void)?
     ) throws {
         if useCurlMulti {
@@ -402,7 +533,8 @@ public enum SegmentedTransfer {
                     options: options,
                     abortFlag: abortFlag,
                     onSegmentProgress: onSegmentProgress,
-                    maxConcurrent: maxConcurrent
+                    maxConcurrent: maxConcurrent,
+                    replicaGroupByRangeIndex: replicaGroupByRangeIndex
                 )
                 return
             } catch TransferCore.TransferError.fileOpenFailed {
@@ -540,22 +672,35 @@ final class SegmentLedger: @unchecked Sendable {
         var total: Int64
         var baseOffset: Int64
         var entries: [Entry]
+        /// Absent in maps written before validators existed. Decoding must keep
+        /// working for those — a missing validator means "cannot verify", which
+        /// still resumes; only a contradicted one rejects.
+        var validator: ResourceValidator?
     }
 
     let total: Int64
     /// Bytes on disk before the mapped region (legacy contiguous-prefix resume).
     let baseOffset: Int64
+    /// What the server said this resource was when the map was created.
+    let validator: ResourceValidator?
 
     private let sidecarURL: URL
     private let lock = NSLock()
     private var entries: [Entry]
     private var lastSaveNanos: UInt64 = 0
 
-    init(total: Int64, baseOffset: Int64, entries: [Entry], sidecarURL: URL) {
+    init(
+        total: Int64,
+        baseOffset: Int64,
+        entries: [Entry],
+        sidecarURL: URL,
+        validator: ResourceValidator? = nil
+    ) {
         self.total = total
         self.baseOffset = baseOffset
         self.entries = entries
         self.sidecarURL = sidecarURL
+        self.validator = validator
     }
 
     static func load(sidecarURL: URL) -> SegmentLedger? {
@@ -573,7 +718,8 @@ final class SegmentLedger: @unchecked Sendable {
             total: file.total,
             baseOffset: file.baseOffset,
             entries: file.entries,
-            sidecarURL: sidecarURL
+            sidecarURL: sidecarURL,
+            validator: file.validator
         )
     }
 
@@ -583,7 +729,7 @@ final class SegmentLedger: @unchecked Sendable {
         return entries.count
     }
 
-    struct Work {
+    struct Work: Equatable {
         let entryIndex: Int
         let baseWritten: Int64
         let request: CurlMultiLoop.RangeRequest
@@ -632,7 +778,7 @@ final class SegmentLedger: @unchecked Sendable {
         var snapshot: MapFile?
         if now &- lastSaveNanos >= 1_000_000_000 {
             lastSaveNanos = now
-            snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries)
+            snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries, validator: validator)
         }
         lock.unlock()
         if let snapshot { write(snapshot) }
@@ -644,7 +790,7 @@ final class SegmentLedger: @unchecked Sendable {
         for index in entryIndices where index >= 0 && index < entries.count {
             entries[index].written = entries[index].end - entries[index].start + 1
         }
-        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries)
+        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries, validator: validator)
         lock.unlock()
         write(snapshot)
     }
@@ -669,21 +815,21 @@ final class SegmentLedger: @unchecked Sendable {
             entries[largest].end = mid - 1
             entries.append(Entry(start: mid, end: entry.end, written: 0))
         }
-        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries)
+        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries, validator: validator)
         lock.unlock()
         write(snapshot)
     }
 
     func flush() {
         lock.lock()
-        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries)
+        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries, validator: validator)
         lock.unlock()
         write(snapshot)
     }
 
     func saveNow() throws {
         lock.lock()
-        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries)
+        let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries, validator: validator)
         lock.unlock()
         let data = try JSONEncoder().encode(snapshot)
         try data.write(to: sidecarURL, options: .atomic)

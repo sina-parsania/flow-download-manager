@@ -41,14 +41,19 @@ static void DMCurlShareUnlock(CURL *handle, curl_lock_data data, void *userptr) 
     }
 }
 
+static int gDMCurlShareLocksReady = 0;
+
 CURLcode DMCurlGlobalInit(void) {
     CURLcode code = curl_global_init(CURL_GLOBAL_DEFAULT);
     if (code != CURLE_OK) {
         return code;
     }
     if (gDMCurlShare == NULL) {
-        for (int i = 0; i < CURL_LOCK_DATA_LAST; i++) {
-            (void)pthread_mutex_init(&gDMCurlShareLocks[i], NULL);
+        if (!gDMCurlShareLocksReady) {
+            for (int i = 0; i < CURL_LOCK_DATA_LAST; i++) {
+                (void)pthread_mutex_init(&gDMCurlShareLocks[i], NULL);
+            }
+            gDMCurlShareLocksReady = 1;
         }
         gDMCurlShare = curl_share_init();
         if (gDMCurlShare != NULL) {
@@ -59,7 +64,8 @@ CURLcode DMCurlGlobalInit(void) {
         }
     }
     /* A share handle is an optimisation: if it could not be created the
-     * transfer still works, just without cache reuse. */
+     * transfer still works, just without cache reuse. Mutexes stay ready so a
+     * later init never double-initialises them. */
     return CURLE_OK;
 }
 
@@ -67,9 +73,12 @@ void DMCurlGlobalCleanup(void) {
     if (gDMCurlShare != NULL) {
         curl_share_cleanup(gDMCurlShare);
         gDMCurlShare = NULL;
+    }
+    if (gDMCurlShareLocksReady) {
         for (int i = 0; i < CURL_LOCK_DATA_LAST; i++) {
             (void)pthread_mutex_destroy(&gDMCurlShareLocks[i]);
         }
+        gDMCurlShareLocksReady = 0;
     }
     curl_global_cleanup();
 }
@@ -101,10 +110,19 @@ static void DMCurlApplyThroughputOptions(CURL *easy) {
     curl_easy_setopt(easy, CURLOPT_TCP_NODELAY, 1L);
     curl_easy_setopt(easy, CURLOPT_SOCKOPTFUNCTION, DMCurlSockoptCallback);
     curl_easy_setopt(easy, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_2TLS);
-    /* Fail transfers stalled below 1 KiB/s for 30 s so the segment retry pass
-     * can re-split the remaining bytes onto fresh connections. */
+    /* Fail transfers stalled below 1 KiB/s so the retry pass can re-split the
+     * remaining bytes onto fresh connections. 10 s, not 30: on a lossy link a
+     * stalled connection is a lost slot, and holding it three times longer than
+     * necessary is three times the tail. */
     curl_easy_setopt(easy, CURLOPT_LOW_SPEED_LIMIT, 1024L);
-    curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, 30L);
+    curl_easy_setopt(easy, CURLOPT_LOW_SPEED_TIME, 10L);
+    /* NAT and carrier-grade NAT silently drop idle mappings. Without keepalive
+     * curl sits waiting on a connection the peer forgot about, and only the
+     * low-speed timer eventually notices. Probing keeps the mapping alive and
+     * surfaces a genuinely dead peer as an error instead of a stall. */
+    curl_easy_setopt(easy, CURLOPT_TCP_KEEPALIVE, 1L);
+    curl_easy_setopt(easy, CURLOPT_TCP_KEEPIDLE, 30L);
+    curl_easy_setopt(easy, CURLOPT_TCP_KEEPINTVL, 15L);
 }
 
 CURLUcode DMCurlURLSetString(CURLU *handle, CURLUPart part, const char *value, unsigned int flags) {
@@ -139,6 +157,10 @@ typedef struct {
     curl_off_t offset;
     curl_off_t written;
     int writeError;
+    /* Set by DMCurlEasyDownloadRequestStop. Distinct from abortFlag: that one
+     * is job-wide and means "the user cancelled"; this one means "give your
+     * remaining range back so it can be re-tiled". */
+    volatile int32_t stopRequested;
     volatile int32_t *abortFlag;
     DMCurlProgressCallback progressCallback;
     void *progressUserdata;
@@ -232,6 +254,10 @@ static int DMCurlShouldAbort(const DMCurlWriteCtx *ctx) {
     return ctx != NULL && ctx->abortFlag != NULL && *(ctx->abortFlag) != 0;
 }
 
+static int DMCurlShouldStop(const DMCurlWriteCtx *ctx) {
+    return ctx != NULL && ctx->stopRequested != 0;
+}
+
 static size_t DMCurlHeaderCallback(char *buffer, size_t size, size_t nitems, void *userdata) {
     size_t total = size * nitems;
     DMCurlHeaderCtx *ctx = (DMCurlHeaderCtx *)userdata;
@@ -282,13 +308,13 @@ static size_t DMCurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *us
     if (ctx == NULL || total == 0) {
         return total;
     }
-    if (DMCurlShouldAbort(ctx)) {
+    if (DMCurlShouldAbort(ctx) || DMCurlShouldStop(ctx)) {
         return 0;
     }
     size_t remaining = total;
     const char *cursor = ptr;
     while (remaining > 0) {
-        if (DMCurlShouldAbort(ctx)) {
+        if (DMCurlShouldAbort(ctx) || DMCurlShouldStop(ctx)) {
             return 0;
         }
         ssize_t wrote = pwrite(ctx->fd, cursor, remaining, ctx->offset + ctx->written);
@@ -535,6 +561,12 @@ static void DMCurlFillDownloadResult(
         out->code = CURLE_WRITE_ERROR;
     } else if (DMCurlShouldAbort(writeCtx) && code != CURLE_OK) {
         out->code = CURLE_ABORTED_BY_CALLBACK;
+    } else if (DMCurlShouldStop(writeCtx)) {
+        /* Stopping is a caller decision, not a failure. curl reports the
+         * halted write as CURLE_WRITE_ERROR; bytesWritten above is the
+         * authoritative count of what actually reached the file. */
+        out->stoppedByRequest = 1;
+        out->code = CURLE_OK;
     }
     if (out->code == CURLE_OK) {
         curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &out->httpStatus);
@@ -594,6 +626,7 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
     download->writeCtx.offset = fileOffset;
     download->writeCtx.written = 0;
     download->writeCtx.writeError = 0;
+    download->writeCtx.stopRequested = 0;
     download->writeCtx.abortFlag = abortFlag;
     download->writeCtx.progressCallback = progressCallback;
     download->writeCtx.progressUserdata = progressUserdata;
@@ -613,6 +646,12 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
         download->headerList
     );
     return download;
+}
+
+void DMCurlEasyDownloadRequestStop(DMCurlEasyDownload *download) {
+    if (download != NULL) {
+        download->writeCtx.stopRequested = 1;
+    }
 }
 
 CURL *DMCurlEasyDownloadGetHandle(DMCurlEasyDownload *download) {

@@ -121,8 +121,17 @@ enum FlowIntentEngine {
             )
             return (request.link, classified.stableKey)
         }
+        // Mint once, before any heal retry. A fresh UUID on the second attempt
+        // would bypass XPC idempotency and enqueue the same URLs twice when the
+        // first call committed and only the reply was lost.
+        let requestID = UUID().uuidString
         let response = try await run { client in
-            try await client.enqueueBatch(source: batchSource, displayName: nil, items: items)
+            try await client.enqueueBatch(
+                source: batchSource,
+                displayName: nil,
+                items: items,
+                requestID: requestID
+            )
         }
         guard !response.jobIDs.isEmpty else { throw FlowIntentFailure.addFailed }
         return response.jobIDs

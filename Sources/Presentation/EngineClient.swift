@@ -161,10 +161,11 @@ public final class EngineClient: ObservableObject {
         scheduleStartAtISO8601: String? = nil,
         expectedChecksumSHA256: String? = nil,
         maxBytesPerSecond: Int64? = nil,
-        preferredConnectionCount: Int? = nil
+        preferredConnectionCount: Int? = nil,
+        requestID: String? = nil
     ) async throws -> EnqueueBatchResponse {
         let request = EnqueueBatchRequest(
-            requestID: UUID().uuidString,
+            requestID: requestID ?? UUID().uuidString,
             source: source,
             displayName: displayName,
             items: items.map { BatchURLItem(url: $0.url, categoryStableKey: $0.categoryStableKey) },

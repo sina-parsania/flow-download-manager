@@ -352,6 +352,11 @@ public struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 480)
         .task { await model.reload() }
+        .alert(updateCheck.alertTitle, isPresented: $updateCheck.isAlertPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(updateCheck.alertMessage)
+        }
     }
 }
 

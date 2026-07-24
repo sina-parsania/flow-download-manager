@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import AppKit
 import Foundation
 import SharedObservability
 import Sparkle
@@ -8,15 +9,19 @@ import SwiftUI
 /// Sparkle-backed updater. Manual “Check for Updates…” is the default path;
 /// background checks / silent download are Settings opt-ins (off by default).
 ///
-/// If the published GitHub appcast is missing (e.g. not pushed yet), Sparkle
-/// uses the appcast bundled in the app so the user sees “up to date” instead of
-/// a retrieval error.
+/// The published feed lives on GitHub (`docs/appcast.xml`). Until that file is
+/// on `origin/main`, a manual check shows a local “up to date” alert instead of
+/// Sparkle’s retrieval error (Sparkle cannot use a `file://` feed reliably).
 @MainActor
 public final class UpdateCheckController: ObservableObject {
     public static let automaticChecksDefaultsKey = "SUEnableAutomaticChecks"
     public static let automaticDownloadDefaultsKey = "SUAutomaticallyUpdate"
     public static let remoteFeedURLString =
         "https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/docs/appcast.xml"
+
+    @Published public var isAlertPresented = false
+    @Published public var alertTitle = ""
+    @Published public var alertMessage = ""
 
     private let feedHost: FeedHost
     private let controller: SPUStandardUpdaterController
@@ -34,15 +39,24 @@ public final class UpdateCheckController: ObservableObject {
             updaterDelegate: feedHost,
             userDriverDelegate: nil
         )
+        // Drop any stale feed URL Sparkle may have persisted in defaults.
+        controller.updater.clearFeedURLFromUserDefaults()
         applyPreferencesFromDefaults()
+        Self.clearRemoteFeedHTTPCache()
         EngineLog.updater.info("Sparkle updater started (manual check by default)")
-        Task { await refreshResolvedFeedURL() }
     }
 
     public func checkForUpdates() {
         Task {
-            await refreshResolvedFeedURL()
-            controller.checkForUpdates(nil)
+            Self.clearRemoteFeedHTTPCache()
+            let remoteOK = await Self.remoteFeedIsReachable()
+            if remoteOK {
+                feedHost.feedURLString = Self.remoteFeedURLString
+                controller.checkForUpdates(nil)
+                return
+            }
+            EngineLog.updater.info("remote appcast unavailable; showing local up-to-date alert")
+            presentLocalUpToDate()
         }
     }
 
@@ -58,6 +72,15 @@ public final class UpdateCheckController: ObservableObject {
 
     // MARK: Private
 
+    private func presentLocalUpToDate() {
+        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "this build"
+        alertTitle = "You’re up to date"
+        alertMessage =
+            "Flow \(current) is the newest build available to this copy. "
+                + "The public update feed is not online yet (push docs/appcast.xml to GitHub to enable remote checks)."
+        isAlertPresented = true
+    }
+
     private func applyPreferencesFromDefaults() {
         let defaults = UserDefaults.standard
         controller.updater.automaticallyChecksForUpdates =
@@ -66,35 +89,27 @@ public final class UpdateCheckController: ObservableObject {
             defaults.bool(forKey: Self.automaticDownloadDefaultsKey)
     }
 
-    private func refreshResolvedFeedURL() async {
-        feedHost.feedURLString = await Self.resolveFeedURLString()
-    }
-
-    private static func resolveFeedURLString() async -> String {
-        if await remoteFeedIsReachable() {
-            return remoteFeedURLString
-        }
-        if let bundled = Bundle.main.url(forResource: "appcast", withExtension: "xml") {
-            EngineLog.updater.info("remote appcast unavailable; using bundled feed")
-            return bundled.absoluteString
-        }
-        EngineLog.updater.error("no remote or bundled appcast available")
-        return remoteFeedURLString
+    private static func clearRemoteFeedHTTPCache() {
+        guard let url = URL(string: remoteFeedURLString) else { return }
+        URLCache.shared.removeCachedResponse(for: URLRequest(url: url))
+        HTTPCookieStorage.shared.cookies(for: url)?.forEach { HTTPCookieStorage.shared.deleteCookie($0) }
     }
 
     private static func remoteFeedIsReachable() async -> Bool {
         guard let url = URL(string: remoteFeedURLString) else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 10
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
         request.setValue("Flow/0.2.0", forHTTPHeaderField: "User-Agent")
         request.setValue("application/xml", forHTTPHeaderField: "Accept")
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse,
                   (200 ..< 300).contains(http.statusCode),
                   !data.isEmpty
             else { return false }
-            return true
+            // Require a parseable RSS root so a soft-404 HTML body cannot pass.
+            let text = String(data: data, encoding: .utf8) ?? ""
+            return text.contains("<rss") && text.contains("sparkle")
         } catch {
             EngineLog.updater.error(
                 "remote appcast probe failed \(EngineLog.redacted(error), privacy: .public)"

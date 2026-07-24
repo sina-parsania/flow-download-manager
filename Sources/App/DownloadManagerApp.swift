@@ -62,6 +62,11 @@ struct DownloadManagerApp: App {
                     // Local-dev `downloadmanager://` handoff — prefills Add sheet only.
                     library.handleOpenURL(url)
                 }
+                .alert(updateCheck.alertTitle, isPresented: $updateCheck.isAlertPresented) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(updateCheck.alertMessage)
+                }
         }
         .commands {
             CommandGroup(after: .appInfo) {

@@ -26,6 +26,12 @@
         margin-top: 10px;
         font-size: 12px;
       }
+      .hint {
+        margin-top: 4px;
+        margin-left: 24px;
+        font-size: 11px;
+        color: #666;
+      }
     </style>
   </head>
   <body>
@@ -35,6 +41,15 @@
       <input id="takeover" type="checkbox" />
       Take over browser downloads (off by default)
     </label>
+    <label>
+      <input id="cookies" type="checkbox" />
+      Send sign-in cookies with downloads (off by default)
+    </label>
+    <div class="hint">
+      Needed for files behind a login. Chrome will ask for permission to read site
+      data. Cookies are sent only to Flow on this Mac, only for the exact link you
+      send, and never for a multi-link selection.
+    </div>
     <div id="status"></div>
     <script src="popup.js" type="module"></script>
   </body>

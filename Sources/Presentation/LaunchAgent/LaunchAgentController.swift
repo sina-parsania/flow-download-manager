@@ -42,14 +42,13 @@ public struct SMAppServiceLaunchAgent: LaunchAgentManaging {
 /// Observable UI model for the background engine. Engine is **required**.
 ///
 /// Production Developer ID builds use `SMAppService`. Ad-hoc / DerivedData builds
-/// hit launchd `Launch Constraint Violation` (`EX_CONFIG`) — those heal by
-/// spawning the agent as a **direct child** with anonymous XPC (not launchd).
+/// hit launchd `Launch Constraint Violation` (`EX_CONFIG`) — those heal onto the
+/// app-scoped XPC service bundled in `Contents/XPCServices` (not launchd).
 @MainActor
 public final class LaunchAgentModel: ObservableObject {
     public enum RuntimeMode: Equatable, Sendable {
         case smAppService
-        case legacyLaunchd
-        case directChild
+        case bundledService
     }
 
     @Published public private(set) var status: LaunchAgentStatus
@@ -66,9 +65,10 @@ public final class LaunchAgentModel: ObservableObject {
 
     private static let bundlePathKey = "engine.lastRegisteredBundlePath"
     private static let loginItemsPromptKey = "engine.loginItemsPromptShown"
-    /// After SMAppService proves broken on this machine, skip it and go direct.
-    private static let preferDirectKey = "engine.preferDirectChild"
-    /// Legacy key from earlier heal attempts — treated as prefer-direct.
+    /// After SMAppService proves broken on this machine, skip it and use the
+    /// bundled XPC service. Key string is persisted — do not rename the value.
+    private static let preferBundledServiceKey = "engine.preferDirectChild"
+    /// Key written by earlier heal attempts — treated as prefer-bundled-service.
     private static let preferLegacyKey = "engine.preferLegacyLaunchd"
 
     public init(
@@ -101,21 +101,17 @@ public final class LaunchAgentModel: ObservableObject {
             runtimeMode = .smAppService
             defaults.set(Bundle.main.bundleURL.path, forKey: Self.bundlePathKey)
         } catch {
-            lastErrorMessage = "Couldn’t register the background engine (\(EngineLog.redacted(error)))."
+            lastErrorMessage =
+                "Flow couldn’t turn on the background engine. Click Repair, then restart Flow if it stays off."
             EngineLog.app.error("launch agent register failed: \(EngineLog.redacted(error), privacy: .public)")
         }
         refresh()
     }
 
-    /// Tear down broken launchd/SM state and start the engine as a child process.
+    /// Tear down broken launchd/SM state and start the bundled engine service.
     public func repair() async {
         lastErrorMessage = nil
-        await healToDirectChild(client: probeClient)
-    }
-
-    @available(*, deprecated, message: "Engine is always-on; use repair() instead.")
-    public func unregister() {
-        Task { await repair() }
+        await healToBundledService(client: probeClient)
     }
 
     /// Opens the Login Items pane of System Settings when approval is required.
@@ -124,11 +120,11 @@ public final class LaunchAgentModel: ObservableObject {
     }
 
     /// Call once on app launch. Registers when useful, probes XPC, and heals to
-    /// a direct child agent when launchd cannot run the ad-hoc binary.
+    /// the bundled engine service when launchd cannot run the ad-hoc binary.
     public func ensureRunning() async {
-        if defaults.bool(forKey: Self.preferDirectKey)
+        if defaults.bool(forKey: Self.preferBundledServiceKey)
             || defaults.bool(forKey: Self.preferLegacyKey) {
-            await healToDirectChild(client: probeClient)
+            await healToBundledService(client: probeClient)
             return
         }
 
@@ -144,8 +140,8 @@ public final class LaunchAgentModel: ObservableObject {
             return
         }
 
-        EngineLog.app.error("engine XPC unreachable via SMAppService; healing to direct child agent")
-        await healToDirectChild(client: client)
+        EngineLog.app.error("engine XPC unreachable via SMAppService; healing to bundled XPC service")
+        await healToBundledService(client: client)
     }
 
     // MARK: - Private
@@ -162,7 +158,7 @@ public final class LaunchAgentModel: ObservableObject {
                 do {
                     try manager.unregister()
                 } catch { /* best-effort */ }
-                await LegacyLaunchAgentBootstrap.unloadAsync()
+                await LegacyLaunchAgentCleanup.unloadAsync()
                 register()
             }
 
@@ -184,7 +180,7 @@ public final class LaunchAgentModel: ObservableObject {
 
     private func applyReadyWithoutProbe() {
         refresh()
-        if runtimeMode == .directChild || runtimeMode == .legacyLaunchd {
+        if runtimeMode == .bundledService {
             isEngineReady = true
             return
         }
@@ -199,7 +195,7 @@ public final class LaunchAgentModel: ObservableObject {
     private func markReadyFromProbe() {
         refresh()
         isEngineReady = true
-        if runtimeMode != .directChild, runtimeMode != .legacyLaunchd, status == .enabled {
+        if runtimeMode != .bundledService, status == .enabled {
             runtimeMode = .smAppService
         }
         lastErrorMessage = nil
@@ -207,7 +203,7 @@ public final class LaunchAgentModel: ObservableObject {
         defaults.set(false, forKey: Self.loginItemsPromptKey)
     }
 
-    private func healToDirectChild(client: EngineClient?) async {
+    private func healToBundledService(client: EngineClient?) async {
         isEngineReady = false
         client?.clearDirectEndpoint()
 
@@ -222,20 +218,20 @@ public final class LaunchAgentModel: ObservableObject {
         refresh()
 
         if Self.isRunningUnderXCTest {
-            runtimeMode = .directChild
+            runtimeMode = .bundledService
             isEngineReady = client == nil
             lastErrorMessage = nil
-            defaults.set(true, forKey: Self.preferDirectKey)
+            defaults.set(true, forKey: Self.preferBundledServiceKey)
             return
         }
 
         // Off the main actor — never block UI with launchctl/waitUntilExit.
-        await LegacyLaunchAgentBootstrap.unloadAsync()
+        await LegacyLaunchAgentCleanup.unloadAsync()
 
         do {
-            _ = try await DirectAgentHost.shared.ensureEndpoint()
-            runtimeMode = .directChild
-            defaults.set(true, forKey: Self.preferDirectKey)
+            try DirectAgentHost.shared.ensureTransport()
+            runtimeMode = .bundledService
+            defaults.set(true, forKey: Self.preferBundledServiceKey)
             defaults.set(Bundle.main.bundleURL.path, forKey: Self.bundlePathKey)
 
             guard let client else {
@@ -255,12 +251,12 @@ public final class LaunchAgentModel: ObservableObject {
 
             isEngineReady = false
             lastErrorMessage =
-                "Engine started but isn’t answering yet. Tap Repair Connection again."
+                "Engine started but isn’t answering yet. Click Repair Connection again."
             EngineLog.app.error("bundled XPC service present but health probe failed")
         } catch {
             isEngineReady = false
             lastErrorMessage =
-                "Couldn’t start the background engine (\(EngineLog.redacted(error)))."
+                "Flow couldn’t start the background engine. Click Repair Connection, or restart Flow."
             EngineLog.app.error(
                 "bundled XPC service heal failed: \(EngineLog.redacted(error), privacy: .public)"
             )

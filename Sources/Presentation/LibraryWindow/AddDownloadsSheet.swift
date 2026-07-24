@@ -32,6 +32,10 @@ struct AddDownloadsSheet: View {
     @State private var selectedProjectID = ""
     @State private var customHeadersText = ""
     @State private var headersError: String?
+    @State private var expectedChecksumText = ""
+    @State private var speedLimitText = ""
+    @State private var connectionCountText = ""
+    @State private var routingError: String?
     @State private var useStartAt = false
     @State private var startAt = Date().addingTimeInterval(3600)
     @State private var confirmationPhase: ConfirmationGate.Phase = .none
@@ -196,11 +200,72 @@ struct AddDownloadsSheet: View {
     }
 
     private func liveStats(_ extraction: URLTextExtractor.Result) -> some View {
-        HStack(spacing: 10) {
-            statChip("Ready", extraction.validCount, emphasize: extraction.validCount > 0)
-            statChip("Dupes", extraction.duplicateCount, emphasize: false)
-            statChip("Skip", extraction.unsupportedCount, emphasize: false)
-            statChip("Bad", extraction.invalidCount, emphasize: extraction.invalidCount > 0)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                statChip("Ready", extraction.validCount, emphasize: extraction.validCount > 0)
+                statChip("Dupes", extraction.duplicateCount, emphasize: false)
+                statChip("Skip", extraction.unsupportedCount, emphasize: false)
+                statChip("Bad", extraction.invalidCount, emphasize: extraction.invalidCount > 0)
+            }
+            rejectedLinks(extraction)
+        }
+    }
+
+    /// Counts alone never told the user *which* line was rejected or why — a
+    /// magnet link just silently became a "Skip". This names each one.
+    @ViewBuilder
+    private func rejectedLinks(_ extraction: URLTextExtractor.Result) -> some View {
+        let rejected = extraction.items.filter { $0.status != .valid }
+        if !rejected.isEmpty {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(rejected.prefix(20), id: \.index) { item in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.raw)
+                                .font(FlowTheme.Typeface.mono(11))
+                                .foregroundStyle(palette.ink)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(Self.rejectionReason(for: item))
+                                .font(FlowTheme.Typeface.caption(11))
+                                .foregroundStyle(palette.inkSoft)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("\(item.raw). \(Self.rejectionReason(for: item))")
+                    }
+                    if rejected.count > 20 {
+                        Text("…and \(rejected.count - 20) more.")
+                            .font(FlowTheme.Typeface.caption(11))
+                            .foregroundStyle(palette.inkSoft)
+                    }
+                }
+                .padding(.top, 6)
+            } label: {
+                Text(rejected.count == 1 ? "1 link won’t be queued" : "\(rejected.count) links won’t be queued")
+                    .font(FlowTheme.Typeface.caption(12))
+                    .foregroundStyle(palette.inkSoft)
+            }
+        }
+    }
+
+    private static func rejectionReason(for item: URLTextExtractor.Item) -> String {
+        switch item.status {
+        case .valid:
+            return ""
+        case .duplicate:
+            return "Already in this list."
+        case .invalid:
+            return "This doesn’t look like a link Flow can read."
+        case .unsupported:
+            switch (item.scheme ?? "").lowercased() {
+            case "magnet":
+                return "Magnet links aren’t supported yet."
+            case "ftp", "ftps", "sftp":
+                return "FTP links aren’t supported yet."
+            default:
+                return "Flow doesn’t support this kind of link yet."
+            }
         }
     }
 
@@ -323,6 +388,17 @@ struct AddDownloadsSheet: View {
                         noneLabel: "No project",
                         options: projects.map { ($0.id, $0.name) }
                     )
+                    Divider().overlay(palette.pinStroke)
+                    checksumField
+                    speedLimitField
+                    connectionCountField
+                    if let routingError {
+                        Text(routingError)
+                            .font(FlowTheme.Typeface.caption(12))
+                            .foregroundStyle(palette.ember)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
                 .padding(14)
                 .background(palette.pinSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -333,6 +409,70 @@ struct AddDownloadsSheet: View {
                 .disabled(optionsLocked)
             }
         }
+    }
+
+    private var checksumField: some View {
+        limitField(
+            title: "Expected SHA-256 (optional)",
+            help: "Paste the 64-character checksum the site published and Flow verifies the file "
+                + "before it lands in your folder. Works with one link at a time. "
+                + "Leave empty to skip the check.",
+            placeholder: "64 characters, 0-9 and a-f",
+            text: $expectedChecksumText,
+            accessibilityLabel: "Expected SHA-256 checksum",
+            monospaced: true
+        )
+    }
+
+    private var speedLimitField: some View {
+        limitField(
+            title: "Speed limit (MB/s)",
+            help: "Caps this batch on its own. Leave empty to use the global speed limit from Settings.",
+            placeholder: "For example 2.5",
+            text: $speedLimitText,
+            accessibilityLabel: "Speed limit in megabytes per second",
+            monospaced: false
+        )
+    }
+
+    private var connectionCountField: some View {
+        limitField(
+            title: "Connections per download",
+            help: "How many parts to pull at once, up to \(EngineXPC.maxPreferredConnectionCount). "
+                + "Leave empty to let Flow choose from the file size. Flow uses fewer when the site "
+                + "or the queue allows fewer.",
+            placeholder: "1 to \(EngineXPC.maxPreferredConnectionCount)",
+            text: $connectionCountText,
+            accessibilityLabel: "Connections per download",
+            monospaced: false
+        )
+    }
+
+    private func limitField(
+        title: String,
+        help: String,
+        placeholder: String,
+        text: Binding<String>,
+        accessibilityLabel: String,
+        monospaced: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(FlowTheme.Typeface.title(13))
+                .foregroundStyle(palette.ink)
+            Text(help)
+                .font(FlowTheme.Typeface.caption(11))
+                .foregroundStyle(palette.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+                .font(monospaced ? FlowTheme.Typeface.mono(12) : FlowTheme.Typeface.body(13))
+                .accessibilityLabel(accessibilityLabel)
+                .onChange(of: text.wrappedValue) { _, _ in
+                    routingError = nil
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var headersCard: some View {
@@ -503,8 +643,16 @@ struct AddDownloadsSheet: View {
         if !selectedProxyID.isEmpty { parts.append("proxy") }
         if !selectedCookieID.isEmpty { parts.append("cookies") }
         if !selectedProjectID.isEmpty { parts.append("project") }
-        return parts.isEmpty ? "Defaults — expand to attach sign-in, proxy, cookies, project" : parts
-            .joined(separator: " · ")
+        if !Self.isBlank(expectedChecksumText) { parts.append("checksum") }
+        if !Self.isBlank(speedLimitText) { parts.append("speed limit") }
+        if !Self.isBlank(connectionCountText) { parts.append("connections") }
+        return parts.isEmpty
+            ? "Defaults — expand for sign-in, proxy, cookies, project, checksum, speed, connections"
+            : parts.joined(separator: " · ")
+    }
+
+    private static func isBlank(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func routeRow(
@@ -642,6 +790,17 @@ struct AddDownloadsSheet: View {
         return handled
     }
 
+    private typealias ValidatedLimits = TransferLimitInput.Validated
+
+    private func validateLimits(validItemCount: Int) -> TransferLimitInput.Outcome {
+        TransferLimitInput.validate(
+            checksum: expectedChecksumText,
+            speedLimitMegabytesPerSecond: speedLimitText,
+            connectionCount: connectionCountText,
+            itemCount: validItemCount
+        )
+    }
+
     /// XPC-friendly chunk size — keeps large pastes (1000+) responsive and durable.
     private static let enqueueChunkSize = 250
 
@@ -653,6 +812,18 @@ struct AddDownloadsSheet: View {
         let validItems = extraction.items.filter { $0.status == .valid }
         guard !validItems.isEmpty else {
             statusMessage = "No valid links to queue."
+            return
+        }
+
+        let limits: ValidatedLimits
+        switch validateLimits(validItemCount: validItems.count) {
+        case let .success(value):
+            limits = value
+            routingError = nil
+        case let .failure(message):
+            routingError = message
+            showRouting = true
+            statusMessage = nil
             return
         }
 
@@ -727,7 +898,10 @@ struct AddDownloadsSheet: View {
                     cookieProfileID: selectedCookieID.isEmpty ? nil : selectedCookieID,
                     customHeadersJSON: customHeadersJSON,
                     projectID: selectedProjectID.isEmpty ? nil : selectedProjectID,
-                    scheduleStartAtISO8601: scheduleISO
+                    scheduleStartAtISO8601: scheduleISO,
+                    expectedChecksumSHA256: limits.expectedChecksumSHA256,
+                    maxBytesPerSecond: limits.maxBytesPerSecond,
+                    preferredConnectionCount: limits.preferredConnectionCount
                 )
                 accepted += response.acceptedCount
             }
@@ -738,5 +912,86 @@ struct AddDownloadsSheet: View {
             statusMessage = "Could not queue downloads. Is the engine running?"
             confirmationPhase = .none
         }
+    }
+}
+
+/// Client-side validation for the Add sheet's optional per-download limits.
+///
+/// Pure and view-free so the rules are unit-testable: the sheet only renders the
+/// message this returns. Blank input always means "no override", never zero.
+enum TransferLimitInput {
+    struct Validated: Equatable {
+        var expectedChecksumSHA256: String?
+        var maxBytesPerSecond: Int64?
+        var preferredConnectionCount: Int?
+    }
+
+    enum Outcome: Equatable {
+        case success(Validated)
+        case failure(String)
+    }
+
+    /// Megabytes here are decimal (1 MB/s = 1,000,000 bytes/s), matching how
+    /// download speeds are advertised and how the row formatter reads them back.
+    private static let bytesPerMegabyte: Double = 1_000_000
+
+    static func validate(
+        checksum: String,
+        speedLimitMegabytesPerSecond: String,
+        connectionCount: String,
+        itemCount: Int
+    ) -> Outcome {
+        var validated = Validated()
+
+        let checksumInput = checksum.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !checksumInput.isEmpty {
+            guard let normalized = ChecksumFormat.normalizedSHA256(checksumInput) else {
+                return .failure(
+                    "The expected SHA-256 must be exactly \(ChecksumFormat.sha256HexLength) "
+                        + "characters using 0-9 and a-f."
+                )
+            }
+            guard itemCount == 1 else {
+                return .failure(
+                    "A checksum describes one file. Queue a single link, or clear the checksum."
+                )
+            }
+            validated.expectedChecksumSHA256 = normalized
+        }
+
+        let speedInput = speedLimitMegabytesPerSecond.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !speedInput.isEmpty {
+            // Accept a comma decimal mark so the field reads naturally in locales
+            // that write 2,5 rather than 2.5.
+            let normalized = speedInput.replacingOccurrences(of: ",", with: ".")
+            let ceiling = Double(EngineXPC.maxJobBytesPerSecond) / bytesPerMegabyte
+            guard let megabytes = Double(normalized), megabytes.isFinite,
+                  megabytes > 0, megabytes <= ceiling
+            else {
+                return .failure(
+                    "The speed limit must be a number of megabytes per second, such as 2.5."
+                )
+            }
+            let bytes = Int64((megabytes * bytesPerMegabyte).rounded())
+            guard bytes >= 1 else {
+                return .failure("That speed limit rounds down to nothing. Try 0.01 or more.")
+            }
+            validated.maxBytesPerSecond = bytes
+        }
+
+        let connectionsInput = connectionCount.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !connectionsInput.isEmpty {
+            guard let value = Int(connectionsInput),
+                  value >= 1, value <= EngineXPC.maxPreferredConnectionCount
+            else {
+                return .failure(
+                    "Connections must be a whole number from 1 to "
+                        + "\(EngineXPC.maxPreferredConnectionCount)."
+                )
+            }
+            validated.preferredConnectionCount = value
+        }
+
+        return .success(validated)
     }
 }

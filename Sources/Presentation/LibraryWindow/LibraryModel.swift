@@ -31,12 +31,19 @@ public enum LibraryFilter: Hashable, Sendable {
 
 /// Observable state for the library window. Holds immutable read snapshots plus UI
 /// state (selection, search, filter, inspector visibility). Filtering/search are
-/// pure and derived; search is debounced at the view.
+/// pure and derived.
 @MainActor
 public final class LibraryModel: ObservableObject {
     @Published public var rows: [JobRowModel]
     @Published public var selectedID: JobRowModel.ID?
-    @Published public var searchText: String = ""
+    /// Bound directly to the search field, so typing stays responsive.
+    @Published public var searchText: String = "" {
+        didSet { scheduleSearchDebounce() }
+    }
+
+    /// Debounced mirror of ``searchText``. Filtering reads this so a keystroke
+    /// does not re-scan every row — at 10k rows that scan is visible.
+    @Published public private(set) var searchQuery: String = ""
     @Published public var filter: LibraryFilter = .all
     @Published public var layoutMode: LibraryLayoutMode = .board
     @Published public var inspectorVisible: Bool = true
@@ -46,6 +53,10 @@ public final class LibraryModel: ObservableObject {
 
     public let engineClient: EngineClient
     private var refreshTask: Task<Void, Never>?
+    private var searchDebounceTask: Task<Void, Never>?
+    /// Long enough to swallow a fast typist's keystrokes, short enough that the
+    /// result still feels immediate.
+    private static let searchDebounceNanoseconds: UInt64 = 150_000_000
     private var knownCompleted: Set<UUID> = []
     /// Per-job remaining-time smoother so ETA eases instead of thrashing with speed.
     private var remainingTimeSmoothers: [UUID: RemainingTimeSmoother] = [:]
@@ -62,11 +73,34 @@ public final class LibraryModel: ObservableObject {
     /// downloads" from "no matches" via ``emptyReason``.
     public var visibleRows: [JobRowModel] {
         let filtered = rows.filter { filter.matches($0) }
-        guard !searchText.isEmpty else { return filtered }
-        let needle = searchText
+        guard !searchQuery.isEmpty else { return filtered }
+        let needle = searchQuery
         return filtered.filter {
             $0.name.localizedCaseInsensitiveContains(needle)
                 || $0.sourceHost.localizedCaseInsensitiveContains(needle)
+        }
+    }
+
+    /// Identity + state of every row, ignoring progress. Menus and other coarse
+    /// observers rebuild on this instead of on `rows`, which changes on every
+    /// progress tick while a transfer is live.
+    public var rowIdentitySignature: String {
+        rows.map { "\($0.id.uuidString):\($0.state.rawValue)" }.joined(separator: ",")
+    }
+
+    private func scheduleSearchDebounce() {
+        let pending = searchText
+        guard pending != searchQuery else { return }
+        searchDebounceTask?.cancel()
+        // Clearing the field should feel instant — only debounce real input.
+        guard !pending.isEmpty else {
+            searchQuery = ""
+            return
+        }
+        searchDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.searchDebounceNanoseconds)
+            guard !Task.isCancelled, let self else { return }
+            searchQuery = pending
         }
     }
 
@@ -75,11 +109,24 @@ public final class LibraryModel: ObservableObject {
         return rows.first { $0.id == selectedID }
     }
 
-    public enum EmptyReason: Sendable { case noDownloads, noMatches }
+    public enum EmptyReason: Sendable { case noDownloads, noMatches, engineUnavailable }
 
     public var emptyReason: EmptyReason? {
         guard visibleRows.isEmpty else { return nil }
-        return (rows.isEmpty && searchText.isEmpty && filter == .all) ? .noDownloads : .noMatches
+        if rows.isEmpty, searchQuery.isEmpty, filter == .all {
+            return .noDownloads
+        }
+        return .noMatches
+    }
+
+    /// Prefer engine-unavailable over the cheerful empty hero when the board is
+    /// empty because the engine never connected.
+    public func resolvedEmptyReason(engineReady: Bool) -> EmptyReason? {
+        guard let reason = emptyReason else { return nil }
+        if reason == .noDownloads, !engineReady {
+            return .engineUnavailable
+        }
+        return reason
     }
 
     public func presentClipboardLinks(_ text: String) {
@@ -252,7 +299,13 @@ public final class LibraryModel: ObservableObject {
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refreshFromEngine()
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let hasLive = self?.rows.contains {
+                    $0.state == .downloading || $0.state == .connecting
+                        || $0.state == .verifying || $0.state == .merging
+                        || $0.state == .postProcessing
+                } ?? false
+                let delay: UInt64 = hasLive ? 500_000_000 : 5_000_000_000
+                try? await Task.sleep(nanoseconds: delay)
             }
         }
     }

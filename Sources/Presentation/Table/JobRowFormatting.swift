@@ -39,18 +39,6 @@ public enum JobRowFormatting {
         return "\(byteFormatter.string(fromByteCount: bytesPerSecond))/s"
     }
 
-    /// Remaining time from known size + live speed. `nil` when indeterminate.
-    public static func etaSeconds(
-        transferred: Int64,
-        total: Int64?,
-        speedBytesPerSecond: Int64
-    ) -> Int? {
-        guard speedBytesPerSecond > 0, let total, total > transferred else { return nil }
-        let remaining = total - transferred
-        let seconds = Int((Double(remaining) / Double(speedBytesPerSecond)).rounded(.up))
-        return max(1, min(seconds, 99 * 3600))
-    }
-
     public static func eta(_ seconds: Int?) -> String {
         guard let seconds, seconds > 0 else { return "—" }
         if seconds < 60 { return "\(seconds)s" }

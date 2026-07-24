@@ -69,4 +69,59 @@ public enum JobState: String, CaseIterable, Sendable, Codable {
         .failed: [.ready, .queued],
         .cancelled: [.ready, .queued]
     ]
+
+    // MARK: - Presentation vocabulary
+
+    /// Human sentence-case wording for any surface that shows a state to a person
+    /// (inspector rows, table cells, VoiceOver labels). `rawValue` is a persistence
+    /// token and must never reach the screen.
+    ///
+    /// The switch is deliberately exhaustive with no `default:` clause: adding a
+    /// case to `JobState` becomes a compile error here rather than leaking a raw
+    /// identifier such as `retryWaiting` into the interface.
+    public var displayName: String {
+        switch self {
+        case .created: return "Added"
+        case .inspecting: return "Checking link"
+        case .awaitingUserSelection: return "Waiting for you"
+        case .ready: return "Ready"
+        case .queued: return "Queued"
+        case .scheduled: return "Scheduled"
+        case .connecting: return "Connecting"
+        case .downloading: return "Downloading"
+        case .paused: return "Paused"
+        case .retryWaiting: return "Retrying"
+        case .verifying: return "Checking file"
+        case .merging: return "Combining parts"
+        case .postProcessing: return "Finishing up"
+        case .completed: return "Completed"
+        case .failed: return "Failed"
+        case .cancelled: return "Cancelled"
+        }
+    }
+
+    /// Compact all-caps chip wording (at most six characters) for the board card.
+    ///
+    /// Exhaustive for the same reason as `displayName`; the length budget is what
+    /// keeps a squashed identifier from ever fitting.
+    public var shortLabel: String {
+        switch self {
+        case .created: return "NEW"
+        case .inspecting: return "CHECK"
+        case .awaitingUserSelection: return "PICK"
+        case .ready: return "READY"
+        case .queued: return "QUEUE"
+        case .scheduled: return "LATER"
+        case .connecting: return "START"
+        case .downloading: return "LIVE"
+        case .paused: return "PAUSED"
+        case .retryWaiting: return "RETRY"
+        case .verifying: return "VERIFY"
+        case .merging: return "MERGE"
+        case .postProcessing: return "FINISH"
+        case .completed: return "DONE"
+        case .failed: return "FAIL"
+        case .cancelled: return "STOP"
+        }
+    }
 }

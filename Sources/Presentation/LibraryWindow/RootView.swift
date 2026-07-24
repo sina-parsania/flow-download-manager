@@ -11,6 +11,7 @@ public struct RootView: View {
     @ObservedObject private var launchAgent: LaunchAgentModel
     @State private var isDropTargeted = false
     @State private var pendingDiskDeleteID: JobRowModel.ID?
+    @State private var isClearFailedPresented = false
     @Environment(\.flowPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -91,6 +92,27 @@ public struct RootView: View {
             } ?? "this download"
             Text("This permanently deletes “\(name)” from your download folder and removes it from Flow.")
         }
+        .confirmationDialog(
+            "Clear failed downloads?",
+            isPresented: $isClearFailedPresented,
+            titleVisibility: .visible
+        ) {
+            let count = model.rows.count { $0.state == .failed }
+            Button(
+                count == 1 ? "Clear 1 Download" : "Clear \(count) Downloads",
+                role: .destructive
+            ) {
+                Task { await model.clearFailed() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let count = model.rows.count { $0.state == .failed }
+            Text(
+                count == 1
+                    ? "Removes 1 failed download from Flow. Any partial file it left behind stays on disk."
+                    : "Removes \(count) failed downloads from Flow. Any partial files they left behind stay on disk."
+            )
+        }
         .onDrop(of: [.fileURL, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
             handleWindowDrop(providers)
         }
@@ -127,9 +149,18 @@ public struct RootView: View {
     private var librarySurface: some View {
         VStack(spacing: 0) {
             surfaceHeader
+            if let error = model.lastErrorMessage {
+                libraryErrorBanner(error)
+            }
             Group {
-                if let reason = model.emptyReason {
-                    LibraryEmptyState(reason: reason) { model.addSheetPresented = true }
+                if let reason = model.resolvedEmptyReason(engineReady: launchAgent.isEngineReady) {
+                    LibraryEmptyState(
+                        reason: reason,
+                        onAdd: { model.addSheetPresented = true },
+                        onStartEngine: {
+                            Task { await launchAgent.repair() }
+                        }
+                    )
                 } else {
                     switch model.layoutMode {
                     case .board:
@@ -164,6 +195,29 @@ public struct RootView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func libraryErrorBanner(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(palette.ember)
+            Text(message)
+                .font(FlowTheme.Typeface.body(13))
+                .foregroundStyle(palette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Dismiss") {
+                model.lastErrorMessage = nil
+            }
+            .buttonStyle(.plain)
+            .font(FlowTheme.Typeface.caption(12))
+            .foregroundStyle(palette.inkSoft)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(palette.ember.opacity(0.14))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isStaticText)
+        .accessibilityLabel(message)
     }
 
     private var surfaceHeader: some View {
@@ -316,7 +370,9 @@ public struct RootView: View {
             .help("Remove from library only, or delete the file from disk too")
 
             Button {
-                Task { await model.clearFailed() }
+                // Bulk and irreversible — the only remove action that can wipe
+                // many rows from one click, so it asks first.
+                isClearFailedPresented = true
             } label: {
                 Label("Clear Failed", systemImage: "trash.slash")
             }
@@ -398,6 +454,7 @@ public struct RootView: View {
 private struct LibraryEmptyState: View {
     let reason: LibraryModel.EmptyReason
     let onAdd: () -> Void
+    let onStartEngine: () -> Void
     @Environment(\.flowPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var glow = false
@@ -435,6 +492,19 @@ private struct LibraryEmptyState: View {
                         .buttonStyle(.plain)
                         .padding(.top, 10)
                         .accessibilityLabel("Add Downloads")
+                    } else if reason == .engineUnavailable {
+                        Button(action: onStartEngine) {
+                            Text("Start Engine")
+                                .font(FlowTheme.Typeface.title(14))
+                                .foregroundStyle(palette.onSignal)
+                                .padding(.horizontal, 22)
+                                .padding(.vertical, 12)
+                                .background(palette.signal, in: Capsule())
+                                .shadow(color: palette.signal.opacity(0.45), radius: 16, y: 6)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 10)
+                        .accessibilityLabel("Start Engine")
                     }
                 }
             }
@@ -450,12 +520,21 @@ private struct LibraryEmptyState: View {
     }
 
     private var title: String {
-        reason == .noDownloads ? "Nothing on the board yet" : "Nothing matches"
+        switch reason {
+        case .noDownloads: return "Nothing on the board yet"
+        case .noMatches: return "Nothing matches"
+        case .engineUnavailable: return "Engine isn’t running"
+        }
     }
 
     private var message: String {
-        reason == .noDownloads
-            ? "Paste links, drop a list, or capture from the browser — Flow queues them in the background engine."
-            : "Try another filter or clear search to widen the board."
+        switch reason {
+        case .noDownloads:
+            return "Paste links, drop a list, or capture from the browser — Flow queues them in the background engine."
+        case .noMatches:
+            return "Try another filter or clear search to widen the board."
+        case .engineUnavailable:
+            return "Flow can’t show or start downloads until the transfer engine is up. Click Start Engine to heal it."
+        }
     }
 }

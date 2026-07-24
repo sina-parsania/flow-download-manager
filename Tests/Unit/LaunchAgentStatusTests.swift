@@ -101,7 +101,7 @@ final class LaunchAgentStatusTests: XCTestCase {
         await model.repair()
         XCTAssertEqual(stub.unregisterCount, 1)
         XCTAssertEqual(stub.status, .notRegistered)
-        XCTAssertEqual(model.runtimeMode, .directChild)
+        XCTAssertEqual(model.runtimeMode, .bundledService)
         XCTAssertTrue(model.isEngineReady)
     }
 

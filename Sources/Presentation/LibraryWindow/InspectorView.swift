@@ -18,6 +18,8 @@ struct InspectorView: View {
     @Environment(\.flowPalette) private var palette
     @State private var events: [EventSnapshot] = []
     @State private var eventsError: String?
+    @State private var transferSettings: GetJobTransferSettingsResponse?
+    @State private var transferSettingsError: String?
     @State private var showEventsSheet = false
     @State private var projects: [ProjectSnapshot] = []
     @State private var tags: [TagSnapshot] = []
@@ -53,7 +55,7 @@ struct InspectorView: View {
                                 .multilineTextAlignment(.trailing)
                         }
                         .accessibilityLabel("Download URL")
-                        labeled("State", row.state.rawValue)
+                        labeled("State", row.state.displayName)
                         Picker("Category", selection: $selectedCategoryKey) {
                             ForEach(ClassificationEngine.builtInStableKeys, id: \.self) { key in
                                 Text(categoryDisplayName(key)).tag(key)
@@ -137,6 +139,9 @@ struct InspectorView: View {
                         labeled("Speed", JobRowFormatting.speed(row.speedBytesPerSecond))
                         labeled("Time remaining", JobRowFormatting.eta(row.etaSeconds))
                         labeled("Size", JobRowFormatting.size(row.totalBytes))
+                        sentence("Speed limit", speedLimitSentence)
+                        sentence("Connections", connectionsSentence)
+                        sentence("Checksum", integritySentence(for: row))
                     }
                     Section("Events") {
                         if let eventsError {
@@ -229,6 +234,12 @@ struct InspectorView: View {
                     isEditingName = false
                     await loadOrganization()
                     await loadEvents(for: row.id)
+                    await loadTransferSettings(for: row.id)
+                }
+                .onChange(of: row.state) { _, _ in
+                    // The verification outcome only exists once the job leaves the
+                    // transfer states, so re-read on every state change.
+                    Task { await loadTransferSettings(for: row.id) }
                 }
                 .onChange(of: row.name) { _, newName in
                     if !isEditingName {
@@ -325,6 +336,9 @@ struct InspectorView: View {
         return "Latest: \(JobEventFormatting.title(for: first.type))"
     }
 
+    /// The row name is the accessibility label and the reading is the accessibility
+    /// value, so changing quantities (progress, speed, time remaining) are announced
+    /// as value updates on a stable element.
     private func labeled(_ label: String, _ value: String) -> some View {
         LabeledContent(label) {
             Text(value)
@@ -332,7 +346,74 @@ struct InspectorView: View {
                 .textSelection(.enabled)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label): \(value)")
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
+    }
+
+    /// Multi-line sibling of ``labeled(_:_:)`` for whole sentences. Same
+    /// label/value accessibility split, so VoiceOver announces the sentence as a
+    /// changing value on a stable element.
+    private func sentence(_ label: String, _ value: String) -> some View {
+        LabeledContent(label) {
+            Text(value)
+                .font(.callout)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
+    }
+
+    private var speedLimitSentence: String {
+        guard let transferSettings else {
+            return transferSettingsError ?? "Reading settings…"
+        }
+        if let perJob = transferSettings.maxBytesPerSecond {
+            return "\(JobRowFormatting.speed(perJob)), set for this download."
+        }
+        if let global = transferSettings.globalMaxBytesPerSecond {
+            return "\(JobRowFormatting.speed(global)), from the global limit in Settings."
+        }
+        return "No limit."
+    }
+
+    private var connectionsSentence: String {
+        guard let transferSettings else {
+            return transferSettingsError ?? "Reading settings…"
+        }
+        guard let preferred = transferSettings.preferredConnectionCount else {
+            return "Chosen automatically from the file size."
+        }
+        return "Up to \(preferred), set for this download. Flow uses fewer when the site "
+            + "or the queue allows fewer."
+    }
+
+    /// Users must be able to tell "verified" from "not checked", so every branch
+    /// says which one it is rather than falling back to silence.
+    private func integritySentence(for row: JobRowModel) -> String {
+        guard let transferSettings else {
+            return transferSettingsError ?? "Reading settings…"
+        }
+        if transferSettings.terminalReason == TerminalReason.checksumMismatch.rawValue {
+            return "The finished file did not match the checksum you provided, "
+                + "so Flow kept it out of your folder."
+        }
+        guard let checksum = transferSettings.expectedChecksumSHA256 else {
+            return "Not checked — no checksum was given for this download."
+        }
+        let shortened = String(checksum.prefix(12))
+        switch row.state {
+        case .completed:
+            return "Verified against the checksum you provided (\(shortened)…)."
+        case .failed, .cancelled:
+            return "Not checked — the download stopped before verification. "
+                + "Checksum on file: \(shortened)…"
+        default:
+            return "Will be checked against the checksum you provided (\(shortened)…) "
+                + "before the file lands in your folder."
+        }
     }
 
     @ViewBuilder
@@ -634,6 +715,19 @@ struct InspectorView: View {
             if let row {
                 selectedTagIDs = Set(row.tagIDs)
             }
+        }
+    }
+
+    @MainActor
+    private func loadTransferSettings(for jobID: UUID) async {
+        do {
+            transferSettings = try await engineClient.getJobTransferSettings(
+                jobID: jobID.uuidString.lowercased()
+            )
+            transferSettingsError = nil
+        } catch {
+            transferSettings = nil
+            transferSettingsError = "Unavailable while the engine is unreachable."
         }
     }
 

@@ -17,6 +17,7 @@ struct DownloadPinCard: View {
     @Environment(\.flowPalette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
+    @State private var badgeHovered = false
 
     private var seed: Int {
         row.id.hashValue & 0xFFFF
@@ -86,6 +87,7 @@ struct DownloadPinCard: View {
         .contextMenu { pinContextMenu }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary)
+        .accessibilityValue(progressAccessibilityValue)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onAppear {
             guard !reduceMotion else {
@@ -124,7 +126,7 @@ struct DownloadPinCard: View {
             HStack(spacing: 5) {
                 Image(systemName: statusSymbol)
                     .font(.system(size: 10, weight: .semibold))
-                Text(shortStateLabel)
+                Text(row.state.shortLabel)
                     .font(FlowTheme.Typeface.caption(10))
                     .tracking(0.6)
             }
@@ -137,6 +139,7 @@ struct DownloadPinCard: View {
         .disabled(!canTogglePauseResume)
         .help(toggleHelp)
         .accessibilityLabel(toggleAccessibilityLabel)
+        .accessibilityValue(row.state.displayName)
     }
 
     private var pauseResumeBadgeButton: some View {
@@ -147,12 +150,11 @@ struct DownloadPinCard: View {
         .disabled(!canTogglePauseResume)
         .help(toggleHelp)
         .accessibilityLabel(toggleAccessibilityLabel)
+        .accessibilityValue(progressAccessibilityValue)
     }
 
     private var downieProgressBadge: some View {
         let fraction = row.progressFraction.map { max(0, min(1, $0)) }
-        let showPercent = row.statusRole == .active || row.statusRole == .success
-            || (fraction ?? 0) > 0
         return ZStack {
             Circle()
                 .stroke(palette.ink.opacity(0.15), lineWidth: 2)
@@ -163,40 +165,40 @@ struct DownloadPinCard: View {
                     style: StrokeStyle(lineWidth: 2, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-            if canResume {
-                Image(systemName: "play.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(palette.ink)
-                    .offset(x: 1)
-            } else if canPause {
-                Image(systemName: "pause.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(palette.ink)
-            } else if showPercent, let fraction {
-                Text(JobRowFormatting.percentText(fraction: fraction))
-                    .font(FlowTheme.Typeface.mono(9))
-                    .foregroundStyle(palette.ink)
-                    .minimumScaleFactor(0.7)
-                    .lineLimit(1)
-            } else {
-                Image(systemName: "arrow.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(palette.ink)
-            }
+            badgeCenter(fraction: fraction)
         }
         .frame(width: 34, height: 34)
         .contentShape(Circle())
+        .onHover { hovering in
+            badgeHovered = hovering
+        }
     }
 
-    private var shortStateLabel: String {
-        switch row.state {
-        case .downloading: return "LIVE"
-        case .paused: return "PAUSED"
-        case .queued, .ready, .scheduled: return "QUEUE"
-        case .completed: return "DONE"
-        case .failed: return "FAIL"
-        case .cancelled: return "STOP"
-        default: return row.state.rawValue.uppercased()
+    /// The percentage owns the badge centre whenever a fraction is known, so an
+    /// active download always shows a number. The pause/play glyph takes over only
+    /// while the pointer is on the badge; it also lives permanently in the status
+    /// chip and the context menu, so the affordance never depends on hover alone.
+    @ViewBuilder
+    private func badgeCenter(fraction: Double?) -> some View {
+        if let fraction, !(badgeHovered && canTogglePauseResume) {
+            Text(JobRowFormatting.percentText(fraction: fraction))
+                .font(FlowTheme.Typeface.mono(9))
+                .foregroundStyle(palette.ink)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+        } else if canResume {
+            Image(systemName: "play.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(palette.ink)
+                .offset(x: 1)
+        } else if canPause {
+            Image(systemName: "pause.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(palette.ink)
+        } else {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(palette.ink)
         }
     }
 
@@ -221,7 +223,14 @@ struct DownloadPinCard: View {
     private var toggleAccessibilityLabel: String {
         if canResume { return "Resume" }
         if canPause { return "Pause" }
-        return row.state.rawValue
+        return row.state.displayName
+    }
+
+    /// Live quantity for VoiceOver. Kept out of the label so the announcement is a
+    /// changing *value* on a stable control rather than a renamed button.
+    private var progressAccessibilityValue: String {
+        guard let fraction = row.progressFraction else { return "Progress unknown" }
+        return JobRowFormatting.percentText(fraction: fraction)
     }
 
     private var statusSymbol: String {
@@ -260,7 +269,6 @@ struct DownloadPinCard: View {
     }
 
     private var accessibilitySummary: String {
-        let pct = JobRowFormatting.percentText(fraction: row.progressFraction)
-        return "\(row.name), \(row.state.rawValue), from \(row.sourceHost), \(pct)"
+        "\(row.name), \(row.state.displayName), from \(row.sourceHost)"
     }
 }

@@ -162,9 +162,7 @@ private struct EngineStatusBadge: View {
                         .foregroundStyle(palette.ink)
                         .lineLimit(1)
                     Text(model.isOperational
-                        ? (model.runtimeMode == .directChild
-                            ? "always on · in-app"
-                            : model.runtimeMode == .legacyLaunchd ? "always on · local" : "always on")
+                        ? (model.runtimeMode == .bundledService ? "always on · in-app" : "always on")
                         : model.status.badgeSubtitle)
                         .font(FlowTheme.Typeface.caption(10))
                         .foregroundStyle(palette.inkSoft)

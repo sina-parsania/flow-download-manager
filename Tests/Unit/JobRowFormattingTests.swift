@@ -5,16 +5,6 @@ import XCTest
 
 @MainActor
 final class JobRowFormattingTests: XCTestCase {
-    func testEtaSecondsFromSpeedAndRemaining() {
-        XCTAssertEqual(
-            JobRowFormatting.etaSeconds(transferred: 50, total: 150, speedBytesPerSecond: 50),
-            2
-        )
-        XCTAssertNil(JobRowFormatting.etaSeconds(transferred: 50, total: 150, speedBytesPerSecond: 0))
-        XCTAssertNil(JobRowFormatting.etaSeconds(transferred: 150, total: 150, speedBytesPerSecond: 50))
-        XCTAssertNil(JobRowFormatting.etaSeconds(transferred: 10, total: nil, speedBytesPerSecond: 50))
-    }
-
     func testEtaDisplayStrings() {
         XCTAssertEqual(JobRowFormatting.eta(nil), "—")
         XCTAssertEqual(JobRowFormatting.eta(0), "—")

@@ -9,7 +9,7 @@ struct DestinationFolderCard: View {
     let engineClient: EngineClient
     var compact: Bool = false
     var onChanged: (() -> Void)?
-    /// When XPC is dead, heal launchd (unregister broken SM → legacy) then retry.
+    /// When XPC is dead, heal the engine (unregister broken SM state) then retry.
     var onHealEngine: (() async -> Bool)?
 
     @Environment(\.flowPalette) private var palette
@@ -109,8 +109,8 @@ struct DestinationFolderCard: View {
     private var badgeLabel: String {
         if destination.isDefaultDownloads {
             return engineReachable
-                ? "Default · Downloads/DownloadManager"
-                : "Default path · engine not answering"
+                ? "Flow’s default folder"
+                : "Default folder · engine not answering"
         }
         return engineReachable
             ? "Custom folder"
@@ -233,7 +233,7 @@ struct DestinationFolderCard: View {
         case let .ok(value):
             destination = value
             engineReachable = true
-            statusMessage = "Reset to Downloads/DownloadManager."
+            statusMessage = "Reset to Flow’s default download folder."
             onChanged?()
         case .timeout, .failed:
             engineReachable = false

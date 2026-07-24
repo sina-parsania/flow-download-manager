@@ -9,8 +9,38 @@ import SharedSecurity
 import TransferCore
 import XPCContracts
 
+/// Latest cumulative byte count for one in-flight transfer.
+///
+/// Written from libcurl's write-callback threads and drained by the
+/// orchestrator's progress ticker. Coalescing here rather than per callback is
+/// what keeps actor traffic independent of link speed. `take()` returns nil
+/// when nothing new has arrived, so an idle transfer costs no actor hops.
+private final class LiveByteCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes: Int64?
+
+    func record(_ value: Int64) {
+        lock.lock()
+        if value > (bytes ?? -1) { bytes = value }
+        lock.unlock()
+    }
+
+    func take() -> Int64? {
+        lock.lock()
+        defer {
+            bytes = nil
+            lock.unlock()
+        }
+        return bytes
+    }
+}
+
 /// Runs queued jobs through TransferCore and finalization. Agent-owned.
 public actor TransferOrchestrator {
+    /// Progress drain interval. The UI polls at 500 ms while a job is live, so
+    /// draining at 250 ms keeps every poll fresh without over-reporting.
+    private static let progressTickNanoseconds: UInt64 = 250_000_000
+
     private let database: EngineDatabase
     private let budget: TransferBudgetLedger
     private let retryPolicy: RetryPolicy
@@ -205,6 +235,33 @@ public actor TransferOrchestrator {
                 return
             }
 
+            let host = URL(string: details.canonicalURL)?.host ?? "unknown"
+            // Acquire capacity before any state flip. A failed grant must leave
+            // the job queued without thrashing connecting→downloading→queued.
+            guard await budget.tryAcquireSocket(host: host) else {
+                try await Task.sleep(nanoseconds: 200_000_000)
+                return
+            }
+            // Reserve segment sockets so concurrent jobs to one host respect
+            // the per-host and total caps; the grant bounds segment count.
+            // A job that asked for fewer connections reserves fewer, so it does
+            // not hold sockets a sibling transfer could use.
+            let extraSegmentSockets = await budget.reserveSockets(
+                host: host,
+                upTo: Self.requestedExtraSockets(
+                    preferredConnectionCount: details.preferredConnectionCount
+                )
+            )
+            defer {
+                let budget = self.budget
+                let hostToRelease = host
+                let extra = extraSegmentSockets
+                Task.detached {
+                    await budget.releaseSocket(host: hostToRelease)
+                    await budget.releaseSockets(host: hostToRelease, count: extra)
+                }
+            }
+
             _ = try JobRepository.updateJobState(
                 database: database, id: jobID, state: "connecting",
                 terminalReason: nil, expectedRevision: nil
@@ -254,41 +311,38 @@ public actor TransferOrchestrator {
                 return
             }
 
-            let host = URL(string: details.canonicalURL)?.host ?? "unknown"
-            guard await budget.tryAcquireSocket(host: host) else {
-                _ = try JobRepository.updateJobState(
-                    database: database, id: jobID, state: "queued",
-                    terminalReason: nil, expectedRevision: nil
-                )
-                try await Task.sleep(nanoseconds: 200_000_000)
-                return
-            }
-            // Reserve segment sockets so concurrent jobs to one host respect
-            // the per-host and total caps; the grant bounds segment count.
-            let extraSegmentSockets = await budget.reserveSockets(host: host, upTo: 31)
-            defer {
-                let budget = self.budget
-                let hostToRelease = host
-                let extra = extraSegmentSockets
-                Task.detached {
-                    await budget.releaseSocket(host: hostToRelease)
-                    await budget.releaseSockets(host: hostToRelease, count: extra)
+            let options = try buildDownloadOptions(from: details)
+
+            // libcurl calls back once per write chunk from N segment threads.
+            // Spawning a Task per callback flooded this actor — the same actor
+            // that runs `pump()` — with unordered work proportional to link
+            // speed. Instead the callback only stores the latest byte count
+            // (lock-only, no actor hop) and one ticker drains it at a fixed
+            // rate, so actor traffic is bounded no matter how fast the transfer.
+            let liveBytes = LiveByteCounter()
+            let ticker = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: Self.progressTickNanoseconds)
+                    guard let self, let bytes = liveBytes.take() else { continue }
+                    await recordProgress(jobID: jobID, bytes: bytes, total: nil)
                 }
             }
-
-            let options = try buildDownloadOptions(from: details)
-            let hostHint = try? HostObservationRepository.get(database: database, host: host)
+            defer { ticker.cancel() }
 
             let outcome = try await Self.downloadOffActor(
                 url: details.canonicalURL,
                 partialURL: partial,
                 options: options,
                 abortFlag: abort,
-                hostMaxSegments: min(hostHint?.maxSegments ?? Int.max, 1 + extraSegmentSockets),
-                onProgress: { bytes in
-                    Task { await self.recordProgress(jobID: jobID, bytes: bytes, total: nil) }
-                }
+                hostMaxSegments: Self.effectiveHostMaxSegments(
+                    preferredConnectionCount: details.preferredConnectionCount,
+                    socketBudget: 1 + extraSegmentSockets
+                ),
+                onProgress: { bytes in liveBytes.record(bytes) }
             )
+            ticker.cancel()
+            // Final position, so the UI never stalls one tick short of the end.
+            recordProgress(jobID: jobID, bytes: outcome.bytesWritten, total: nil)
 
             if cancelledJobIDs.contains(jobID) || abort.isSet && cancelledJobIDs.contains(jobID) {
                 _ = try JobRepository.updateJobState(
@@ -317,12 +371,15 @@ public actor TransferOrchestrator {
                 return
             }
 
+            // Record that the host tolerates ranged GETs. Never store the
+            // segment count we chose for this file size — a 20 MB download
+            // must not poison an 8 GB follow-up to 4 segments for a week.
             if outcome.segmentCount > 1 {
                 try? HostObservationRepository.set(
                     database: database,
                     host: host,
                     observation: HostObservationRepository.Observation(
-                        maxSegments: outcome.segmentCount,
+                        maxSegments: nil,
                         rangeOK: true
                     ),
                     expiresAt: Date().addingTimeInterval(7 * 24 * 60 * 60)
@@ -447,13 +504,51 @@ public actor TransferOrchestrator {
         options.extraHeaders = parsedHeaders.map {
             TransferCore.HTTPHeader(name: $0.name, value: $0.value)
         }
-        if let policy = try ProfileRepository.fetchGlobalBandwidthPolicy(database: database) {
-            let windows = try BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)
-            if BandwidthWindowEvaluator.isActive(now: Date(), calendar: .current, windows: windows) {
-                options.maxBytesPerSecond = policy.maxBytesPerSecond
-            }
-        }
+        // `DownloadOptions.maxBytesPerSecond == 0` means unlimited.
+        options.maxBytesPerSecond = try Self.effectiveMaxBytesPerSecond(
+            perJob: details.maxBytesPerSecond,
+            globalPolicyLimit: activeGlobalBandwidthLimit()
+        ) ?? 0
         return options
+    }
+
+    /// Rate limit the global calendar policy imposes right now, or `nil` when no
+    /// policy exists or its window is closed.
+    private func activeGlobalBandwidthLimit() throws -> Int64? {
+        guard let policy = try ProfileRepository.fetchGlobalBandwidthPolicy(database: database) else {
+            return nil
+        }
+        let windows = try BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)
+        guard BandwidthWindowEvaluator.isActive(now: Date(), calendar: .current, windows: windows) else {
+            return nil
+        }
+        return policy.maxBytesPerSecond
+    }
+
+    /// A per-job limit wins over the global policy; with no per-job value the
+    /// result is exactly the global policy's limit, as before this option existed.
+    static func effectiveMaxBytesPerSecond(perJob: Int64?, globalPolicyLimit: Int64?) -> Int64? {
+        if let perJob, perJob > 0 {
+            return perJob
+        }
+        return globalPolicyLimit
+    }
+
+    /// Extra sockets worth reserving for one job's segments. `nil` keeps the
+    /// historical "ask for the full 31" behaviour; a preference asks for only
+    /// what it can use, still capped at 31 so one job cannot exceed the host cap.
+    static func requestedExtraSockets(preferredConnectionCount: Int?) -> Int {
+        guard let preferredConnectionCount else { return 31 }
+        return min(31, max(0, preferredConnectionCount - 1))
+    }
+
+    /// Segment ceiling handed to `SegmentedTransfer`. The socket reservation is
+    /// the hard bound — a user asking for 64 connections still cannot exceed what
+    /// the budget granted for this host.
+    static func effectiveHostMaxSegments(preferredConnectionCount: Int?, socketBudget: Int) -> Int {
+        let budget = max(1, socketBudget)
+        guard let preferredConnectionCount else { return budget }
+        return min(max(1, preferredConnectionCount), budget)
     }
 
     private func recordProgress(jobID: String, bytes: Int64, total: Int64?) {
@@ -566,6 +661,19 @@ public actor TransferOrchestrator {
         }
     }
 
+    /// Whether another attempt could plausibly succeed.
+    ///
+    /// A digest mismatch cannot: the retry resumes the same partial through the
+    /// same segment map and hashes the same bytes, so three attempts produce
+    /// three identical failures and the user waits out the backoff for nothing.
+    /// Restart (which wipes the partial) is the recovery, and the user drives it.
+    static func isRetryable(_ error: Error) -> Bool {
+        if case IntegrityVerifier.VerifyError.checksumMismatch = error {
+            return false
+        }
+        return true
+    }
+
     private func handleFailure(jobID: String, error: Error) async {
         log.error("job failed id=\(jobID, privacy: .public) err=\(EngineLog.redacted(error), privacy: .public)")
         let attempt = (attemptByJob[jobID] ?? 0) + 1
@@ -576,7 +684,7 @@ public actor TransferOrchestrator {
             return nil
         }()
 
-        if retryPolicy.shouldRetry(attempt: attempt, httpStatus: httpStatus) {
+        if Self.isRetryable(error), retryPolicy.shouldRetry(attempt: attempt, httpStatus: httpStatus) {
             let delay = retryPolicy.delayNanoseconds(attempt: attempt - 1, retryAfterSeconds: nil)
             _ = try? JobRepository.updateJobState(
                 database: database, id: jobID, state: "retryWaiting",

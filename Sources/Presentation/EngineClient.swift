@@ -80,7 +80,7 @@ public final class EngineClient: ObservableObject {
     private func openConnectionAndHandshake() async throws {
         resetConnection()
         if !prefersBundledXPCService,
-           DirectAgentHost.shared.currentTransportIfReady == .bundledXPCService {
+           DirectAgentHost.shared.isBundledServiceReady {
             prefersBundledXPCService = true
         }
         let connection = if prefersBundledXPCService {
@@ -117,7 +117,8 @@ public final class EngineClient: ObservableObject {
                 "listOrganization", "upsertProject", "upsertTag", "setJobTags", "setJobProject",
                 "setJobCategory", "setJobFilename",
                 "getBoolSetting", "setBoolSetting",
-                "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents"
+                "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents",
+                "getJobTransferSettings"
             ]
         )
         do {
@@ -157,7 +158,10 @@ public final class EngineClient: ObservableObject {
         cookieProfileID: String? = nil,
         customHeadersJSON: String? = nil,
         projectID: String? = nil,
-        scheduleStartAtISO8601: String? = nil
+        scheduleStartAtISO8601: String? = nil,
+        expectedChecksumSHA256: String? = nil,
+        maxBytesPerSecond: Int64? = nil,
+        preferredConnectionCount: Int? = nil
     ) async throws -> EnqueueBatchResponse {
         let request = EnqueueBatchRequest(
             requestID: UUID().uuidString,
@@ -169,7 +173,10 @@ public final class EngineClient: ObservableObject {
             cookieProfileID: cookieProfileID,
             customHeadersJSON: customHeadersJSON,
             projectID: projectID,
-            scheduleStartAtISO8601: scheduleStartAtISO8601
+            scheduleStartAtISO8601: scheduleStartAtISO8601,
+            expectedChecksumSHA256: expectedChecksumSHA256,
+            maxBytesPerSecond: maxBytesPerSecond,
+            preferredConnectionCount: preferredConnectionCount
         )
         return try await perform { proxy, reply in
             proxy.enqueueBatch(request, reply: reply)
@@ -483,6 +490,16 @@ public final class EngineClient: ObservableObject {
         )
         return try await perform { proxy, reply in
             proxy.clearEvents(request, reply: reply)
+        }
+    }
+
+    public func getJobTransferSettings(jobID: String) async throws -> GetJobTransferSettingsResponse {
+        let request = GetJobTransferSettingsRequest(
+            requestID: UUID().uuidString,
+            jobID: jobID
+        )
+        return try await perform { proxy, reply in
+            proxy.getJobTransferSettings(request, reply: reply)
         }
     }
 

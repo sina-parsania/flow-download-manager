@@ -3,8 +3,7 @@
 import AppKit
 
 /// Column definitions and reusable cell construction for the download table.
-/// Name and Status cannot be hidden (`03-design-system-ui-ux.md` §5). Numeric
-/// columns use monospaced digits.
+/// Numeric columns use monospaced digits.
 @MainActor
 struct JobColumn {
     let identifier: NSUserInterfaceItemIdentifier
@@ -18,10 +17,10 @@ struct JobColumn {
             textCell(
                 table,
                 id: .init("cell.status"),
-                text: model.state.rawValue,
+                text: model.state.displayName,
                 monospaced: false,
                 color: color(for: model.statusRole),
-                accessibility: "Status: \(model.state.rawValue)"
+                accessibility: "Status: \(model.state.displayName)"
             )
         },
         JobColumn(identifier: .init("name"), title: "Name", width: 260, minWidth: 140) { table, model in
@@ -190,15 +189,20 @@ final class ProgressCellView: NSTableCellView {
         nil
     }
 
+    /// The label stays constant ("Progress") and the quantity is published as an
+    /// accessibility *value*, so VoiceOver announces the change instead of treating
+    /// every update as a differently named element.
     func configure(fraction: Double?, text: String) {
-        if let fraction {
-            bar.isIndeterminate = false
-            bar.doubleValue = max(0, min(1, fraction))
-        } else {
-            bar.isIndeterminate = false
-            bar.doubleValue = 0
-        }
+        let clamped = fraction.map { max(0, min(1, $0)) }
+        bar.isIndeterminate = false
+        bar.doubleValue = clamped ?? 0
         label.stringValue = text
-        setAccessibilityLabel("Progress: \(text)")
+        setAccessibilityLabel("Progress")
+        setAccessibilityValue(text)
+        setAccessibilityValueDescription(text)
+        bar.setAccessibilityLabel("Progress")
+        bar.setAccessibilityValueDescription(text)
+        label.setAccessibilityLabel("Progress")
+        label.setAccessibilityValueDescription(text)
     }
 }

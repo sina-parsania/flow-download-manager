@@ -2,6 +2,7 @@
 
 import Foundation
 import ServiceManagement
+import SharedObservability
 
 /// Availability-neutral projection of `SMAppService.Status` used by the UI. The
 /// app explains background processing and links to System Settings when approval
@@ -19,7 +20,10 @@ public enum LaunchAgentStatus: Equatable, Sendable {
         case .enabled: self = .enabled
         case .requiresApproval: self = .requiresApproval
         case .notFound: self = .notFound
-        @unknown default: self = .unknown(status.rawValue)
+        @unknown default:
+            // The raw code is diagnostic only — it never reaches user-facing copy.
+            EngineLog.app.error("unrecognized SMAppService status raw=\(status.rawValue, privacy: .public)")
+            self = .unknown(status.rawValue)
         }
     }
 
@@ -43,9 +47,9 @@ public enum LaunchAgentStatus: Equatable, Sendable {
         case .requiresApproval:
             return "Allow Flow Download Manager in Login Items (once). After that the engine stays on — Flow will not ask again every launch."
         case .notFound:
-            return "Flow is starting the transfer engine with a local LaunchAgent fallback."
-        case let .unknown(code):
-            return "Reported an unrecognized status code (\(code)). Use Repair if downloads stall."
+            return "Flow is starting the transfer engine a different way. Downloads begin as soon as it answers."
+        case .unknown:
+            return "Flow can’t tell whether the transfer engine is on. If downloads stall, use Repair."
         }
     }
 

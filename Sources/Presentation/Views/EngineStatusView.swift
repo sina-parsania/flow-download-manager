@@ -71,11 +71,8 @@ public struct EngineStatusView: View {
     }
 
     private var detail: String {
-        if model.runtimeMode == .directChild, model.isEngineReady {
-            return "Transfer engine is running inside the app (local debug). It stays on while Flow is open."
-        }
-        if model.runtimeMode == .legacyLaunchd, model.isEngineReady {
-            return "Transfer engine is running (local LaunchAgent). It starts with Flow automatically."
+        if model.runtimeMode == .bundledService, model.isEngineReady {
+            return "Transfer engine is running inside Flow. It stays on while Flow is open."
         }
         return model.status.detail
     }

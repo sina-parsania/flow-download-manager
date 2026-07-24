@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Application
+import Foundation
 import SwiftUI
 import XPCContracts
 
@@ -95,8 +96,11 @@ public struct SettingsView: View {
                 }
                 DisclosureGroup("Add credential", isExpanded: $model.showAddCredential) {
                     TextField("Display name", text: $model.credentialDisplayName)
+                        .accessibilityLabel("Credential display name")
                     TextField("Username", text: $model.credentialUsername)
+                        .accessibilityLabel("Credential username")
                     SecureField("Password", text: $model.credentialPassword)
+                        .accessibilityLabel("Credential password")
                     Button("Save credential") {
                         Task { await model.saveCredential() }
                     }
@@ -120,13 +124,16 @@ public struct SettingsView: View {
                 }
                 DisclosureGroup("Add proxy", isExpanded: $model.showAddProxy) {
                     TextField("Display name", text: $model.proxyDisplayName)
+                        .accessibilityLabel("Proxy display name")
                     Picker("Kind", selection: $model.proxyKind) {
                         Text("HTTP").tag("http")
                         Text("HTTPS").tag("https")
                         Text("SOCKS5").tag("socks5")
                     }
                     TextField("Host", text: $model.proxyHost)
+                        .accessibilityLabel("Proxy host")
                     TextField("Port", text: $model.proxyPortText)
+                        .accessibilityLabel("Proxy port")
                     Button("Save proxy") {
                         Task { await model.saveProxy() }
                     }
@@ -145,27 +152,32 @@ public struct SettingsView: View {
                 }
                 DisclosureGroup("Add cookie profile", isExpanded: $model.showAddCookie) {
                     TextField("Display name", text: $model.cookieDisplayName)
+                        .accessibilityLabel("Cookie profile display name")
                     Button("Save cookie profile") {
                         Task { await model.saveCookie() }
                     }
                     .disabled(!model.canSaveCookie || model.isBusy)
                 }
-                Text("Creates an empty cookie jar under Application Support. Values never enter SQLite.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    "Creates an empty cookie profile for sites that need a sign-in. Flow keeps cookies "
+                        + "in their own file, never alongside your download history."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Bandwidth") {
-                TextField("Max bytes/second (0 = unlimited)", text: $model.bandwidthMaxBytesText)
+                TextField("Speed limit, MB per second", text: $model.bandwidthMaxMegabytesText)
+                    .accessibilityLabel("Speed limit in megabytes per second")
                 Toggle(
                     "Only between 00:00 and 08:00 daily",
                     isOn: $model.bandwidthNightWindowOnly
                 )
                 .accessibilityLabel("Only between 00:00 and 08:00 daily")
                 Text(
-                    "When the night window is on, new downloads start only in that local window "
-                        + "and use the max rate. Outside the window, queued jobs wait."
+                    "Enter 0 for no limit. When the night window is on, new downloads start only in "
+                        + "that local window and use the speed limit. Outside the window, queued jobs wait."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -187,6 +199,7 @@ public struct SettingsView: View {
                 }
                 DisclosureGroup("Add project", isExpanded: $model.showAddProject) {
                     TextField("Project name", text: $model.projectName)
+                        .accessibilityLabel("Project name")
                     Button("Save project") {
                         Task { await model.saveProject() }
                     }
@@ -203,6 +216,7 @@ public struct SettingsView: View {
                 }
                 DisclosureGroup("Add tag", isExpanded: $model.showAddTag) {
                     TextField("Tag name", text: $model.tagName)
+                        .accessibilityLabel("Tag name")
                     Button("Save tag") {
                         Task { await model.saveTag() }
                     }
@@ -226,6 +240,7 @@ public struct SettingsView: View {
                 }
                 DisclosureGroup("Add extension rule", isExpanded: $model.showAddRule) {
                     TextField("Extension (e.g. mp4)", text: $model.ruleExtension)
+                        .accessibilityLabel("File extension for this rule")
                     Picker("Category", selection: $model.ruleCategoryKey) {
                         ForEach(ClassificationEngine.builtInStableKeys, id: \.self) { key in
                             Text(key).tag(key)
@@ -282,7 +297,8 @@ private final class SettingsModel: ObservableObject {
     @Published var proxyHost = ""
     @Published var proxyPortText = "8080"
     @Published var cookieDisplayName = ""
-    @Published var bandwidthMaxBytesText = "0"
+    /// Speed limit shown in MB/s; the engine stores bytes per second.
+    @Published var bandwidthMaxMegabytesText = "0"
     @Published var bandwidthNightWindowOnly = false
     @Published var projectName = ""
     @Published var tagName = ""
@@ -314,8 +330,38 @@ private final class SettingsModel: ObservableObject {
     }
 
     var canSaveBandwidth: Bool {
-        Int64(bandwidthMaxBytesText.trimmingCharacters(in: .whitespacesAndNewlines))
-            .map { $0 >= 0 } == true
+        Self.bytesPerSecond(fromMegabytesText: bandwidthMaxMegabytesText) != nil
+    }
+
+    /// Parses the MB/s field into the bytes-per-second value the engine stores.
+    /// Accepts a comma as the decimal separator and rejects absurd magnitudes so
+    /// the `Double` to `Int64` conversion can never trap.
+    static func bytesPerSecond(fromMegabytesText text: String) -> Int64? {
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        guard let megabytes = Double(normalized),
+              megabytes.isFinite,
+              megabytes >= 0,
+              megabytes <= 1_000_000
+        else {
+            return nil
+        }
+        return Int64((megabytes * 1_000_000).rounded())
+    }
+
+    /// Renders a stored bytes-per-second value as a short MB/s string.
+    static func megabytesText(fromBytesPerSecond bytes: Int64) -> String {
+        guard bytes > 0 else { return "0" }
+        // 6 decimals is exact for whole bytes, so the value round-trips unchanged.
+        var text = String(format: "%.6f", Double(bytes) / 1_000_000)
+        while text.hasSuffix("0") {
+            text.removeLast()
+        }
+        if text.hasSuffix(".") {
+            text.removeLast()
+        }
+        return text
     }
 
     var canSaveProject: Bool {
@@ -356,12 +402,12 @@ private final class SettingsModel: ObservableObject {
             categoryRules = rules.rules
             let bandwidth = try await engineClient.getBandwidthPolicy()
             if let policy = bandwidth.policy {
-                bandwidthMaxBytesText = String(policy.maxBytesPerSecond)
+                bandwidthMaxMegabytesText = Self.megabytesText(fromBytesPerSecond: policy.maxBytesPerSecond)
                 let windows = (try? BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)) ?? []
                 bandwidthNightWindowOnly =
                     windows == [BandwidthWindowEvaluator.dailyMidnightToEightPreset]
             } else {
-                bandwidthMaxBytesText = "0"
+                bandwidthMaxMegabytesText = "0"
                 bandwidthNightWindowOnly = false
             }
             let zipSetting = try await engineClient.getBoolSetting(key: Self.zipAutoExtractKey)
@@ -458,8 +504,7 @@ private final class SettingsModel: ObservableObject {
     }
 
     func saveBandwidth() async {
-        guard canSaveBandwidth,
-              let maxBytes = Int64(bandwidthMaxBytesText.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard let maxBytes = Self.bytesPerSecond(fromMegabytesText: bandwidthMaxMegabytesText)
         else { return }
         isBusy = true
         defer { isBusy = false }

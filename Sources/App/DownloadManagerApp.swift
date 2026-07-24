@@ -5,8 +5,7 @@ import SwiftUI
 
 /// Application entry point. SwiftUI owns composition; the library window (sidebar,
 /// AppKit-backed virtualized table, inspector) and background-engine status live in
-/// `Presentation`. Phase 0 uses deterministic fixture read models; later phases
-/// deliver read snapshots over XPC.
+/// `Presentation`.
 @main
 struct DownloadManagerApp: App {
     /// Filename of the LaunchAgent property list embedded at
@@ -47,7 +46,10 @@ struct DownloadManagerApp: App {
                     }
                     clipboardMonitor.syncWithPreference()
                 }
-                .onChange(of: library.rows) { _, _ in
+                // Rebuild on job identity/state, not on `rows` — that changes on
+                // every progress tick, which rebuilt the whole menu twice a
+                // second while anything was downloading.
+                .onChange(of: library.rowIdentitySignature) { _, _ in
                     menuBar.refreshMenu()
                 }
                 .onReceive(NotificationCenter.default.publisher(

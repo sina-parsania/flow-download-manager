@@ -32,6 +32,20 @@ public struct TransferJobDetails: Sendable {
     public let proxyProfileID: String?
     public let cookieProfileID: String?
     public let customHeadersJSON: String?
+    /// Per-job rate limit in bytes per second; `nil` follows the global policy.
+    public let maxBytesPerSecond: Int64?
+    /// Per-job connection preference; `nil` derives the count from file size.
+    public let preferredConnectionCount: Int?
+}
+
+/// Inspector-facing view of one job's transfer limits and integrity outcome.
+public struct JobTransferSettings: Sendable {
+    public let jobID: String
+    public let state: String
+    public let terminalReason: String?
+    public let expectedChecksum: String?
+    public let maxBytesPerSecond: Int64?
+    public let preferredConnectionCount: Int?
 }
 
 /// Agent-only persistence helpers for jobs/batches (sole writer).
@@ -246,9 +260,21 @@ public enum JobRepository {
         cookieProfileID: String? = nil,
         customHeadersJSON: String? = nil,
         projectID: String? = nil,
-        scheduleStartAt: Date? = nil
+        scheduleStartAt: Date? = nil,
+        expectedChecksumSHA256: String? = nil,
+        maxBytesPerSecond: Int64? = nil,
+        preferredConnectionCount: Int? = nil
     ) throws -> (batchID: String, jobIDs: [String]) {
-        try database.pool.write { db in
+        // Stored form is normalized here so the transfer path can treat a present
+        // value as usable: blank checksums and non-positive limits become NULL,
+        // which is exactly "no override".
+        let storedChecksum: String? = expectedChecksumSHA256
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let storedRate = maxBytesPerSecond.flatMap { $0 > 0 ? $0 : nil }
+        let storedConnections = preferredConnectionCount.flatMap { $0 > 0 ? $0 : nil }
+
+        return try database.pool.write { db in
             if let projectID {
                 guard try ProjectRecord.fetchOne(db, key: projectID) != nil else {
                     throw JobRepositoryError.unknownProject(projectID)
@@ -306,7 +332,7 @@ public enum JobRepository {
                     expectedSize: nil,
                     strongETag: nil,
                     lastModified: nil,
-                    checksum: nil,
+                    checksum: storedChecksum,
                     identityRevision: 1
                 ).insert(db)
                 try JobRecord(
@@ -327,7 +353,9 @@ public enum JobRepository {
                     credentialProfileID: credentialProfileID,
                     proxyProfileID: proxyProfileID,
                     cookieProfileID: cookieProfileID,
-                    customHeadersJSON: customHeadersJSON
+                    customHeadersJSON: customHeadersJSON,
+                    maxBytesPerSecond: storedRate,
+                    preferredConnectionCount: storedConnections
                 ).insert(db)
                 jobIDs.append(jobID)
                 position += 1
@@ -336,6 +364,10 @@ public enum JobRepository {
         }
     }
 
+    /// Loads every job with its resource/category/project/tag associations using a
+    /// constant number of statements (no N+1): one ordered `jobs` scan, up to three
+    /// batched `WHERE id IN (...)` lookups (resources, categories, projects — each
+    /// skipped entirely when its key set is empty), and one batched tag join.
     public static func fetchJobRows(
         database: EngineDatabase
     ) throws -> [(
@@ -350,35 +382,81 @@ public enum JobRepository {
             let jobs = try JobRecord
                 .order(Column("queuePosition").asc, Column("createdAt").asc)
                 .fetchAll(db)
+            guard !jobs.isEmpty else { return [] }
+
+            let resourcesByID = try Dictionary(
+                uniqueKeysWithValues: ResourceRecord
+                    .filter(keys: Set(jobs.map(\.resourceID)))
+                    .fetchAll(db)
+                    .map { ($0.id, $0) }
+            )
+            let categoriesByID = try Dictionary(
+                uniqueKeysWithValues: CategoryRecord
+                    .filter(keys: Set(jobs.map(\.categoryID)))
+                    .fetchAll(db)
+                    .map { ($0.id, $0) }
+            )
+            let projectNamesByID = try Dictionary(
+                uniqueKeysWithValues: ProjectRecord
+                    .filter(keys: Set(jobs.compactMap(\.projectID)))
+                    .fetchAll(db)
+                    .map { ($0.id, $0.name) }
+            )
+            let (tagNamesByJobID, tagIDsByJobID) = try fetchTagsByJobID(
+                jobIDs: jobs.map(\.id),
+                db: db
+            )
+
             var rows: [(JobRecord, ResourceRecord, CategoryRecord, String?, [String], [String])] = []
             rows.reserveCapacity(jobs.count)
             for job in jobs {
-                guard let resource = try ResourceRecord.fetchOne(db, key: job.resourceID),
-                      let category = try CategoryRecord.fetchOne(db, key: job.categoryID)
+                guard let resource = resourcesByID[job.resourceID],
+                      let category = categoriesByID[job.categoryID]
                 else {
                     throw JobRepositoryError.jobNotFound(job.id)
                 }
-                let projectName: String? = if let projectID = job.projectID {
-                    try ProjectRecord.fetchOne(db, key: projectID)?.name
-                } else {
-                    nil
-                }
-                let tagRows = try Row.fetchAll(
-                    db,
-                    sql: """
-                    SELECT t.id, t.name FROM tags t
-                    INNER JOIN job_tags jt ON jt.tagID = t.id
-                    WHERE jt.jobID = ?
-                    ORDER BY t.name ASC
-                    """,
-                    arguments: [job.id]
-                )
-                let tagIDs = tagRows.map { $0["id"] as String }
-                let tagNames = tagRows.map { $0["name"] as String }
-                rows.append((job, resource, category, projectName, tagNames, tagIDs))
+                let projectName = job.projectID.flatMap { projectNamesByID[$0] }
+                rows.append((
+                    job,
+                    resource,
+                    category,
+                    projectName,
+                    tagNamesByJobID[job.id] ?? [],
+                    tagIDsByJobID[job.id] ?? []
+                ))
             }
             return rows
         }
+    }
+
+    /// Single batched `job_tags`/`tags` join for the given job IDs, ordered by
+    /// `jobID ASC, name ASC` so per-job tag arrays preserve the historical
+    /// alphabetical-by-name ordering. No-op (no statement) when `jobIDs` is empty.
+    private static func fetchTagsByJobID(
+        jobIDs: [String],
+        db: Database
+    ) throws -> (names: [String: [String]], ids: [String: [String]]) {
+        guard !jobIDs.isEmpty else { return ([:], [:]) }
+        let placeholders = jobIDs.map { _ in "?" }.joined(separator: ", ")
+        let tagRows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT jt.jobID AS jobID, t.id AS tagID, t.name AS tagName
+            FROM job_tags jt
+            INNER JOIN tags t ON t.id = jt.tagID
+            WHERE jt.jobID IN (\(placeholders))
+            ORDER BY jt.jobID ASC, t.name ASC
+            """,
+            arguments: StatementArguments(jobIDs)
+        )
+        var names: [String: [String]] = [:]
+        var ids: [String: [String]] = [:]
+        for row in tagRows {
+            let jobID: String = row["jobID"]
+            names[jobID, default: []].append(row["tagName"])
+            ids[jobID, default: []].append(row["tagID"])
+        }
+        return (names, ids)
     }
 
     public static func fetchQueuedJobIDs(database: EngineDatabase, limit: Int) throws -> [String] {
@@ -596,7 +674,32 @@ public enum JobRepository {
                 credentialProfileID: job.credentialProfileID,
                 proxyProfileID: job.proxyProfileID,
                 cookieProfileID: job.cookieProfileID,
-                customHeadersJSON: job.customHeadersJSON
+                customHeadersJSON: job.customHeadersJSON,
+                maxBytesPerSecond: job.maxBytesPerSecond,
+                preferredConnectionCount: job.preferredConnectionCount
+            )
+        }
+    }
+
+    /// Reads one job's transfer limits and integrity outcome for the inspector.
+    /// Two `fetchOne` statements; not on the polled `listJobs` path.
+    public static func loadTransferSettings(
+        database: EngineDatabase,
+        jobID: String
+    ) throws -> JobTransferSettings {
+        try database.pool.read { db in
+            guard let job = try JobRecord.fetchOne(db, key: jobID),
+                  let resource = try ResourceRecord.fetchOne(db, key: job.resourceID)
+            else {
+                throw JobRepositoryError.jobNotFound(jobID)
+            }
+            return JobTransferSettings(
+                jobID: job.id,
+                state: job.state,
+                terminalReason: job.terminalReason,
+                expectedChecksum: resource.checksum,
+                maxBytesPerSecond: job.maxBytesPerSecond,
+                preferredConnectionCount: job.preferredConnectionCount
             )
         }
     }

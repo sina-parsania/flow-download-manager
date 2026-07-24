@@ -14,12 +14,20 @@ public final class EngineDatabase: @unchecked Sendable {
 
     /// Open (creating parent directories as needed) at `url`, applying the schema
     /// migrator to bring the database to the current version.
-    public init(url: URL, migrator: DatabaseMigrator = SchemaMigrator.current) throws {
+    ///
+    /// `configuration` defaults to `DatabaseConfiguration.make()`; tests may pass a
+    /// customized configuration (e.g. to attach `Database.trace` for statement-count
+    /// assertions) while production call sites keep the default.
+    public init(
+        url: URL,
+        migrator: DatabaseMigrator = SchemaMigrator.current,
+        configuration: Configuration = DatabaseConfiguration.make()
+    ) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        pool = try DatabasePool(path: url.path, configuration: DatabaseConfiguration.make())
+        pool = try DatabasePool(path: url.path, configuration: configuration)
         try migrator.migrate(pool)
     }
 

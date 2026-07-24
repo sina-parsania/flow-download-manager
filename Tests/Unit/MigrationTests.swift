@@ -131,6 +131,65 @@ final class MigrationTests: XCTestCase {
         XCTAssertTrue(try v3.tableNames().contains("bandwidth_policies"))
     }
 
+    func testV3ToV4AddsPerJobTransferLimitsAndKeepsExistingJobs() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let v3 = try EngineDatabase(url: url, migrator: SchemaMigrator.v3Only)
+        let jobID = "00000000-0000-7000-8000-000000000001"
+        let profileID = "00000000-0000-7000-8000-0000000000d1"
+        let categoryID = "00000000-0000-7000-8000-0000000000c1"
+        let resourceID = "00000000-0000-7000-8000-0000000000a1"
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        // Raw SQL: JobRecord carries the v4 columns, which do not exist yet here.
+        try v3.pool.write { db in
+            try DestinationProfileRecord(
+                id: profileID, name: "Downloads",
+                bookmarkData: Data([0x00]), volumeIdentity: nil, conflictPolicy: "rename"
+            ).insert(db)
+            try CategoryRecord(
+                id: categoryID, stableKey: "documents", displayNameKey: "category.documents",
+                systemSymbol: "doc", destinationProfileID: profileID
+            ).insert(db)
+            try ResourceRecord(
+                id: resourceID, originalURL: "https://example.test/file.bin",
+                canonicalURL: "https://example.test/file.bin", finalURL: nil,
+                protocolKind: "https", filenameEvidence: "file.bin",
+                mimeEvidence: "application/octet-stream",
+                expectedSize: 1024, strongETag: nil, lastModified: nil, checksum: nil,
+                identityRevision: 1
+            ).insert(db)
+            try db.execute(
+                sql: """
+                INSERT INTO jobs (
+                    id, batchID, resourceID, state, priority, queuePosition,
+                    categoryID, projectID, destinationProfileID, scheduleID,
+                    createdAt, updatedAt, revision, terminalReason
+                ) VALUES (?, NULL, ?, 'queued', 0, 0, ?, NULL, ?, NULL, ?, ?, 1, NULL)
+                """,
+                arguments: [jobID, resourceID, categoryID, profileID, now, now]
+            )
+        }
+        try v3.pool.read { db in
+            let names = try Row.fetchAll(db, sql: "PRAGMA table_info(jobs)").map { row -> String in
+                row["name"]
+            }
+            XCTAssertFalse(names.contains("maxBytesPerSecond"))
+            XCTAssertFalse(names.contains("preferredConnectionCount"))
+        }
+
+        let v4 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
+        XCTAssertTrue(try v4.isAtCurrentSchemaVersion())
+        XCTAssertEqual(try v4.count(JobRecord.self), 1)
+
+        // Pre-v4 jobs keep NULL overrides, which is exactly the old behaviour.
+        let job = try v4.pool.read { db in
+            try JobRecord.fetchOne(db, key: jobID)
+        }
+        XCTAssertNil(job?.maxBytesPerSecond)
+        XCTAssertNil(job?.preferredConnectionCount)
+    }
+
     func testInterruptedMigrationRollsBack() throws {
         let url = tempURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

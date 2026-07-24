@@ -186,6 +186,13 @@ public protocol EngineControlProtocol {
         _ request: ClearEventsRequest,
         reply: @escaping @Sendable (ClearEventsResponse?, NSError?) -> Void
     )
+
+    /// Per-job speed limit, connection preference and integrity outcome for the
+    /// inspector. Kept off `listJobs` so it costs nothing on the polled read path.
+    func getJobTransferSettings(
+        _ request: GetJobTransferSettingsRequest,
+        reply: @escaping @Sendable (GetJobTransferSettingsResponse?, NSError?) -> Void
+    )
 }
 
 /// Mach service name the agent's `NSXPCListener` binds and the app connects to.

@@ -9,8 +9,8 @@ import Foundation
 /// the XPC protocol; the Native Messaging schema is declared for completeness but
 /// has no shipping surface until Phase 2.
 public enum SchemaVersions {
-    /// GRDB migration identifier space. Phase 1 ships `v3` (bandwidth policies).
-    public static let database = 3
+    /// GRDB migration identifier space. Phase 1 ships `v4` (per-job transfer limits).
+    public static let database = 4
 
     /// XPC handshake `protocolVersion`. Unknown major versions are rejected
     /// before payload decoding (`04-domain-and-data-contracts.md` §9).

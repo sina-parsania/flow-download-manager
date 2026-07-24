@@ -7,6 +7,46 @@ public extension EngineXPC {
     static let maxBatchURLCount = 50000
     /// Maximum length of one URL string in a batch payload.
     static let maxURLLength = 16384
+    /// Upper bound on a per-job connection preference. The orchestrator clamps
+    /// further to whatever the socket reservation actually granted, so this is a
+    /// payload sanity bound and not a promise of that many connections.
+    static let maxPreferredConnectionCount = 64
+    /// Sanity bound on a per-job rate limit in bytes per second. Far above any
+    /// real link; it exists so a hostile payload cannot carry an absurd value.
+    static let maxJobBytesPerSecond: Int64 = 1 << 40
+}
+
+/// Shape validation for a user-supplied SHA-256 checksum.
+///
+/// Hashing and comparison live in `IntegrityVerifier`. This only decides whether
+/// a string is a well-formed 64-character hex digest and normalizes it to
+/// lowercase, so the stored value compares directly against a computed digest.
+/// Both the Add sheet and the enqueue decoder go through here, so the client-side
+/// message and the boundary check can never disagree.
+public enum ChecksumFormat {
+    /// Character count of a hex-encoded SHA-256 digest.
+    public static let sha256HexLength = 64
+
+    /// Trimmed, lowercased digest when `raw` is exactly 64 ASCII hex characters;
+    /// `nil` for anything else, including empty input.
+    public static func normalizedSHA256(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scalars = Array(trimmed.unicodeScalars)
+        guard scalars.count == sha256HexLength else { return nil }
+        // Deliberately ASCII-only: `Character.isHexDigit` also accepts full-width
+        // and other Unicode digit forms, which would never match a real digest.
+        guard scalars.allSatisfy(isASCIIHexDigit) else { return nil }
+        return trimmed.lowercased()
+    }
+
+    private static func isASCIIHexDigit(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar {
+        case "0" ... "9", "a" ... "f", "A" ... "F":
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 /// One URL selected for enqueue after client-side review.
@@ -60,6 +100,15 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
     public let projectID: String?
     /// When set, jobs are created as `scheduled` with a one-shot schedule.
     public let scheduleStartAtISO8601: String?
+    /// Expected SHA-256 of the downloaded bytes, lowercase hex. Verified before
+    /// the partial is promoted; a mismatch fails the job with `checksumMismatch`.
+    public let expectedChecksumSHA256: String?
+    /// Per-job rate limit in bytes per second. Takes precedence over the global
+    /// bandwidth policy; `nil` means "use the global setting".
+    public let maxBytesPerSecond: Int64?
+    /// Per-job connection preference. Still bounded by the socket reservation the
+    /// orchestrator obtains for the host; `nil` means "derive from file size".
+    public let preferredConnectionCount: Int?
 
     public init(
         requestID: String,
@@ -71,7 +120,10 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
         cookieProfileID: String? = nil,
         customHeadersJSON: String? = nil,
         projectID: String? = nil,
-        scheduleStartAtISO8601: String? = nil
+        scheduleStartAtISO8601: String? = nil,
+        expectedChecksumSHA256: String? = nil,
+        maxBytesPerSecond: Int64? = nil,
+        preferredConnectionCount: Int? = nil
     ) {
         self.requestID = requestID
         self.source = source
@@ -83,6 +135,9 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
         self.customHeadersJSON = customHeadersJSON
         self.projectID = projectID
         self.scheduleStartAtISO8601 = scheduleStartAtISO8601
+        self.expectedChecksumSHA256 = expectedChecksumSHA256
+        self.maxBytesPerSecond = maxBytesPerSecond
+        self.preferredConnectionCount = preferredConnectionCount
     }
 
     public required init?(coder: NSCoder) {
@@ -99,6 +154,7 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
             of: NSString.self,
             forKey: "scheduleStartAtISO8601"
         )
+        let rawChecksum = coder.decodeObject(of: NSString.self, forKey: "expectedChecksumSHA256")
         guard let requestID, let source, let items,
               UUID(uuidString: requestID as String) != nil,
               source.length > 0, source.length <= EngineXPC.maxPayloadStringLength,
@@ -127,6 +183,30 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
            || scheduleStartAtISO8601.length > EngineXPC.maxPayloadStringLength {
             return nil
         }
+        // Fail closed: a checksum that cannot be a SHA-256 digest is rejected at
+        // the boundary rather than stored and quietly never matched.
+        var normalizedChecksum: String?
+        if let rawChecksum {
+            guard rawChecksum.length <= EngineXPC.maxPayloadStringLength,
+                  let normalized = ChecksumFormat.normalizedSHA256(rawChecksum as String)
+            else { return nil }
+            normalizedChecksum = normalized
+        }
+        let decodedBytesPerSecond = coder.decodeInt64(forKey: "maxBytesPerSecond")
+        let hasBytesPerSecond = coder.decodeBool(forKey: "hasMaxBytesPerSecond")
+        if hasBytesPerSecond,
+           decodedBytesPerSecond <= 0 || decodedBytesPerSecond > EngineXPC.maxJobBytesPerSecond {
+            return nil
+        }
+        let decodedConnectionCount = coder.decodeInteger(forKey: "preferredConnectionCount")
+        let hasConnectionCount = coder.decodeBool(forKey: "hasPreferredConnectionCount")
+        if hasConnectionCount,
+           decodedConnectionCount < 1 || decodedConnectionCount > EngineXPC.maxPreferredConnectionCount {
+            return nil
+        }
+        expectedChecksumSHA256 = normalizedChecksum
+        maxBytesPerSecond = hasBytesPerSecond ? decodedBytesPerSecond : nil
+        preferredConnectionCount = hasConnectionCount ? decodedConnectionCount : nil
         self.requestID = requestID as String
         self.source = source as String
         self.displayName = displayName.map { $0 as String }
@@ -164,6 +244,141 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
         if let scheduleStartAtISO8601 {
             coder.encode(scheduleStartAtISO8601 as NSString, forKey: "scheduleStartAtISO8601")
         }
+        if let expectedChecksumSHA256 {
+            coder.encode(expectedChecksumSHA256 as NSString, forKey: "expectedChecksumSHA256")
+        }
+        coder.encode(maxBytesPerSecond ?? 0, forKey: "maxBytesPerSecond")
+        coder.encode(maxBytesPerSecond != nil, forKey: "hasMaxBytesPerSecond")
+        coder.encode(preferredConnectionCount ?? 0, forKey: "preferredConnectionCount")
+        coder.encode(preferredConnectionCount != nil, forKey: "hasPreferredConnectionCount")
+    }
+}
+
+/// Read the per-job transfer settings and integrity outcome for one job.
+///
+/// Deliberately a separate RPC rather than extra columns on `JobSnapshot`: the
+/// library read model is polled at 2 Hz for every row, and these values only
+/// matter for the one job the inspector is showing.
+@objc(DMGetJobTransferSettingsRequest)
+public final class GetJobTransferSettingsRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+
+    public init(requestID: String, jobID: String) {
+        self.requestID = requestID
+        self.jobID = jobID
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        guard let requestID, let jobID,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil
+        else { return nil }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+    }
+}
+
+@objc(DMGetJobTransferSettingsResponse)
+public final class GetJobTransferSettingsResponse: NSObject, NSSecureCoding, @unchecked Sendable {
+    public static var supportsSecureCoding: Bool {
+        true
+    }
+
+    public let requestID: String
+    public let jobID: String
+    public let state: String
+    public let terminalReason: String?
+    /// Expected digest recorded at enqueue, or `nil` when none was supplied.
+    public let expectedChecksumSHA256: String?
+    /// Per-job rate limit, or `nil` when the job follows the global setting.
+    public let maxBytesPerSecond: Int64?
+    /// Per-job connection preference, or `nil` when derived from file size.
+    public let preferredConnectionCount: Int?
+    /// Rate limit the global bandwidth policy imposes right now, or `nil` when
+    /// no policy is configured or its calendar window is closed.
+    public let globalMaxBytesPerSecond: Int64?
+
+    public init(
+        requestID: String,
+        jobID: String,
+        state: String,
+        terminalReason: String?,
+        expectedChecksumSHA256: String?,
+        maxBytesPerSecond: Int64?,
+        preferredConnectionCount: Int?,
+        globalMaxBytesPerSecond: Int64?
+    ) {
+        self.requestID = requestID
+        self.jobID = jobID
+        self.state = state
+        self.terminalReason = terminalReason
+        self.expectedChecksumSHA256 = expectedChecksumSHA256
+        self.maxBytesPerSecond = maxBytesPerSecond
+        self.preferredConnectionCount = preferredConnectionCount
+        self.globalMaxBytesPerSecond = globalMaxBytesPerSecond
+    }
+
+    public required init?(coder: NSCoder) {
+        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID")
+        let jobID = coder.decodeObject(of: NSString.self, forKey: "jobID")
+        let state = coder.decodeObject(of: NSString.self, forKey: "state")
+        let terminalReason = coder.decodeObject(of: NSString.self, forKey: "terminalReason")
+        let checksum = coder.decodeObject(of: NSString.self, forKey: "expectedChecksumSHA256")
+        guard let requestID, let jobID, let state,
+              UUID(uuidString: requestID as String) != nil,
+              UUID(uuidString: jobID as String) != nil,
+              state.length <= 64
+        else { return nil }
+        if let terminalReason, terminalReason.length > 64 {
+            return nil
+        }
+        if let checksum, ChecksumFormat.normalizedSHA256(checksum as String) == nil {
+            return nil
+        }
+        self.requestID = requestID as String
+        self.jobID = jobID as String
+        self.state = state as String
+        self.terminalReason = terminalReason.map { $0 as String }
+        expectedChecksumSHA256 = checksum.map { $0 as String }
+        maxBytesPerSecond = coder.decodeBool(forKey: "hasMaxBytesPerSecond")
+            ? coder.decodeInt64(forKey: "maxBytesPerSecond")
+            : nil
+        preferredConnectionCount = coder.decodeBool(forKey: "hasPreferredConnectionCount")
+            ? coder.decodeInteger(forKey: "preferredConnectionCount")
+            : nil
+        globalMaxBytesPerSecond = coder.decodeBool(forKey: "hasGlobalMaxBytesPerSecond")
+            ? coder.decodeInt64(forKey: "globalMaxBytesPerSecond")
+            : nil
+    }
+
+    public func encode(with coder: NSCoder) {
+        coder.encode(requestID as NSString, forKey: "requestID")
+        coder.encode(jobID as NSString, forKey: "jobID")
+        coder.encode(state as NSString, forKey: "state")
+        if let terminalReason {
+            coder.encode(terminalReason as NSString, forKey: "terminalReason")
+        }
+        if let expectedChecksumSHA256 {
+            coder.encode(expectedChecksumSHA256 as NSString, forKey: "expectedChecksumSHA256")
+        }
+        coder.encode(maxBytesPerSecond ?? 0, forKey: "maxBytesPerSecond")
+        coder.encode(maxBytesPerSecond != nil, forKey: "hasMaxBytesPerSecond")
+        coder.encode(preferredConnectionCount ?? 0, forKey: "preferredConnectionCount")
+        coder.encode(preferredConnectionCount != nil, forKey: "hasPreferredConnectionCount")
+        coder.encode(globalMaxBytesPerSecond ?? 0, forKey: "globalMaxBytesPerSecond")
+        coder.encode(globalMaxBytesPerSecond != nil, forKey: "hasGlobalMaxBytesPerSecond")
     }
 }
 

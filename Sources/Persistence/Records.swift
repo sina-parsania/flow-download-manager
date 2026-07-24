@@ -121,13 +121,18 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
     public var proxyProfileID: String?
     public var cookieProfileID: String?
     public var customHeadersJSON: String?
+    /// Per-job rate limit in bytes per second; `nil` follows the global policy.
+    public var maxBytesPerSecond: Int64?
+    /// Per-job connection preference; `nil` derives the count from file size.
+    public var preferredConnectionCount: Int?
 
     public init(
         id: String, batchID: String?, resourceID: String, state: String, priority: Int,
         queuePosition: Int, categoryID: String, projectID: String?, destinationProfileID: String,
         scheduleID: String?, createdAt: Date, updatedAt: Date, revision: Int, terminalReason: String?,
         credentialProfileID: String? = nil, proxyProfileID: String? = nil,
-        cookieProfileID: String? = nil, customHeadersJSON: String? = nil
+        cookieProfileID: String? = nil, customHeadersJSON: String? = nil,
+        maxBytesPerSecond: Int64? = nil, preferredConnectionCount: Int? = nil
     ) {
         self.id = id
         self.batchID = batchID
@@ -147,6 +152,8 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.proxyProfileID = proxyProfileID
         self.cookieProfileID = cookieProfileID
         self.customHeadersJSON = customHeadersJSON
+        self.maxBytesPerSecond = maxBytesPerSecond
+        self.preferredConnectionCount = preferredConnectionCount
     }
 }
 

@@ -116,6 +116,111 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertNil(decoded?.customHeadersJSON)
         XCTAssertNil(decoded?.projectID)
         XCTAssertNil(decoded?.scheduleStartAtISO8601)
+        XCTAssertNil(decoded?.expectedChecksumSHA256)
+        XCTAssertNil(decoded?.maxBytesPerSecond)
+        XCTAssertNil(decoded?.preferredConnectionCount)
+    }
+
+    func testEnqueueBatchRequestTransferLimitsRoundTrip() throws {
+        let digest = String(repeating: "0123456789ABCDEF", count: 4)
+        let request = EnqueueBatchRequest(
+            requestID: UUID().uuidString,
+            source: "paste",
+            displayName: nil,
+            items: [BatchURLItem(url: "https://example.test/a.bin", categoryStableKey: "other")],
+            expectedChecksumSHA256: digest,
+            maxBytesPerSecond: 2_500_000,
+            preferredConnectionCount: 8
+        )
+        let decoded = try roundTrip(request, as: EnqueueBatchRequest.self)
+        XCTAssertEqual(decoded?.expectedChecksumSHA256, digest.lowercased())
+        XCTAssertEqual(decoded?.maxBytesPerSecond, 2_500_000)
+        XCTAssertEqual(decoded?.preferredConnectionCount, 8)
+    }
+
+    func testEnqueueBatchRequestRejectsMalformedChecksum() throws {
+        let request = EnqueueBatchRequest(
+            requestID: UUID().uuidString,
+            source: "paste",
+            displayName: nil,
+            items: [BatchURLItem(url: "https://example.test/a.bin", categoryStableKey: "other")],
+            expectedChecksumSHA256: "deadbeef"
+        )
+        XCTAssertNil(
+            try roundTrip(request, as: EnqueueBatchRequest.self),
+            "a checksum that cannot be a SHA-256 digest must fail secure decoding"
+        )
+    }
+
+    func testEnqueueBatchRequestRejectsOutOfRangeTransferLimits() throws {
+        let base: (Int64?, Int?) -> EnqueueBatchRequest = { rate, connections in
+            EnqueueBatchRequest(
+                requestID: UUID().uuidString,
+                source: "paste",
+                displayName: nil,
+                items: [BatchURLItem(url: "https://example.test/a.bin", categoryStableKey: "other")],
+                maxBytesPerSecond: rate,
+                preferredConnectionCount: connections
+            )
+        }
+        XCTAssertNil(try roundTrip(base(0, nil), as: EnqueueBatchRequest.self))
+        XCTAssertNil(
+            try roundTrip(base(EngineXPC.maxJobBytesPerSecond + 1, nil), as: EnqueueBatchRequest.self)
+        )
+        XCTAssertNil(try roundTrip(base(nil, 0), as: EnqueueBatchRequest.self))
+        XCTAssertNil(
+            try roundTrip(
+                base(nil, EngineXPC.maxPreferredConnectionCount + 1),
+                as: EnqueueBatchRequest.self
+            )
+        )
+    }
+
+    func testGetJobTransferSettingsRoundTrip() throws {
+        let digest = String(repeating: "0123456789abcdef", count: 4)
+        let jobID = UUID().uuidString
+        let request = GetJobTransferSettingsRequest(requestID: UUID().uuidString, jobID: jobID)
+        XCTAssertEqual(
+            try roundTrip(request, as: GetJobTransferSettingsRequest.self)?.jobID,
+            jobID
+        )
+
+        let response = GetJobTransferSettingsResponse(
+            requestID: UUID().uuidString,
+            jobID: jobID,
+            state: "failed",
+            terminalReason: "checksumMismatch",
+            expectedChecksumSHA256: digest,
+            maxBytesPerSecond: 3_000_000,
+            preferredConnectionCount: 6,
+            globalMaxBytesPerSecond: 1_000_000
+        )
+        let decoded = try roundTrip(response, as: GetJobTransferSettingsResponse.self)
+        XCTAssertEqual(decoded?.state, "failed")
+        XCTAssertEqual(decoded?.terminalReason, "checksumMismatch")
+        XCTAssertEqual(decoded?.expectedChecksumSHA256, digest)
+        XCTAssertEqual(decoded?.maxBytesPerSecond, 3_000_000)
+        XCTAssertEqual(decoded?.preferredConnectionCount, 6)
+        XCTAssertEqual(decoded?.globalMaxBytesPerSecond, 1_000_000)
+    }
+
+    func testGetJobTransferSettingsResponseOmitsAbsentValues() throws {
+        let response = GetJobTransferSettingsResponse(
+            requestID: UUID().uuidString,
+            jobID: UUID().uuidString,
+            state: "queued",
+            terminalReason: nil,
+            expectedChecksumSHA256: nil,
+            maxBytesPerSecond: nil,
+            preferredConnectionCount: nil,
+            globalMaxBytesPerSecond: nil
+        )
+        let decoded = try roundTrip(response, as: GetJobTransferSettingsResponse.self)
+        XCTAssertNil(decoded?.terminalReason)
+        XCTAssertNil(decoded?.expectedChecksumSHA256)
+        XCTAssertNil(decoded?.maxBytesPerSecond)
+        XCTAssertNil(decoded?.preferredConnectionCount)
+        XCTAssertNil(decoded?.globalMaxBytesPerSecond)
     }
 
     func testCategoryRuleSnapshotRoundTrip() throws {

@@ -19,6 +19,7 @@ public enum SchemaMigrator {
         registerV1(&migrator)
         registerV2(&migrator)
         registerV3(&migrator)
+        registerV4(&migrator)
         return migrator
     }
 
@@ -39,6 +40,16 @@ public enum SchemaMigrator {
         return migrator
     }
 
+    /// Migrator that stops after v3 — used by migration round-trip tests.
+    public static var v3Only: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = false
+        registerV1(&migrator)
+        registerV2(&migrator)
+        registerV3(&migrator)
+        return migrator
+    }
+
     /// Stable identifier for the v1 migration.
     ///
     /// The contract's §7 `schema_migrations` bookkeeping table is provided by GRDB
@@ -51,6 +62,9 @@ public enum SchemaMigrator {
 
     /// Stable identifier for the v3 migration (calendar bandwidth policies).
     public static let v3Identifier = "v3-bandwidth-policies"
+
+    /// Stable identifier for the v4 migration (per-job transfer limits).
+    public static let v4Identifier = "v4-per-job-transfer-limits"
 
     private static func registerV1(_ migrator: inout DatabaseMigrator) {
         // CHECK domains sourced from the Domain enums so DB and code cannot drift.
@@ -269,6 +283,20 @@ public enum SchemaMigrator {
                 // JSON array of { weekday, startMinute, endMinute }; empty = always active.
                 t.column("windowsJSON", .text).notNull()
                 t.column("maxBytesPerSecond", .integer).notNull().check { $0 >= 0 }
+            }
+        }
+    }
+
+    /// Per-download overrides for the global speed limit and the size-derived
+    /// connection count. Both nullable: NULL keeps the pre-v4 behaviour exactly.
+    /// No CHECK constraints here — SQLite's `ALTER TABLE … ADD COLUMN` cannot
+    /// carry one on a populated table; the range is enforced by the XPC decoder
+    /// and `JobRepository`.
+    private static func registerV4(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration(v4Identifier) { db in
+            try db.alter(table: "jobs") { t in
+                t.add(column: "maxBytesPerSecond", .integer)
+                t.add(column: "preferredConnectionCount", .integer)
             }
         }
     }

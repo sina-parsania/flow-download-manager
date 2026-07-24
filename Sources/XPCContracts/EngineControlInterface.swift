@@ -308,6 +308,17 @@ public enum EngineControlInterface {
             for: #selector(EngineControlProtocol.clearEvents(_:reply:)),
             argumentIndex: 0, ofReply: true
         )
+
+        interface.setClasses(
+            allowedClasses([GetJobTransferSettingsRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.getJobTransferSettings(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([GetJobTransferSettingsResponse.self, NSString.self]),
+            for: #selector(EngineControlProtocol.getJobTransferSettings(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
         return interface
     }
 

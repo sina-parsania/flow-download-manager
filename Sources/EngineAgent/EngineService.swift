@@ -48,37 +48,90 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private let services: EngineServices
     private let lock = NSLock()
     private var didHandshake = false
-    private var healthCache: [String: EngineHealthSnapshot] = [:]
-    private var enqueueCache: [String: EnqueueBatchResponse] = [:]
-    private var listCache: [String: JobListSnapshot] = [:]
-    private var commandCache: [String: JobCommandResponse] = [:]
-    private var credentialCache: [String: UpsertCredentialProfileResponse] = [:]
-    private var proxyCache: [String: UpsertProxyProfileResponse] = [:]
-    private var cookieCache: [String: UpsertCookieProfileResponse] = [:]
-    private var listProfilesCache: [String: ListProfilesResponse] = [:]
-    private var getDefaultDestinationCache: [String: GetDefaultDestinationResponse] = [:]
-    private var setDefaultDestinationCache: [String: SetDefaultDestinationResponse] = [:]
-    private var bandwidthUpsertCache: [String: UpsertBandwidthPolicyResponse] = [:]
-    private var bandwidthGetCache: [String: GetBandwidthPolicyResponse] = [:]
-    private var listOrganizationCache: [String: ListOrganizationResponse] = [:]
-    private var upsertProjectCache: [String: UpsertProjectResponse] = [:]
-    private var upsertTagCache: [String: UpsertTagResponse] = [:]
-    private var setJobTagsCache: [String: SetJobTagsResponse] = [:]
-    private var setJobProjectCache: [String: SetJobProjectResponse] = [:]
-    private var setJobCategoryCache: [String: SetJobCategoryResponse] = [:]
-    private var setJobFilenameCache: [String: SetJobFilenameResponse] = [:]
-    private var getBoolSettingCache: [String: GetBoolSettingResponse] = [:]
-    private var setBoolSettingCache: [String: SetBoolSettingResponse] = [:]
-    private var setJobPriorityCache: [String: SetJobPriorityResponse] = [:]
-    private var deleteJobCache: [String: DeleteJobResponse] = [:]
-    private var listCategoryRulesCache: [String: ListCategoryRulesResponse] = [:]
-    private var upsertCategoryRuleCache: [String: UpsertCategoryRuleResponse] = [:]
-    private var listEventsCache: [String: ListEventsResponse] = [:]
-    private var clearEventsCache: [String: ClearEventsResponse] = [:]
     private var snapshotSequence: Int64 = 0
+    /// Single bounded idempotency store shared by every RPC on this connection,
+    /// replacing the 24 unbounded per-RPC dictionaries this type used to keep.
+    private let replayStore = RequestReplayStore()
 
     init(services: EngineServices) {
         self.services = services
+    }
+
+    /// Handshake + duplicate-replay gate shared by every read RPC. Replies and
+    /// returns `true` when the caller must stop (handshake missing, or a
+    /// cached response for `requestID` was replayed); returns `false` when the
+    /// caller should proceed to compute a fresh response.
+    private func gate<T: AnyObject>(
+        requestID: String,
+        reply: (T?, NSError?) -> Void
+    ) -> Bool {
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return true
+        }
+        lock.unlock()
+        if let cached: T = replayStore.lookup(requestID) {
+            reply(cached, nil)
+            return true
+        }
+        return false
+    }
+
+    /// Handshake + duplicate-replay gate for mutation RPCs. Behaves like
+    /// ``gate(requestID:reply:)``, but additionally fails closed with
+    /// ``XPCErrorCode/duplicateRequestID`` when `requestID` already executed
+    /// this mutation and its replay receipt has since been evicted — the
+    /// mutation must never be re-run in that case.
+    private func gateMutation<T: AnyObject>(
+        requestID: String,
+        reply: (T?, NSError?) -> Void
+    ) -> Bool {
+        lock.lock()
+        guard didHandshake else {
+            lock.unlock()
+            reply(nil, XPCErrorCode.handshakeRequired.error())
+            return true
+        }
+        lock.unlock()
+        if let cached: T = replayStore.lookup(requestID) {
+            reply(cached, nil)
+            return true
+        }
+        if replayStore.wasExecutedMutation(requestID) {
+            reply(nil, XPCErrorCode.duplicateRequestID.error(detail: "idempotency receipt expired"))
+            return true
+        }
+        return false
+    }
+
+    /// Record a successful response so a duplicate `requestID` replays it.
+    /// Must be called only after a response has actually been produced (never
+    /// on an error path), since `isMutation: true` marks the mutation as
+    /// executed for the fail-closed check in ``gateMutation(requestID:reply:)``.
+    private func remember(_ requestID: String, _ value: some AnyObject, isMutation: Bool) {
+        replayStore.store(requestID, value, bytes: Self.estimatedByteSize(of: value), isMutation: isMutation)
+    }
+
+    /// O(1) size estimate feeding the store's byte budget.
+    ///
+    /// This deliberately does **not** archive the response. An earlier revision
+    /// called `NSKeyedArchiver.archivedData(requiringSecureCoding:)` here, which
+    /// meant `listJobs` serialized the entire job list a second time on every
+    /// poll — purely to produce a number — on the same process that runs curl.
+    /// The budget is a safety valve, not accounting, so a per-element constant
+    /// is enough; the store's count and age limits do the real bounding.
+    private static func estimatedByteSize(of value: AnyObject) -> Int {
+        let perElement = 512
+        switch value {
+        case let snapshot as JobListSnapshot:
+            return 256 + snapshot.jobs.count * perElement
+        case let response as ListEventsResponse:
+            return 256 + response.events.count * perElement
+        default:
+            return 1024
+        }
     }
 
     func handshake(_ hello: ClientHello, reply: @escaping @Sendable (ServerHello?, NSError?) -> Void) {
@@ -105,7 +158,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 "setJobCategory", "setJobFilename",
                 "getBoolSetting", "setBoolSetting",
                 "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents", "setJobPriority",
-                "deleteJob"
+                "deleteJob", "getJobTransferSettings"
             ]
         ), nil)
     }
@@ -115,17 +168,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = healthCache[requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
+        if gate(requestID: requestID, reply: reply) { return }
+
         let snapshot = EngineHealthSnapshot(
             requestID: requestID,
             engineBuild: services.engineBuild,
@@ -133,8 +177,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             databaseOpen: services.isDatabaseOpen(),
             uptimeSeconds: services.now().timeIntervalSince(services.startDate)
         )
-        healthCache[requestID] = snapshot
-        lock.unlock()
+        remember(requestID, snapshot, isMutation: false)
         reply(snapshot, nil)
     }
 
@@ -146,18 +189,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = enqueueCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -182,6 +214,36 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid customHeadersJSON"))
                 return
             }
+            // Re-checked here as well as in the decoder: an in-process caller
+            // constructs the request directly and skips secure coding entirely.
+            var expectedChecksum: String?
+            if let raw = request.expectedChecksumSHA256 {
+                guard let normalized = ChecksumFormat.normalizedSHA256(raw) else {
+                    reply(nil, XPCErrorCode.invalidPayload.error(
+                        detail: "expected checksum must be 64 hex characters"
+                    ))
+                    return
+                }
+                // One digest cannot describe several different files: applying it
+                // to the whole batch would fail every job but at most one.
+                guard request.items.count == 1 else {
+                    reply(nil, XPCErrorCode.invalidPayload.error(
+                        detail: "expected checksum requires a single-item batch"
+                    ))
+                    return
+                }
+                expectedChecksum = normalized
+            }
+            if let rate = request.maxBytesPerSecond,
+               rate <= 0 || rate > EngineXPC.maxJobBytesPerSecond {
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxBytesPerSecond"))
+                return
+            }
+            if let connections = request.preferredConnectionCount,
+               connections < 1 || connections > EngineXPC.maxPreferredConnectionCount {
+                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid preferredConnectionCount"))
+                return
+            }
             let result = try JobRepository.insertBatch(
                 database: database,
                 source: request.source,
@@ -192,7 +254,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 cookieProfileID: request.cookieProfileID,
                 customHeadersJSON: request.customHeadersJSON,
                 projectID: request.projectID,
-                scheduleStartAt: scheduleStartAt
+                scheduleStartAt: scheduleStartAt,
+                expectedChecksumSHA256: expectedChecksum,
+                maxBytesPerSecond: request.maxBytesPerSecond,
+                preferredConnectionCount: request.preferredConnectionCount
             )
             let response = EnqueueBatchResponse(
                 requestID: request.requestID,
@@ -200,9 +265,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 jobIDs: result.jobIDs,
                 acceptedCount: result.jobIDs.count
             )
-            lock.lock()
-            enqueueCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             Task { await services.orchestrator?.start() }
             reply(response, nil)
         } catch {
@@ -218,18 +281,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = listCache[requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -285,9 +337,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             lock.lock()
             snapshotSequence += 1
             let sequence = snapshotSequence
-            let snapshot = JobListSnapshot(requestID: requestID, sequence: sequence, jobs: jobs)
-            listCache[requestID] = snapshot
             lock.unlock()
+            let snapshot = JobListSnapshot(requestID: requestID, sequence: sequence, jobs: jobs)
+            remember(requestID, snapshot, isMutation: false)
             reply(snapshot, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list failed"))
@@ -302,18 +354,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = commandCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -385,9 +426,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 state: newState,
                 revision: revision
             )
-            lock.lock()
-            commandCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "control failed"))
@@ -402,18 +441,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = setJobPriorityCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -432,9 +460,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 priority: request.priority,
                 revision: revision
             )
-            lock.lock()
-            setJobPriorityCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "set job priority failed"))
@@ -449,18 +475,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = deleteJobCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -498,9 +513,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 jobID: request.jobID,
                 previousState: previousState
             )
-            lock.lock()
-            deleteJobCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch let error as JobRepositoryError {
             switch error {
@@ -524,18 +537,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = credentialCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database, let secretStore = services.secretStore else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -557,9 +559,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 profileID: request.profileID
             )
-            lock.lock()
-            credentialCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "credential upsert failed"))
@@ -574,18 +574,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = proxyCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -607,9 +596,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 profileID: request.profileID
             )
-            lock.lock()
-            proxyCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "proxy upsert failed"))
@@ -624,18 +611,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = listProfilesCache[requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -671,9 +647,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 proxies: proxies,
                 cookies: cookies
             )
-            lock.lock()
-            listProfilesCache[requestID] = response
-            lock.unlock()
+            remember(requestID, response, isMutation: false)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list profiles failed"))
@@ -688,18 +662,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = getDefaultDestinationCache[requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -716,9 +679,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     isDefaultDownloads: snap.isDefaultDownloads
                 )
             )
-            lock.lock()
-            getDefaultDestinationCache[requestID] = response
-            lock.unlock()
+            remember(requestID, response, isMutation: false)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "get destination failed"))
@@ -733,18 +694,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = setDefaultDestinationCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -770,9 +720,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     isDefaultDownloads: snap.isDefaultDownloads
                 )
             )
-            lock.lock()
-            setDefaultDestinationCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "set destination failed"))
@@ -787,18 +735,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = cookieCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -820,9 +757,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 profileID: request.profileID
             )
-            lock.lock()
-            cookieCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "cookie profile upsert failed"))
@@ -837,18 +772,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = bandwidthUpsertCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -868,9 +792,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 policyID: request.policyID
             )
-            lock.lock()
-            bandwidthUpsertCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch is BandwidthWindowEvaluator.ParseError {
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid windowsJSON"))
@@ -887,18 +809,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = bandwidthGetCache[requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -916,9 +827,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 )
             }
             let response = GetBandwidthPolicyResponse(requestID: requestID, policy: snapshot)
-            lock.lock()
-            bandwidthGetCache[requestID] = response
-            lock.unlock()
+            remember(requestID, response, isMutation: false)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "get bandwidth policy failed"))
@@ -933,18 +842,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = listOrganizationCache[requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -961,9 +859,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 projects: projects,
                 tags: tags
             )
-            lock.lock()
-            listOrganizationCache[requestID] = response
-            lock.unlock()
+            remember(requestID, response, isMutation: false)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list organization failed"))
@@ -978,18 +874,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = upsertProjectCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1007,9 +892,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 projectID: request.projectID
             )
-            lock.lock()
-            upsertProjectCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "project upsert failed"))
@@ -1024,18 +907,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = upsertTagCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1052,9 +924,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 tagID: resolvedTagID
             )
-            lock.lock()
-            upsertTagCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "tag upsert failed"))
@@ -1069,18 +939,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = setJobTagsCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1097,9 +956,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 jobID: request.jobID
             )
-            lock.lock()
-            setJobTagsCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "set job tags failed"))
@@ -1114,18 +971,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = setJobProjectCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1142,9 +988,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 jobID: request.jobID
             )
-            lock.lock()
-            setJobProjectCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "set job project failed"))
@@ -1159,18 +1003,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = setJobCategoryCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1188,9 +1021,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 jobID: request.jobID,
                 categoryStableKey: request.categoryStableKey
             )
-            lock.lock()
-            setJobCategoryCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch let error as JobRepositoryError {
             switch error {
@@ -1214,18 +1045,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = setJobFilenameCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1243,9 +1063,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 jobID: request.jobID,
                 filename: filename
             )
-            lock.lock()
-            setJobFilenameCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch let error as JobRepositoryError {
             switch error {
@@ -1273,18 +1091,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = getBoolSettingCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: request.requestID, reply: reply) { return }
 
         guard AgentBoolSettings.allowlistedKeys.contains(request.key) else {
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "unknown setting key"))
@@ -1296,9 +1103,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             key: request.key,
             value: value
         )
-        lock.lock()
-        getBoolSettingCache[request.requestID] = response
-        lock.unlock()
+        remember(request.requestID, response, isMutation: false)
         reply(response, nil)
     }
 
@@ -1310,18 +1115,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = setBoolSettingCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard AgentBoolSettings.setBool(request.value, forKey: request.key) else {
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "unknown setting key"))
@@ -1332,9 +1126,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             key: request.key,
             value: request.value
         )
-        lock.lock()
-        setBoolSettingCache[request.requestID] = response
-        lock.unlock()
+        remember(request.requestID, response, isMutation: true)
         reply(response, nil)
     }
 
@@ -1346,18 +1138,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = listCategoryRulesCache[requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1376,9 +1157,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     )
                 }
             let response = ListCategoryRulesResponse(requestID: requestID, rules: rules)
-            lock.lock()
-            listCategoryRulesCache[requestID] = response
-            lock.unlock()
+            remember(requestID, response, isMutation: false)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list category rules failed"))
@@ -1393,18 +1172,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = upsertCategoryRuleCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1424,9 +1192,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 ruleID: request.ruleID
             )
-            lock.lock()
-            upsertCategoryRuleCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "category rule upsert failed"))
@@ -1449,18 +1215,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid limit"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = listEventsCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gate(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1486,9 +1241,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 )
             }
             let response = ListEventsResponse(requestID: request.requestID, events: events)
-            lock.lock()
-            listEventsCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: false)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list events failed"))
@@ -1507,18 +1260,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed jobID"))
             return
         }
-        lock.lock()
-        guard didHandshake else {
-            lock.unlock()
-            reply(nil, XPCErrorCode.handshakeRequired.error())
-            return
-        }
-        if let cached = clearEventsCache[request.requestID] {
-            lock.unlock()
-            reply(cached, nil)
-            return
-        }
-        lock.unlock()
+        if gateMutation(requestID: request.requestID, reply: reply) { return }
 
         guard let database = services.database else {
             reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
@@ -1528,12 +1270,63 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         do {
             let deleted = try JobRepository.clearEvents(database: database, jobID: request.jobID)
             let response = ClearEventsResponse(requestID: request.requestID, deletedCount: deleted)
-            lock.lock()
-            clearEventsCache[request.requestID] = response
-            lock.unlock()
+            remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "clear events failed"))
+        }
+    }
+
+    func getJobTransferSettings(
+        _ request: GetJobTransferSettingsRequest,
+        reply: @escaping @Sendable (GetJobTransferSettingsResponse?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        guard UUID(uuidString: request.jobID) != nil else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed jobID"))
+            return
+        }
+        if gate(requestID: request.requestID, reply: reply) { return }
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let settings = try JobRepository.loadTransferSettings(
+                database: database,
+                jobID: request.jobID
+            )
+            var globalLimit: Int64?
+            if let policy = try ProfileRepository.fetchGlobalBandwidthPolicy(database: database) {
+                let windows = try BandwidthWindowEvaluator.parseWindowsJSON(policy.windowsJSON)
+                if BandwidthWindowEvaluator.isActive(
+                    now: services.now(),
+                    calendar: .current,
+                    windows: windows
+                ) {
+                    globalLimit = policy.maxBytesPerSecond
+                }
+            }
+            let response = GetJobTransferSettingsResponse(
+                requestID: request.requestID,
+                jobID: settings.jobID,
+                state: settings.state,
+                terminalReason: settings.terminalReason,
+                expectedChecksumSHA256: settings.expectedChecksum
+                    .flatMap(ChecksumFormat.normalizedSHA256),
+                maxBytesPerSecond: settings.maxBytesPerSecond,
+                preferredConnectionCount: settings.preferredConnectionCount,
+                globalMaxBytesPerSecond: globalLimit
+            )
+            remember(request.requestID, response, isMutation: false)
+            reply(response, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "job transfer settings unavailable"))
         }
     }
 

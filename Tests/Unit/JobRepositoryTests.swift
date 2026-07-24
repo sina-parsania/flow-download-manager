@@ -6,6 +6,34 @@ import Persistence
 import SharedSecurity
 import XCTest
 
+/// Thread-safe statement counter for `db.trace` assertions. GRDB invokes the
+/// trace callback on the traced connection's own dispatch queue, which may
+/// differ from the calling test thread.
+private final class StatementCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    /// Zeroes the count. Used to discard statements issued while opening/migrating
+    /// the traced connection, so assertions cover only the call under test.
+    func reset() {
+        lock.lock()
+        value = 0
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+}
+
 final class JobRepositoryTests: XCTestCase {
     private func openTempDatabase() throws -> (EngineDatabase, URL, URL) {
         let root = FileManager.default.temporaryDirectory
@@ -62,6 +90,118 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertNil(details.proxyProfileID)
         XCTAssertNil(details.cookieProfileID)
         XCTAssertNil(details.customHeadersJSON)
+        XCTAssertNil(details.expectedChecksum)
+        XCTAssertNil(details.maxBytesPerSecond)
+        XCTAssertNil(details.preferredConnectionCount)
+    }
+
+    func testInsertBatchPersistsChecksumAndPerJobLimits() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let digest = String(repeating: "0123456789abcdef", count: 4)
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [(url: "https://example.test/a.iso", categoryStableKey: "archives")],
+            expectedChecksumSHA256: digest.uppercased(),
+            maxBytesPerSecond: 2_500_000,
+            preferredConnectionCount: 6
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+
+        // The transfer path reads the checksum it will verify against, plus the
+        // overrides that shape the download options.
+        let details = try JobRepository.loadJobForTransfer(database: database, id: jobID)
+        XCTAssertEqual(details.expectedChecksum, digest)
+        XCTAssertEqual(details.maxBytesPerSecond, 2_500_000)
+        XCTAssertEqual(details.preferredConnectionCount, 6)
+
+        let settings = try JobRepository.loadTransferSettings(database: database, jobID: jobID)
+        XCTAssertEqual(settings.expectedChecksum, digest)
+        XCTAssertEqual(settings.maxBytesPerSecond, 2_500_000)
+        XCTAssertEqual(settings.preferredConnectionCount, 6)
+        XCTAssertEqual(settings.state, "queued")
+        XCTAssertNil(settings.terminalReason)
+    }
+
+    func testInsertBatchTreatsBlankAndNonPositiveOverridesAsAbsent() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [(url: "https://example.test/a.iso", categoryStableKey: "archives")],
+            expectedChecksumSHA256: "   ",
+            maxBytesPerSecond: 0,
+            preferredConnectionCount: -3
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+        let details = try JobRepository.loadJobForTransfer(database: database, id: jobID)
+        XCTAssertNil(details.expectedChecksum)
+        XCTAssertNil(details.maxBytesPerSecond)
+        XCTAssertNil(details.preferredConnectionCount)
+    }
+
+    /// `fetchJobRows` must execute a constant-statement plan (a handful of batched
+    /// queries), not one-plus-N-per-association. With 20 jobs each carrying a tag,
+    /// the historical N+1 shape would issue on the order of `1 + 4 * 20` statements;
+    /// the set-based plan stays in the single digits regardless of job count.
+    func testFetchJobRowsIssuesBoundedStatementCountNotNPlusOne() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-jobrepo-\(UUID().uuidString)", isDirectory: true)
+        let dbURL = root.appendingPathComponent("engine.sqlite")
+        let downloads = root.appendingPathComponent("Downloads", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let seedDatabase = try EngineDatabase(url: dbURL)
+        try JobRepository.ensureProductionSeed(
+            database: seedDatabase,
+            defaultDestinationDirectory: downloads
+        )
+
+        let jobCount = 20
+        let items = (0 ..< jobCount).map {
+            (url: "https://example.test/file\($0).bin", categoryStableKey: "other")
+        }
+        let result = try JobRepository.insertBatch(
+            database: seedDatabase,
+            source: "paste",
+            displayName: nil,
+            items: items
+        )
+        let tagID = try OrganizationRepository.createTag(database: seedDatabase, name: "batch")
+        for jobID in result.jobIDs {
+            try OrganizationRepository.attachTagToJob(database: seedDatabase, jobID: jobID, tagID: tagID)
+        }
+
+        let counter = StatementCounter()
+        var tracedConfiguration = DatabaseConfiguration.make()
+        tracedConfiguration.prepareDatabase { db in
+            db.trace(options: .statement) { _ in counter.increment() }
+        }
+        let tracedDatabase = try EngineDatabase(url: dbURL, configuration: tracedConfiguration)
+
+        // First call warms up the reader connection (GRDB's one-time-per-connection
+        // schema-cache and primary-key introspection statements, unrelated to job
+        // count). Only the second call — pure query-plan cost — is asserted below.
+        _ = try JobRepository.fetchJobRows(database: tracedDatabase)
+        counter.reset()
+
+        let rows = try JobRepository.fetchJobRows(database: tracedDatabase)
+        XCTAssertEqual(rows.count, jobCount)
+        XCTAssertTrue(rows.allSatisfy { $0.tagNames == ["batch"] })
+        XCTAssertTrue(rows.allSatisfy { $0.tagIDs == [tagID] })
+
+        // Constant plan on a warm connection: BEGIN, jobs, resources, categories,
+        // projects, tags, COMMIT — 7 statements, independent of job count. The
+        // historical N+1 shape would have issued on the order of `1 + 4 * jobCount`
+        // (81) statements for this fixture.
+        XCTAssertGreaterThan(counter.count, 0)
+        XCTAssertLessThanOrEqual(counter.count, 10)
     }
 
     func testInsertBatchPersistsProfilesProjectAndSchedule() throws {

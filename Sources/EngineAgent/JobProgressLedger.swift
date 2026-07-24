@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Live progress snapshot coalesced for listJobs (≤1 Hz durable UI path).
+/// Live progress snapshot coalesced for listJobs / pullJobChanges.
 public struct JobProgressSnapshot: Sendable, Equatable {
     public var bytesTransferred: Int64
     public var totalBytes: Int64?
@@ -24,13 +24,17 @@ public struct JobProgressSnapshot: Sendable, Equatable {
 public final class JobProgressLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: JobProgressSnapshot] = [:]
+    private let changeLedger: JobChangeLedger?
 
-    public init() {}
+    public init(changeLedger: JobChangeLedger? = nil) {
+        self.changeLedger = changeLedger
+    }
 
     public func set(_ snapshot: JobProgressSnapshot, for jobID: String) {
         lock.lock()
         values[jobID] = snapshot
         lock.unlock()
+        changeLedger?.noteUpsert(jobID)
     }
 
     public func remove(_ jobID: String) {

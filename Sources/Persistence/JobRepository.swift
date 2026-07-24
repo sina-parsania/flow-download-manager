@@ -378,10 +378,35 @@ public enum JobRepository {
         tagNames: [String],
         tagIDs: [String]
     )] {
+        try fetchJobRows(database: database, jobIDs: nil)
+    }
+
+    /// Same projection as ``fetchJobRows(database:)``, optionally restricted to
+    /// `jobIDs` for change-aware Library deltas.
+    public static func fetchJobRows(
+        database: EngineDatabase,
+        jobIDs: Set<String>?
+    ) throws -> [(
+        job: JobRecord,
+        resource: ResourceRecord,
+        category: CategoryRecord,
+        projectName: String?,
+        tagNames: [String],
+        tagIDs: [String]
+    )] {
         try database.pool.read { db in
-            let jobs = try JobRecord
-                .order(Column("queuePosition").asc, Column("createdAt").asc)
-                .fetchAll(db)
+            let jobs: [JobRecord]
+            if let jobIDs {
+                guard !jobIDs.isEmpty else { return [] }
+                jobs = try JobRecord
+                    .filter(keys: jobIDs)
+                    .order(Column("queuePosition").asc, Column("createdAt").asc)
+                    .fetchAll(db)
+            } else {
+                jobs = try JobRecord
+                    .order(Column("queuePosition").asc, Column("createdAt").asc)
+                    .fetchAll(db)
+            }
             guard !jobs.isEmpty else { return [] }
 
             let resourcesByID = try Dictionary(

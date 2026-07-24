@@ -63,6 +63,9 @@ public final class LibraryModel: ObservableObject {
     private var lastETARefreshAt: ContinuousClock.Instant?
     /// Cached default destination path for Open in Finder (resolved via XPC).
     private var cachedDestinationPath: String?
+    /// Last applied Library sequence from listJobs / pullJobChanges.
+    private var jobsSequence: Int64 = 0
+    private var preferChangeStream = false
 
     public init(rows: [JobRowModel], engineClient: EngineClient = EngineClient()) {
         self.rows = rows
@@ -298,14 +301,24 @@ public final class LibraryModel: ObservableObject {
     public func startPolling() {
         guard refreshTask == nil else { return }
         refreshTask = Task { [weak self] in
+            // Full snapshot first so change-stream has a sequence baseline.
+            await self?.refreshFromEngine(forceFull: true)
             while !Task.isCancelled {
-                await self?.refreshFromEngine()
+                await self?.refreshFromEngine(forceFull: false)
                 let hasLive = self?.rows.contains {
                     $0.state == .downloading || $0.state == .connecting
                         || $0.state == .verifying || $0.state == .merging
                         || $0.state == .postProcessing
                 } ?? false
-                let delay: UInt64 = hasLive ? 500_000_000 : 5_000_000_000
+                // Idle change-stream can poll less often; full listJobs fallback
+                // keeps the historical 5 s cadence when capability is missing.
+                let delay: UInt64 = if hasLive {
+                    500_000_000
+                } else if self?.preferChangeStream == true {
+                    2_000_000_000
+                } else {
+                    5_000_000_000
+                }
                 try? await Task.sleep(nanoseconds: delay)
             }
         }
@@ -316,70 +329,125 @@ public final class LibraryModel: ObservableObject {
         refreshTask = nil
     }
 
-    public func refreshFromEngine(using client: EngineClient? = nil) async {
+    public func refreshFromEngine(using client: EngineClient? = nil, forceFull: Bool = true) async {
         let client = client ?? engineClient
         do {
-            let snapshot = try await client.listJobs()
-            let now = ContinuousClock.now
-            let elapsed: Double
-            if let lastETARefreshAt {
-                let delta = now - lastETARefreshAt
-                elapsed = Double(delta.components.seconds)
-                    + Double(delta.components.attoseconds) / 1e18
+            try await client.connect()
+            preferChangeStream = client.supportsJobChanges
+            if forceFull || !preferChangeStream || jobsSequence == 0 {
+                try await applyFullSnapshot(from: client)
             } else {
-                elapsed = 1.0
+                try await applyChangeBatch(from: client)
             }
-            lastETARefreshAt = now
-
-            var liveIDs = Set<UUID>()
-            let mapped: [JobRowModel] = snapshot.jobs.compactMap { job in
-                guard let id = UUID(uuidString: job.id),
-                      let state = JobState(rawValue: job.state)
-                else { return nil }
-                let total = job.hasTotalBytes ? job.totalBytes : nil
-                let isLive = state == .downloading || state == .connecting
-                    || state == .verifying || state == .merging || state == .postProcessing
-                let eta: Int?
-                if isLive, let total, total > job.bytesTransferred, job.speedBytesPerSecond > 0 {
-                    liveIDs.insert(id)
-                    var smoother = remainingTimeSmoothers[id] ?? RemainingTimeSmoother()
-                    eta = smoother.update(
-                        remainingBytes: total - job.bytesTransferred,
-                        speedBytesPerSecond: job.speedBytesPerSecond,
-                        elapsedSeconds: elapsed
-                    )
-                    remainingTimeSmoothers[id] = smoother
-                } else {
-                    remainingTimeSmoothers[id] = nil
-                    eta = nil
-                }
-                return JobRowModel(
-                    id: id,
-                    name: job.name,
-                    sourceHost: job.sourceHost,
-                    sourceURL: job.sourceURL,
-                    state: state,
-                    progressFraction: job.hasProgress ? job.progressFraction : nil,
-                    bytesTransferred: job.bytesTransferred,
-                    totalBytes: total,
-                    speedBytesPerSecond: job.speedBytesPerSecond,
-                    etaSeconds: eta,
-                    categoryKey: job.categoryKey,
-                    projectID: job.projectID,
-                    projectName: job.projectName,
-                    tagIDs: job.tagIDs,
-                    tagNames: job.tagNames,
-                    priority: job.priority
-                )
-            }
-            remainingTimeSmoothers = remainingTimeSmoothers.filter { liveIDs.contains($0.key) }
-            notifyTerminalTransitions(from: rows, to: mapped)
-            rows = mapped
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Could not reach the engine. It should start automatically — check the Engine badge."
             engineClient.resetConnection()
+            preferChangeStream = false
+            jobsSequence = 0
         }
+    }
+
+    private func applyFullSnapshot(from client: EngineClient) async throws {
+        let snapshot = try await client.listJobs()
+        jobsSequence = snapshot.sequence
+        let mapped = mapSnapshots(snapshot.jobs, elapsed: etaElapsedSeconds())
+        notifyTerminalTransitions(from: rows, to: mapped.rows)
+        remainingTimeSmoothers = remainingTimeSmoothers.filter { mapped.liveIDs.contains($0.key) }
+        rows = mapped.rows
+    }
+
+    private func applyChangeBatch(from client: EngineClient) async throws {
+        let batch = try await client.pullJobChanges(sinceSequence: jobsSequence)
+        if batch.hasGap {
+            try await applyFullSnapshot(from: client)
+            return
+        }
+        jobsSequence = batch.sequence
+        if batch.upserts.isEmpty, batch.removedJobIDs.isEmpty {
+            return
+        }
+        let elapsed = etaElapsedSeconds()
+        let outcome = JobChangeMerger.apply(current: rows, batch: batch) { snapshot in
+            mapSnapshots([snapshot], elapsed: elapsed).rows.first
+        }
+        if outcome.needsFullRefresh {
+            try await applyFullSnapshot(from: client)
+            return
+        }
+        let liveIDs = Set(outcome.rows.compactMap { row -> UUID? in
+            switch row.state {
+            case .downloading, .connecting, .verifying, .merging, .postProcessing:
+                return row.id
+            default:
+                return nil
+            }
+        })
+        notifyTerminalTransitions(from: rows, to: outcome.rows)
+        remainingTimeSmoothers = remainingTimeSmoothers.filter { liveIDs.contains($0.key) }
+        rows = outcome.rows
+    }
+
+    private func etaElapsedSeconds() -> Double {
+        let now = ContinuousClock.now
+        let elapsed: Double
+        if let lastETARefreshAt {
+            let delta = now - lastETARefreshAt
+            elapsed = Double(delta.components.seconds)
+                + Double(delta.components.attoseconds) / 1e18
+        } else {
+            elapsed = 1.0
+        }
+        lastETARefreshAt = now
+        return elapsed
+    }
+
+    private func mapSnapshots(
+        _ jobs: [JobSnapshot],
+        elapsed: Double
+    ) -> (rows: [JobRowModel], liveIDs: Set<UUID>) {
+        var liveIDs = Set<UUID>()
+        let mapped: [JobRowModel] = jobs.compactMap { job in
+            guard let id = UUID(uuidString: job.id),
+                  let state = JobState(rawValue: job.state)
+            else { return nil }
+            let total = job.hasTotalBytes ? job.totalBytes : nil
+            let isLive = state == .downloading || state == .connecting
+                || state == .verifying || state == .merging || state == .postProcessing
+            let eta: Int?
+            if isLive, let total, total > job.bytesTransferred, job.speedBytesPerSecond > 0 {
+                liveIDs.insert(id)
+                var smoother = remainingTimeSmoothers[id] ?? RemainingTimeSmoother()
+                eta = smoother.update(
+                    remainingBytes: total - job.bytesTransferred,
+                    speedBytesPerSecond: job.speedBytesPerSecond,
+                    elapsedSeconds: elapsed
+                )
+                remainingTimeSmoothers[id] = smoother
+            } else {
+                remainingTimeSmoothers[id] = nil
+                eta = nil
+            }
+            return JobRowModel(
+                id: id,
+                name: job.name,
+                sourceHost: job.sourceHost,
+                sourceURL: job.sourceURL,
+                state: state,
+                progressFraction: job.hasProgress ? job.progressFraction : nil,
+                bytesTransferred: job.bytesTransferred,
+                totalBytes: total,
+                speedBytesPerSecond: job.speedBytesPerSecond,
+                etaSeconds: eta,
+                categoryKey: job.categoryKey,
+                projectID: job.projectID,
+                projectName: job.projectName,
+                tagIDs: job.tagIDs,
+                tagNames: job.tagNames,
+                priority: job.priority
+            )
+        }
+        return (mapped, liveIDs)
     }
 
     private func notifyTerminalTransitions(from oldRows: [JobRowModel], to newRows: [JobRowModel]) {

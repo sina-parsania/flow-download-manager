@@ -43,6 +43,14 @@ public protocol EngineControlProtocol {
         reply: @escaping @Sendable (JobListSnapshot?, NSError?) -> Void
     )
 
+    /// Change-aware Library delta since ``PullJobChangesRequest/sinceSequence``.
+    /// Advertised as capability ``EngineCapability/jobChanges``. On ``hasGap``
+    /// the client must call ``listJobs(requestID:reply:)`` for a full refresh.
+    func pullJobChanges(
+        _ request: PullJobChangesRequest,
+        reply: @escaping @Sendable (JobChangeBatch?, NSError?) -> Void
+    )
+
     /// Pause / resume / cancel / retry with expected revision.
     func controlJob(
         _ request: JobCommandRequest,

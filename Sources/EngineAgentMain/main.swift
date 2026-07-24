@@ -70,7 +70,8 @@ func runAgent() -> Never {
         exit(EXIT_FAILURE)
     }
 
-    let progressLedger = JobProgressLedger()
+    let changeLedger = JobChangeLedger()
+    let progressLedger = JobProgressLedger(changeLedger: changeLedger)
     let secretStore = KeychainSecretStore(service: EngineXPC.machServiceName)
     let orchestrator = TransferOrchestrator(
         database: database,
@@ -87,6 +88,7 @@ func runAgent() -> Never {
         database: database,
         orchestrator: orchestrator,
         progressLedger: progressLedger,
+        changeLedger: changeLedger,
         secretStore: secretStore
     )
     let validator = CodeSigningIdentityValidator(

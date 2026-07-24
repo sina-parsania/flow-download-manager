@@ -17,6 +17,7 @@ Post-`0.2.0` work on `main` (not yet tagged). Community path still unsigned (ADR
 - Compose: `.torrent` metadata inspection; optional yt-dlp page probe when a VendorBuild helper is present
 - Chrome native-messaging hardening (headers / cookies / host handoff)
 - Library UX polish (board, destination card, speed / remaining-time smoothing)
+- Change-aware Library delivery (`pullJobChanges` / capability `jobChanges`): one full `listJobs`, then coalesced deltas; gap → full refresh; N-1 agents keep polling
 
 ### Packaging & docs
 - Fail-closed `make release-codesign` without `DM_CODESIGN_IDENTITY`; notarize remains Track B

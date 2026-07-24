@@ -15,10 +15,15 @@ public final class EngineClient: ObservableObject {
 
     private var connection: NSXPCConnection?
     private var didHandshake = false
+    private var serverCapabilities: Set<String> = []
     /// When set, connect via the app-scoped XPC service instead of the LaunchAgent Mach service.
     private var prefersBundledXPCService = false
 
     public init() {}
+
+    public var supportsJobChanges: Bool {
+        serverCapabilities.contains(EngineCapability.jobChanges)
+    }
 
     public func connect() async throws {
         if connection != nil, didHandshake { return }
@@ -46,6 +51,7 @@ public final class EngineClient: ObservableObject {
         }
         connection = nil
         didHandshake = false
+        serverCapabilities = []
     }
 
     /// Lightweight liveness check used by LaunchAgent heal / ensureRunning.
@@ -119,13 +125,15 @@ public final class EngineClient: ObservableObject {
                 "getBoolSetting", "setBoolSetting",
                 "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents",
                 "getJobTransferSettings",
-                "listHostSettings", "upsertHostSetting", "deleteHostSetting"
+                "listHostSettings", "upsertHostSetting", "deleteHostSetting",
+                EngineCapability.jobChanges
             ]
         )
         do {
-            _ = try await Self.invoke(Self.box(connection)) { proxy, reply in
+            let hello = try await Self.invoke(Self.box(connection)) { proxy, reply in
                 proxy.handshake(hello, reply: reply)
             } as ServerHello
+            serverCapabilities = Set(hello.capabilities)
             didHandshake = true
         } catch {
             resetConnection()
@@ -189,6 +197,16 @@ public final class EngineClient: ObservableObject {
         let requestID = UUID().uuidString
         return try await perform { proxy, reply in
             proxy.listJobs(requestID: requestID, reply: reply)
+        }
+    }
+
+    public func pullJobChanges(sinceSequence: Int64) async throws -> JobChangeBatch {
+        let request = PullJobChangesRequest(
+            requestID: UUID().uuidString,
+            sinceSequence: sinceSequence
+        )
+        return try await perform { proxy, reply in
+            proxy.pullJobChanges(request, reply: reply)
         }
     }
 

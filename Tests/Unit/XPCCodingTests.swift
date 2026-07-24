@@ -327,6 +327,27 @@ final class XPCCodingTests: XCTestCase {
         let decodedSnapshot = try roundTrip(snapshot, as: JobSnapshot.self)
         XCTAssertEqual(decodedSnapshot?.priority, 4)
         XCTAssertEqual(decodedSnapshot?.sourceURL, "https://cdn.example.test/a.bin")
+
+        let changeRequest = PullJobChangesRequest(
+            requestID: UUID().uuidString,
+            sinceSequence: 7
+        )
+        let decodedChangeRequest = try roundTrip(changeRequest, as: PullJobChangesRequest.self)
+        XCTAssertEqual(decodedChangeRequest?.sinceSequence, 7)
+
+        let changeBatch = JobChangeBatch(
+            requestID: UUID().uuidString,
+            sequence: 8,
+            sinceSequence: 7,
+            upserts: [snapshot],
+            removedJobIDs: [UUID().uuidString.lowercased()],
+            hasGap: false
+        )
+        let decodedBatch = try roundTrip(changeBatch, as: JobChangeBatch.self)
+        XCTAssertEqual(decodedBatch?.sequence, 8)
+        XCTAssertEqual(decodedBatch?.upserts.count, 1)
+        XCTAssertEqual(decodedBatch?.removedJobIDs.count, 1)
+        XCTAssertEqual(decodedBatch?.hasGap, false)
     }
 
     func testDeleteJobDTORoundTrip() throws {

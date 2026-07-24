@@ -44,6 +44,19 @@ public enum EngineControlInterface {
         )
 
         interface.setClasses(
+            allowedClasses([PullJobChangesRequest.self, NSString.self]),
+            for: #selector(EngineControlProtocol.pullJobChanges(_:reply:)),
+            argumentIndex: 0, ofReply: false
+        )
+        interface.setClasses(
+            allowedClasses([
+                JobChangeBatch.self, JobSnapshot.self, NSString.self, NSArray.self
+            ]),
+            for: #selector(EngineControlProtocol.pullJobChanges(_:reply:)),
+            argumentIndex: 0, ofReply: true
+        )
+
+        interface.setClasses(
             allowedClasses([JobCommandRequest.self, NSString.self]),
             for: #selector(EngineControlProtocol.controlJob(_:reply:)),
             argumentIndex: 0, ofReply: false

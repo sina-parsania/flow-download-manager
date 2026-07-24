@@ -18,6 +18,7 @@ public struct EngineServices: Sendable {
     public let database: EngineDatabase?
     public let orchestrator: TransferOrchestrator?
     public let progressLedger: JobProgressLedger?
+    public let changeLedger: JobChangeLedger?
     public let secretStore: (any SecretStore)?
 
     public init(
@@ -29,6 +30,7 @@ public struct EngineServices: Sendable {
         database: EngineDatabase? = nil,
         orchestrator: TransferOrchestrator? = nil,
         progressLedger: JobProgressLedger? = nil,
+        changeLedger: JobChangeLedger? = nil,
         secretStore: (any SecretStore)? = nil
     ) {
         self.engineBuild = engineBuild
@@ -39,6 +41,7 @@ public struct EngineServices: Sendable {
         self.database = database
         self.orchestrator = orchestrator
         self.progressLedger = progressLedger
+        self.changeLedger = changeLedger
         self.secretStore = secretStore
     }
 }
@@ -48,7 +51,6 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
     private let services: EngineServices
     private let lock = NSLock()
     private var didHandshake = false
-    private var snapshotSequence: Int64 = 0
     /// Single bounded idempotency store shared by every RPC on this connection,
     /// replacing the 24 unbounded per-RPC dictionaries this type used to keep.
     private let replayStore = RequestReplayStore()
@@ -127,6 +129,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         switch value {
         case let snapshot as JobListSnapshot:
             return 256 + snapshot.jobs.count * perElement
+        case let batch as JobChangeBatch:
+            return 256 + (batch.upserts.count + batch.removedJobIDs.count) * perElement
         case let response as ListEventsResponse:
             return 256 + response.events.count * perElement
         default:
@@ -159,7 +163,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 "getBoolSetting", "setBoolSetting",
                 "listCategoryRules", "upsertCategoryRule", "listEvents", "clearEvents", "setJobPriority",
                 "deleteJob", "getJobTransferSettings",
-                "listHostSettings", "upsertHostSetting", "deleteHostSetting"
+                "listHostSettings", "upsertHostSetting", "deleteHostSetting",
+                EngineCapability.jobChanges
             ]
         ), nil)
     }
@@ -266,6 +271,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 jobIDs: result.jobIDs,
                 acceptedCount: result.jobIDs.count
             )
+            for jobID in result.jobIDs {
+                services.changeLedger?.noteUpsert(jobID)
+            }
             remember(request.requestID, response, isMutation: true)
             Task { await services.orchestrator?.start() }
             reply(response, nil)
@@ -292,59 +300,146 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         do {
             let rows = try JobRepository.fetchJobRows(database: database)
             let progressMap = services.progressLedger?.all() ?? [:]
-            let jobs = rows.map { job, resource, category, projectName, tagNames, tagIDs -> JobSnapshot in
-                let downloadURL = resource.finalURL ?? resource.canonicalURL
-                let host = URL(string: downloadURL)?.host
-                    ?? URL(string: resource.canonicalURL)?.host
-                    ?? ""
-                let name = FilenameSanitizer.preferredFilename(
-                    contentDisposition: nil,
-                    urlString: downloadURL,
-                    existingEvidence: resource.filenameEvidence
-                )
-                let live = progressMap[job.id]
-                let total = live?.totalBytes ?? resource.expectedSize
-                let transferred = live?.bytesTransferred ?? 0
-                let isLiveTransfer = job.state == "downloading"
-                    || job.state == "connecting"
-                    || job.state == "verifying"
-                    || job.state == "merging"
-                    || job.state == "postProcessing"
-                // Stale ledger rates must not show on paused/queued/failed rows.
-                let speed = isLiveTransfer ? (live?.speedBytesPerSecond ?? 0) : 0
-                let fraction: Double? = if job.state == "completed" {
-                    live?.progressFraction ?? 1.0
-                } else {
-                    live?.progressFraction
-                }
-                return JobSnapshot(
-                    id: job.id,
-                    name: name,
-                    sourceHost: host,
-                    sourceURL: downloadURL,
-                    state: job.state,
-                    progressFraction: fraction,
-                    bytesTransferred: transferred,
-                    totalBytes: total,
-                    speedBytesPerSecond: speed,
-                    categoryKey: category.stableKey,
-                    projectID: job.projectID,
-                    projectName: projectName,
-                    tagIDs: tagIDs,
-                    tagNames: tagNames,
-                    priority: job.priority
-                )
+            let jobs = rows.map { row in
+                Self.makeJobSnapshot(row: row, progressMap: progressMap)
             }
-            lock.lock()
-            snapshotSequence += 1
-            let sequence = snapshotSequence
-            lock.unlock()
-            let snapshot = JobListSnapshot(requestID: requestID, sequence: sequence, jobs: jobs)
+            let sequence = services.changeLedger?.checkpointFullSync() ?? 1
+            let snapshot = JobListSnapshot(
+                requestID: requestID,
+                sequence: sequence,
+                jobs: jobs
+            )
             remember(requestID, snapshot, isMutation: false)
             reply(snapshot, nil)
         } catch {
             reply(nil, XPCErrorCode.internalError.error(detail: "list failed"))
         }
+    }
+
+    func pullJobChanges(
+        _ request: PullJobChangesRequest,
+        reply: @escaping @Sendable (JobChangeBatch?, NSError?) -> Void
+    ) {
+        guard isValidRequestID(request.requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        if gate(requestID: request.requestID, reply: reply) { return }
+
+        guard let changeLedger = services.changeLedger else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "jobChanges unavailable"))
+            return
+        }
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        let drain = changeLedger.drain(since: request.sinceSequence)
+        if drain.hasGap {
+            let batch = JobChangeBatch(
+                requestID: request.requestID,
+                sequence: drain.sequence,
+                sinceSequence: request.sinceSequence,
+                upserts: [],
+                removedJobIDs: [],
+                hasGap: true
+            )
+            remember(request.requestID, batch, isMutation: false)
+            reply(batch, nil)
+            return
+        }
+        if drain.idle {
+            let batch = JobChangeBatch(
+                requestID: request.requestID,
+                sequence: drain.sequence,
+                sinceSequence: request.sinceSequence,
+                upserts: [],
+                removedJobIDs: [],
+                hasGap: false
+            )
+            remember(request.requestID, batch, isMutation: false)
+            reply(batch, nil)
+            return
+        }
+
+        do {
+            let progressMap = services.progressLedger?.all() ?? [:]
+            let rows = try JobRepository.fetchJobRows(
+                database: database,
+                jobIDs: Set(drain.upsertIDs)
+            )
+            let upserts = rows.map { row in
+                Self.makeJobSnapshot(row: row, progressMap: progressMap)
+            }
+            let batch = JobChangeBatch(
+                requestID: request.requestID,
+                sequence: drain.sequence,
+                sinceSequence: request.sinceSequence,
+                upserts: upserts,
+                removedJobIDs: drain.removedIDs,
+                hasGap: false
+            )
+            remember(request.requestID, batch, isMutation: false)
+            reply(batch, nil)
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: "pullJobChanges failed"))
+        }
+    }
+
+    private static func makeJobSnapshot(
+        row: (
+            job: JobRecord,
+            resource: ResourceRecord,
+            category: CategoryRecord,
+            projectName: String?,
+            tagNames: [String],
+            tagIDs: [String]
+        ),
+        progressMap: [String: JobProgressSnapshot]
+    ) -> JobSnapshot {
+        let job = row.job
+        let resource = row.resource
+        let downloadURL = resource.finalURL ?? resource.canonicalURL
+        let host = URL(string: downloadURL)?.host
+            ?? URL(string: resource.canonicalURL)?.host
+            ?? ""
+        let name = FilenameSanitizer.preferredFilename(
+            contentDisposition: nil,
+            urlString: downloadURL,
+            existingEvidence: resource.filenameEvidence
+        )
+        let live = progressMap[job.id]
+        let total = live?.totalBytes ?? resource.expectedSize
+        let transferred = live?.bytesTransferred ?? 0
+        let isLiveTransfer = job.state == "downloading"
+            || job.state == "connecting"
+            || job.state == "verifying"
+            || job.state == "merging"
+            || job.state == "postProcessing"
+        let speed = isLiveTransfer ? (live?.speedBytesPerSecond ?? 0) : 0
+        let fraction: Double? = if job.state == "completed" {
+            live?.progressFraction ?? 1.0
+        } else {
+            live?.progressFraction
+        }
+        return JobSnapshot(
+            id: job.id,
+            name: name,
+            sourceHost: host,
+            sourceURL: downloadURL,
+            state: job.state,
+            progressFraction: fraction,
+            bytesTransferred: transferred,
+            totalBytes: total,
+            speedBytesPerSecond: speed,
+            categoryKey: row.category.stableKey,
+            projectID: job.projectID,
+            projectName: row.projectName,
+            tagIDs: row.tagIDs,
+            tagNames: row.tagNames,
+            priority: job.priority
+        )
     }
 
     func controlJob(
@@ -427,6 +522,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 state: newState,
                 revision: revision
             )
+            services.changeLedger?.noteUpsert(request.jobID)
             remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
@@ -461,6 +557,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 priority: request.priority,
                 revision: revision
             )
+            services.changeLedger?.noteUpsert(request.jobID)
             remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
@@ -523,6 +620,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 database: database,
                 id: request.jobID
             )
+            services.changeLedger?.noteRemoval(request.jobID)
             let response = DeleteJobResponse(
                 requestID: request.requestID,
                 jobID: request.jobID,
@@ -969,6 +1067,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 jobID: request.jobID
             )
+            services.changeLedger?.noteUpsert(request.jobID)
             remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
@@ -1001,6 +1100,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 requestID: request.requestID,
                 jobID: request.jobID
             )
+            services.changeLedger?.noteUpsert(request.jobID)
             remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch {
@@ -1034,6 +1134,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 jobID: request.jobID,
                 categoryStableKey: request.categoryStableKey
             )
+            services.changeLedger?.noteUpsert(request.jobID)
             remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch let error as JobRepositoryError {
@@ -1076,6 +1177,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 jobID: request.jobID,
                 filename: filename
             )
+            services.changeLedger?.noteUpsert(request.jobID)
             remember(request.requestID, response, isMutation: true)
             reply(response, nil)
         } catch let error as JobRepositoryError {

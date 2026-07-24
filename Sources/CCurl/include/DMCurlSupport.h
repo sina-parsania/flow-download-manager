@@ -21,6 +21,11 @@ typedef struct DMCurlDownloadResult {
     CURLcode code;
     long httpStatus;
     curl_off_t bytesWritten;
+    /* Non-zero when this transfer stopped because the caller asked it to
+     * (straggler preemption), NOT because it failed or the job was cancelled.
+     * @c bytesWritten is authoritative in that case and @c code stays
+     * @c CURLE_OK -- a short read here is expected, not an error. */
+    int stoppedByRequest;
     curl_off_t contentLength; /* -1 if unknown */
     char *finalURL;
     char *contentType;
@@ -85,6 +90,15 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
 );
 
 CURL *DMCurlEasyDownloadGetHandle(DMCurlEasyDownload *download);
+
+/// Ask one in-flight download to stop after its next written chunk.
+///
+/// Used to preempt a straggling segment so its remaining bytes can be re-tiled
+/// across faster connections. This is deliberately NOT the job-wide abort flag:
+/// a stop must never be reportable as a user cancellation. The transfer ends
+/// with @c CURLE_OK and @c stoppedByRequest set, and @c bytesWritten tells the
+/// caller exactly how much landed on disk.
+void DMCurlEasyDownloadRequestStop(DMCurlEasyDownload *download);
 
 /// Fills @c out using @c performCode from multi (or easy_perform), then frees @c download.
 void DMCurlEasyDownloadFinish(

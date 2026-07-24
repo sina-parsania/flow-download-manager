@@ -329,17 +329,22 @@ per-host hints — this extends it to user-controlled settings.
 Follow `.claude/rules/xpc-boundary.md`: an RPC change touches **four** files, and the
 `capabilities` array in `ClientHello` must be updated or the handshake gate breaks.
 
-### TASK 5 — Things deliberately NOT started
+### TASK 5 — Deferred surfaces (ADR-bounded; closed for community path)
 
-Do not begin these without asking:
+These are **not** unfinished product stubs. ADRs and packaging reality bound them:
 
-- **Torrent / magnet** — ADR 0006 defers libtorrent. `TorrentCore` is a bencode reader
-  wired into the unit-test target only, in no shipping target. Leave it.
-- **Media / yt-dlp** — `MediaIsolation` is likewise test-only.
-- **Notarization / signing** — ADR 0008 makes unsigned the default distribution.
-- **Safari Web Extension** — blocked on signing; Safari will not load unsigned
-  extensions outside developer mode.
-- **`docs/plans/straggler-preemption-design.md`** — superseded, see §1.
+- **Torrent / magnet** — ADR 0006: Compose can **inspect** `.torrent` metadata;
+  magnets stay unsupported; libtorrent download remains deferred until a
+  VendorBuild pin lands.
+- **Media / yt-dlp** — optional VendorBuild helper; Compose can probe page URLs
+  when `yt-dlp` is present and explains when it is missing. No fake download.
+- **Notarization / signing** — ADR 0008 Track B: `make release-codesign` /
+  `make release-notarize` fail closed without credentials. Community default
+  stays unsigned DMG.
+- **Safari Web Extension** — `BrowserExtension/safari/README.md`; unsigned Safari
+  cannot ship to end users. Chrome companion remains the browser path.
+- **`docs/plans/straggler-preemption-design.md`** — **SUPERSEDED** by hedged tail
+  in `resilient-engine-design.md`. Do not implement preemption from that doc.
 
 ---
 

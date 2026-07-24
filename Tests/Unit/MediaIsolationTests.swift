@@ -38,4 +38,22 @@ final class MediaIsolationTests: XCTestCase {
         XCTAssertEqual(probe.mediaDecision, .allowed)
         XCTAssertEqual(probe.formatID, "140")
     }
+
+    func testMediaSiteProbeRecognizesKnownHosts() {
+        XCTAssertTrue(MediaSiteProbe.looksLikeMediaPage(urlString: "https://www.youtube.com/watch?v=abc"))
+        XCTAssertTrue(MediaSiteProbe.looksLikeMediaPage(urlString: "https://youtu.be/abc"))
+        XCTAssertFalse(MediaSiteProbe.looksLikeMediaPage(urlString: "https://cdn.example.test/file.mp4"))
+        XCTAssertFalse(MediaSiteProbe.looksLikeMediaPage(urlString: "magnet:?xt=urn:btih:abc"))
+    }
+
+    func testMediaSiteProbeFailsClosedWithoutBinary() {
+        XCTAssertThrowsError(
+            try MediaSiteProbe.probeMetadata(
+                urlString: "https://www.youtube.com/watch?v=abc",
+                executableURL: URL(fileURLWithPath: "/tmp/dm-missing-ytdlp-\(UUID().uuidString)")
+            )
+        ) { error in
+            XCTAssertEqual(error as? MediaSiteProbe.AvailabilityError, .executableMissing)
+        }
+    }
 }

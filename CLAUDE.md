@@ -172,4 +172,6 @@ Every work slice ends with `Artifacts/handoffs/<slice>-<UTC>.md`, led by `COMPLE
 
 `Documentation/adr/`: 0001 build system (XcodeGen) · 0002 warnings-as-errors scope (per-target, not on the xcodebuild command line — a global override breaks vendor SPM builds) · 0003 XPC client identity · 0004 test lanes · 0005 libcurl TLS backend · 0006 libtorrent deferred · 0007 Chrome native messaging · 0008 community GitHub distribution.
 
-`TorrentCore` and `MediaIsolation` are wired into the unit-test target only and are in **no** shipping target. That is deliberate (ADR 0006). Leave them alone.
+`TorrentCore` and `MediaIsolation` ship in **Presentation** for Compose inspection /
+optional yt-dlp probes only. They are **not** transfer engines. BitTorrent download
+and signed Safari distribution stay deferred (ADR 0006 / 0008).

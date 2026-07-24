@@ -21,12 +21,14 @@ are expected and documented. This is the track v0.2.0 shipped on.
 Only if a maintainer already has credentials and wants quieter first-launch UX:
 
 1. Developer ID Application certificate  
-2. Codesign app + embedded agent + ChromeNativeHost  
-3. `Scripts/release/notarize.sh <signed.dmg>`  
+2. `DM_CODESIGN_IDENTITY='Developer ID Application: …' make release-codesign APP=…/DownloadManager.app`  
+3. `Scripts/release/notarize.sh <signed.dmg>` (or `make release-notarize DMG=…`)  
 4. Staple + Gatekeeper check  
 5. Optional Sparkle keys / appcast  
 
-Do **not** block community releases on Track B.
+Do **not** block community releases on Track B. Both `codesign.sh` and
+`notarize.sh` **fail closed** when credentials are absent (exit 2) — that is
+success for the community path, not a broken release.
 
 ## Do not
 

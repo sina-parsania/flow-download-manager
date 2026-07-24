@@ -117,9 +117,13 @@ release-dmg-unsigned: ## Build unsigned Release DMG (no signing/notarization)
 install-release: ## Install latest (or TAG=vX.Y.Z) GitHub Release via Scripts/install.sh
 	@Scripts/install.sh $(if $(TAG),--tag $(TAG),) $(INSTALL_FLAGS)
 
+.PHONY: release-codesign
+release-codesign: ## Codesign an .app (BLOCKED without DM_CODESIGN_IDENTITY)
+	@Scripts/release/codesign.sh $(APP)
+
 .PHONY: release-notarize
 release-notarize: ## Notarize a signed DMG (BLOCKED without credentials)
-	@Scripts/release/notarize.sh
+	@Scripts/release/notarize.sh $(DMG)
 
 .PHONY: install-chrome-native-host
 install-chrome-native-host: ## Register the Chrome Native Messaging host (extension ID is derived; DM_CHROME_EXTENSION_ID overrides)

@@ -1,6 +1,26 @@
 # Straggler preemption — design
 
-Status: `DESIGN — implementing`
+Status: **SUPERSEDED**
+
+Superseded by [`resilient-engine-design.md`](resilient-engine-design.md)
+(hedged tail + cancel losing replica). Do **not** implement connection
+preemption from this document.
+
+The hedging approach keeps the slow connection contributing bytes and races a
+duplicate range on an idle slot instead of killing the straggler mid-Range.
+That matches libcurl’s fixed `Range: start-end` model without inventing a
+server-side early stop.
+
+Historical note: an earlier draft below proposed stopping the straggler and
+re-tiling its remainder. That was rejected in favour of hedging; the C
+`DMCurlEasyDownloadRequestStop` path is now used to cancel the *losing hedge
+replica*, not to preempt a healthy primary.
+
+---
+
+# Historical draft (do not implement)
+
+Status was: `DESIGN — implementing`
 Supersedes the "safe-zone tail steal" item deferred in
 `docs/plans/v0.3-speed-ux-deletion-plan.md`.
 

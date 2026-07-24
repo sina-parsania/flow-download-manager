@@ -2,7 +2,9 @@
 
 import Application
 import Domain
+import MediaIsolation
 import SwiftUI
+import TorrentCore
 import UniformTypeIdentifiers
 import XPCContracts
 
@@ -40,9 +42,23 @@ struct AddDownloadsSheet: View {
     @State private var startAt = Date().addingTimeInterval(3600)
     @State private var confirmationPhase: ConfirmationGate.Phase = .none
     @State private var confirmationCounts: [(stableKey: String, count: Int)] = []
+    @State private var torrentInspection: TorrentInspectionSummary?
+    @State private var mediaProbeBusy = false
+    @State private var mediaProbeLines: [String] = []
+
+    private static var torrentContentType: UTType {
+        UTType(filenameExtension: "torrent") ?? .data
+    }
 
     private var validCount: Int {
         extraction?.validCount ?? 0
+    }
+
+    private var mediaCandidateURLs: [String] {
+        (extraction?.items ?? [])
+            .filter { $0.status == .valid }
+            .compactMap(\.normalized)
+            .filter { MediaSiteProbe.looksLikeMediaPage(urlString: $0) }
     }
 
     private var optionsLocked: Bool {
@@ -57,6 +73,12 @@ struct AddDownloadsSheet: View {
                     pasteStage
                     if let extraction, !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         liveStats(extraction)
+                    }
+                    if let torrentInspection {
+                        torrentInspectionCard(torrentInspection)
+                    }
+                    if !mediaCandidateURLs.isEmpty || !mediaProbeLines.isEmpty {
+                        mediaProbeCard
                     }
                     DestinationFolderCard(
                         engineClient: library.engineClient,
@@ -100,7 +122,9 @@ struct AddDownloadsSheet: View {
         }
         .fileImporter(
             isPresented: $isImportPresented,
-            allowedContentTypes: [.plainText, .commaSeparatedText, .utf8PlainText],
+            allowedContentTypes: [
+                .plainText, .commaSeparatedText, .utf8PlainText, Self.torrentContentType
+            ],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -155,7 +179,7 @@ struct AddDownloadsSheet: View {
                         Text("Paste or drop links here")
                             .font(FlowTheme.Typeface.title(15))
                             .foregroundStyle(palette.inkSoft)
-                        Text("One URL per line works best. Lists and .txt / .csv files are fine.")
+                        Text("One URL per line works best. Lists, .txt / .csv, and .torrent inspection are fine.")
                             .font(FlowTheme.Typeface.caption(12))
                             .foregroundStyle(palette.inkSoft.opacity(0.85))
                     }
@@ -211,6 +235,105 @@ struct AddDownloadsSheet: View {
         }
     }
 
+    private func torrentInspectionCard(_ summary: TorrentInspectionSummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionEyebrow("Torrent file")
+            VStack(alignment: .leading, spacing: 8) {
+                Text(summary.displayName)
+                    .font(FlowTheme.Typeface.title(15))
+                    .foregroundStyle(palette.ink)
+                Text(
+                    "\(summary.fileCount) file\(summary.fileCount == 1 ? "" : "s") · "
+                        + ByteCountFormatter.string(fromByteCount: summary.totalBytes, countStyle: .file)
+                )
+                .font(FlowTheme.Typeface.caption(12))
+                .foregroundStyle(palette.inkSoft)
+                Text(
+                    "Inspection only — BitTorrent download isn’t available yet "
+                        + "(libtorrent is deferred)."
+                )
+                .font(FlowTheme.Typeface.caption(12))
+                .foregroundStyle(palette.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+                if !summary.samplePaths.isEmpty {
+                    ForEach(summary.samplePaths, id: \.self) { path in
+                        Text(path)
+                            .font(FlowTheme.Typeface.mono(11))
+                            .foregroundStyle(palette.inkSoft)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Button("Clear torrent inspection") {
+                    torrentInspection = nil
+                }
+                .buttonStyle(.plain)
+                .font(FlowTheme.Typeface.caption(12))
+                .foregroundStyle(palette.signal)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(palette.pinSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(palette.pinStroke, lineWidth: 1)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "Torrent \(summary.displayName), \(summary.fileCount) files. Download not available yet."
+        )
+    }
+
+    private var mediaProbeCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionEyebrow("Media pages")
+            VStack(alignment: .leading, spacing: 8) {
+                Text(
+                    mediaCandidateURLs.isEmpty
+                        ? "Last probe results"
+                        : "\(mediaCandidateURLs.count) page link\(mediaCandidateURLs.count == 1 ? "" : "s") may need yt-dlp."
+                )
+                .font(FlowTheme.Typeface.caption(12))
+                .foregroundStyle(palette.inkSoft)
+                .fixedSize(horizontal: false, vertical: true)
+
+                if MediaSiteProbe.resolvedExecutable() == nil {
+                    Text(
+                        "yt-dlp isn’t bundled. Direct file URLs still queue. "
+                            + "Optional: make vendor-media-helpers when VendorBuild manifests include checksums."
+                    )
+                    .font(FlowTheme.Typeface.caption(12))
+                    .foregroundStyle(palette.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !mediaCandidateURLs.isEmpty {
+                    Button {
+                        Task { await probeMediaCandidates() }
+                    } label: {
+                        Text(mediaProbeBusy ? "Checking…" : "Check with yt-dlp")
+                    }
+                    .disabled(mediaProbeBusy || optionsLocked || MediaSiteProbe.resolvedExecutable() == nil)
+                }
+
+                ForEach(mediaProbeLines, id: \.self) { line in
+                    Text(line)
+                        .font(FlowTheme.Typeface.caption(12))
+                        .foregroundStyle(palette.inkSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(palette.pinSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(palette.pinStroke, lineWidth: 1)
+            }
+        }
+    }
+
     /// Counts alone never told the user *which* line was rejected or why — a
     /// magnet link just silently became a "Skip". This names each one.
     @ViewBuilder
@@ -260,7 +383,7 @@ struct AddDownloadsSheet: View {
         case .unsupported:
             switch (item.scheme ?? "").lowercased() {
             case "magnet":
-                return "Magnet links aren’t supported yet."
+                return "Magnet links aren’t supported yet — BitTorrent transfer is deferred (no libtorrent)."
             case "ftp", "ftps", "sftp":
                 return "FTP links aren’t supported yet."
             default:
@@ -731,6 +854,10 @@ struct AddDownloadsSheet: View {
         defer {
             if accessed { url.stopAccessingSecurityScopedResource() }
         }
+        if url.pathExtension.lowercased() == "torrent" {
+            inspectTorrentFile(url)
+            return
+        }
         do {
             let text = try ImportTextIngest.readText(from: url)
             if input.isEmpty {
@@ -754,6 +881,53 @@ struct AddDownloadsSheet: View {
         }
     }
 
+    private func inspectTorrentFile(_ url: URL) {
+        do {
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            guard data.count <= ImportTextIngest.maxBytes else {
+                statusMessage = "Torrent exceeds the 8 MB import limit."
+                return
+            }
+            let meta = try TorrentBencode.metadata(fromTorrentFile: data)
+            torrentInspection = TorrentInspectionSummary(
+                fileName: url.lastPathComponent,
+                name: meta.name,
+                fileCount: meta.files.count,
+                totalBytes: meta.totalLength,
+                samplePaths: Array(meta.files.prefix(5).map(\.path))
+            )
+            statusMessage = "Inspected \(url.lastPathComponent) — download not available yet."
+        } catch {
+            torrentInspection = nil
+            statusMessage = "Could not read that .torrent file."
+        }
+    }
+
+    @MainActor
+    private func probeMediaCandidates() async {
+        mediaProbeBusy = true
+        defer { mediaProbeBusy = false }
+        var lines: [String] = []
+        for url in mediaCandidateURLs.prefix(5) {
+            do {
+                let probe = try MediaSiteProbe.probeMetadata(urlString: url)
+                if probe.drmFlag || probe.mediaDecision == .rejectedDRM {
+                    lines.append("Rejected DRM: \(probe.title ?? url)")
+                } else if probe.isLive {
+                    lines.append("Live stream (not queued as a file): \(probe.title ?? url)")
+                } else {
+                    lines.append("OK: \(probe.title ?? url)")
+                }
+            } catch MediaSiteProbe.AvailabilityError.executableMissing {
+                lines.append("yt-dlp not found — install via VendorBuild or skip page links.")
+                break
+            } catch {
+                lines.append("Probe failed for \(url)")
+            }
+        }
+        mediaProbeLines = lines
+    }
+
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         var handled = false
         for provider in providers {
@@ -766,7 +940,9 @@ struct AddDownloadsSheet: View {
                     } else {
                         nil
                     }
-                    guard let url, ImportTextIngest.isImportableFile(url) else { return }
+                    guard let url else { return }
+                    let isTorrent = url.pathExtension.lowercased() == "torrent"
+                    guard isTorrent || ImportTextIngest.isImportableFile(url) else { return }
                     Task { @MainActor in
                         importFile(url)
                     }
@@ -993,5 +1169,20 @@ enum TransferLimitInput {
         }
 
         return .success(validated)
+    }
+}
+
+/// Local Compose-only summary of a `.torrent` file. Never reaches the agent —
+/// BitTorrent transfer remains deferred (ADR 0006).
+private struct TorrentInspectionSummary: Equatable {
+    let fileName: String
+    let name: String?
+    let fileCount: Int
+    let totalBytes: Int64
+    let samplePaths: [String]
+
+    var displayName: String {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? fileName : trimmed
     }
 }

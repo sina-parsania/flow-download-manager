@@ -164,7 +164,10 @@ let package = Package(
 
         .target(
             name: "Presentation",
-            dependencies: ["Domain", "XPCContracts", "SharedObservability", "Application"],
+            dependencies: [
+                "Domain", "XPCContracts", "SharedObservability", "Application",
+                "TorrentCore", "MediaIsolation"
+            ],
             path: "Sources/Presentation",
             swiftSettings: strict
         ),

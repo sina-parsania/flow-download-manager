@@ -9,6 +9,7 @@ import XPCContracts
 public struct SettingsView: View {
     @StateObject private var model = SettingsModel()
     @EnvironmentObject private var launchAgent: LaunchAgentModel
+    @EnvironmentObject private var updateCheck: UpdateCheckController
     @AppStorage(ClipboardMonitor.userDefaultsKey) private var clipboardMonitoringEnabled = false
     @AppStorage(FlowAppearanceMode.userDefaultsKey) private var appearanceModeRaw = FlowAppearanceMode.system.rawValue
 
@@ -311,6 +312,15 @@ public struct SettingsView: View {
                     value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
                 )
                 LabeledContent("License", value: "GPL-3.0-or-later")
+                Button(updateCheck.isChecking ? "Checking…" : "Check for Updates…") {
+                    updateCheck.checkForUpdates()
+                }
+                .disabled(updateCheck.isChecking)
+                .accessibilityLabel("Check for Updates")
+                Text("Compares this build to the latest GitHub release. Updates are not installed automatically.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let status = model.statusMessage {
@@ -323,6 +333,18 @@ public struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 480)
         .task { await model.reload() }
+        .alert(updateCheck.alertTitle, isPresented: $updateCheck.isAlertPresented) {
+            if updateCheck.alertURL != nil {
+                Button("Open Release") {
+                    updateCheck.openAlertURL()
+                }
+                Button("Later", role: .cancel) {}
+            } else {
+                Button("OK", role: .cancel) {}
+            }
+        } message: {
+            Text(updateCheck.alertMessage)
+        }
     }
 }
 

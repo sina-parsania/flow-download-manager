@@ -16,6 +16,7 @@ struct DownloadManagerApp: App {
     @StateObject private var library: LibraryModel
     @StateObject private var menuBar = MenuBarController()
     @StateObject private var clipboardMonitor = ClipboardMonitor()
+    @StateObject private var updateCheck = UpdateCheckController()
 
     init() {
         // Non-UI diagnostic path: report / re-register SMAppService, then exit.
@@ -61,8 +62,26 @@ struct DownloadManagerApp: App {
                     // Local-dev `downloadmanager://` handoff — prefills Add sheet only.
                     library.handleOpenURL(url)
                 }
+                .alert(updateCheck.alertTitle, isPresented: $updateCheck.isAlertPresented) {
+                    if updateCheck.alertURL != nil {
+                        Button("Open Release") {
+                            updateCheck.openAlertURL()
+                        }
+                        Button("Later", role: .cancel) {}
+                    } else {
+                        Button("OK", role: .cancel) {}
+                    }
+                } message: {
+                    Text(updateCheck.alertMessage)
+                }
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button(updateCheck.isChecking ? "Checking for Updates…" : "Check for Updates…") {
+                    updateCheck.checkForUpdates()
+                }
+                .disabled(updateCheck.isChecking)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Add Downloads…") { library.addSheetPresented = true }
                     .keyboardShortcut("n", modifiers: .command)
@@ -91,6 +110,7 @@ struct DownloadManagerApp: App {
         Settings {
             SettingsView()
                 .environmentObject(launchAgent)
+                .environmentObject(updateCheck)
                 .flowAppearance()
         }
     }

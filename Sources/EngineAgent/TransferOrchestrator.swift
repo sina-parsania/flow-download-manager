@@ -18,20 +18,23 @@ import XPCContracts
 private final class LiveByteCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var bytes: Int64?
+    private var totalBytes: Int64?
 
-    func record(_ value: Int64) {
+    func record(_ value: Int64, total: Int64? = nil) {
         lock.lock()
         if value > (bytes ?? -1) { bytes = value }
+        if let total, total > 0 { totalBytes = total }
         lock.unlock()
     }
 
-    func take() -> Int64? {
+    func take() -> (bytes: Int64, total: Int64?)? {
         lock.lock()
         defer {
             bytes = nil
             lock.unlock()
         }
-        return bytes
+        guard let bytes else { return nil }
+        return (bytes, totalBytes)
     }
 }
 
@@ -331,8 +334,8 @@ public actor TransferOrchestrator {
             let ticker = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: Self.progressTickNanoseconds)
-                    guard let self, let bytes = liveBytes.take() else { continue }
-                    await recordProgress(jobID: jobID, bytes: bytes, total: nil)
+                    guard let self, let sample = liveBytes.take() else { continue }
+                    await recordProgress(jobID: jobID, bytes: sample.bytes, total: sample.total)
                 }
             }
             defer { ticker.cancel() }
@@ -346,11 +349,15 @@ public actor TransferOrchestrator {
                     preferredConnectionCount: connectionTarget,
                     socketBudget: 1 + extraSegmentSockets
                 ),
-                onProgress: { bytes in liveBytes.record(bytes) }
+                onProgress: { bytes, total in liveBytes.record(bytes, total: total) }
             )
             ticker.cancel()
             // Final position, so the UI never stalls one tick short of the end.
-            recordProgress(jobID: jobID, bytes: outcome.bytesWritten, total: nil)
+            recordProgress(
+                jobID: jobID,
+                bytes: outcome.bytesWritten,
+                total: outcome.identity.contentLength
+            )
 
             if cancelledJobIDs.contains(jobID) || abort.isSet && cancelledJobIDs.contains(jobID) {
                 _ = try JobRepository.updateJobState(

@@ -266,9 +266,17 @@ public enum SegmentedTransfer {
 
         let probe = try TransferCore.probeRangeSupport(url: url, options: options)
         guard probe.httpStatus == 206, let total = TransferCore.totalLength(from: probe) else {
+            // Even without ranges, Content-Length from the probe lets Size/ETA
+            // update before the first write callback learns dltotal.
+            let knownTotal = TransferCore.totalLength(from: probe)
+            let progress: TransferCore.ProgressHandler? = if let onProgress {
+                { written, reported in onProgress(written, reported ?? knownTotal) }
+            } else {
+                nil
+            }
             return try singleOutcome(
                 url: url, partialURL: partialURL, options: options,
-                abortFlag: abortFlag, onProgress: onProgress
+                abortFlag: abortFlag, onProgress: progress
             )
         }
 
@@ -384,7 +392,7 @@ public enum SegmentedTransfer {
     ) throws -> Outcome {
         // Publish already-downloaded bytes immediately so relaunch UI does not
         // flash 0% before the first curl progress callback.
-        onProgress?(ledger.baseOffset + ledger.downloadedBytes())
+        onProgress?(ledger.baseOffset + ledger.downloadedBytes(), ledger.total)
         // ONE governor for the whole job, fed the ledger's aggregate byte count.
         // The per-easy governor inside `downloadSingleStream` cannot cap a
         // segmented transfer: the curl_multi transport never goes through it at
@@ -444,7 +452,7 @@ public enum SegmentedTransfer {
                             entry: entryIndices[segment],
                             written: bases[segment] + written
                         )
-                        onProgress?(progressOffset + done)
+                        onProgress?(progressOffset + done, ledger.total)
                         // `done` is the job's cumulative total, so one governor
                         // sees the aggregate rate across every live segment.
                         // On the curl_multi transport this callback runs on the
@@ -563,7 +571,7 @@ public enum SegmentedTransfer {
                 }
                 let pieceProgress: TransferCore.ProgressHandler? =
                     if let report = onSegmentProgress {
-                        { written in report(index, written) }
+                        { written, _ in report(index, written) }
                     } else {
                         nil
                     }

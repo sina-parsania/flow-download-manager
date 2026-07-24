@@ -39,8 +39,10 @@ typedef struct DMCurlDownloadResult {
 void DMCurlDownloadResultClear(DMCurlDownloadResult *result);
 
 /// Optional progress callback. @c written is bytes written in this transfer
-/// (not including @c fileOffset). Return non-zero to abort.
-typedef int (*DMCurlProgressCallback)(curl_off_t written, void *userdata);
+/// (not including @c fileOffset). @c total is the expected download size for
+/// this easy handle when known (Content-Length / range length), else -1.
+/// Return non-zero to abort.
+typedef int (*DMCurlProgressCallback)(curl_off_t written, curl_off_t total, void *userdata);
 
 /// Blocking GET (or ranged GET when @c rangeHeader is non-NULL, e.g. "0-1023")
 /// writing body bytes with @c pwrite at @c fileOffset. @c fd must be open for write.

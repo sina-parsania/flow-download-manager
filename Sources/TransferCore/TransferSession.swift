@@ -95,7 +95,7 @@ public enum TransferCore {
         case aborted
     }
 
-    public typealias ProgressHandler = @Sendable (Int64) -> Void
+    public typealias ProgressHandler = @Sendable (_ bytesTransferred: Int64, _ totalBytes: Int64?) -> Void
 
     /// Downloads `url` into a sibling partial file at `partialURL` using positioned writes.
     public static func downloadSingleStream(
@@ -236,7 +236,7 @@ public enum TransferCore {
         }
 
         let progress: ProgressHandler? = if let onProgress {
-            { written in onProgress(existing + written) }
+            { written, reported in onProgress(existing + written, reported.map { existing + $0 } ?? total) }
         } else {
             nil
         }
@@ -320,9 +320,9 @@ public enum TransferCore {
             : nil
         let gatedProgress: ProgressHandler? = {
             guard let governor else { return onProgress }
-            return { written in
+            return { written, total in
                 governor.noteProgress(totalWritten: written)
-                onProgress?(written)
+                onProgress?(written, total)
             }
         }()
         return withProgressContext(gatedProgress) { progressCtx in
@@ -408,10 +408,11 @@ public enum TransferCore {
         let box = ProgressBox(onProgress)
         let unmanaged = Unmanaged.passRetained(box)
         defer { unmanaged.release() }
-        let callback: DMCurlProgressCallback = { written, userdata in
+        let callback: DMCurlProgressCallback = { written, total, userdata in
             guard let userdata else { return 0 }
             let box = Unmanaged<ProgressBox>.fromOpaque(userdata).takeUnretainedValue()
-            box.handler(Int64(written))
+            let knownTotal: Int64? = total > 0 ? Int64(total) : nil
+            box.handler(Int64(written), knownTotal)
             return 0
         }
         return body(ProgressContext(

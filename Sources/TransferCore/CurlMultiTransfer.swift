@@ -21,6 +21,11 @@ public extension TransferCore {
             throw TransferError.unsupportedScheme(parsed.scheme)
         }
         do {
+            let multiProgress: (@Sendable (Int64) -> Void)? = if let onProgress {
+                { bytes in onProgress(bytes, nil) }
+            } else {
+                nil
+            }
             return try CurlMultiLoop.downloadRangesToFile(
                 url: url,
                 partialURL: partialURL,
@@ -33,7 +38,7 @@ public extension TransferCore {
                 proxyURL: options.proxyURL,
                 cookieJarPath: options.cookieJarPath,
                 extraHeadersPayload: options.extraHeadersCurlPayload,
-                onProgress: onProgress,
+                onProgress: multiProgress,
                 onSegmentProgress: onSegmentProgress,
                 maxConcurrent: maxConcurrent,
                 replicaGroupByRangeIndex: replicaGroupByRangeIndex

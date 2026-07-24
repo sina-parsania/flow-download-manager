@@ -177,11 +177,14 @@ public enum CurlMultiLoop {
                                         state: progressState
                                     )
                                     boxesByIndex[index] = box
-                                    progressCallback = { written, userdata in
+                                    progressCallback = { written, total, userdata in
                                         guard let userdata else { return 0 }
                                         let box = Unmanaged<MultiSegmentProgressBox>
                                             .fromOpaque(userdata)
                                             .takeUnretainedValue()
+                                        // Segment progress is bytes within the range;
+                                        // job-level total is supplied by SegmentedTransfer.
+                                        _ = total
                                         box.record(written: Int64(written))
                                         return 0
                                     }

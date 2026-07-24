@@ -68,7 +68,7 @@ final class FlakyLinkIntegrationTests: XCTestCase {
         _ = try SegmentedTransfer.downloadHTTP(
             url: "http://127.0.0.1:\(port)/fixtures/flaky?size=\(size)&drops=4",
             partialURL: partial,
-            onProgress: { observed.record($0) }
+            onProgress: { bytes, _ in observed.record(bytes) }
         )
 
         XCTAssertFalse(observed.wentBackwards, "reported progress regressed after a drop")

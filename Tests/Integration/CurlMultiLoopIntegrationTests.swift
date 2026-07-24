@@ -63,7 +63,7 @@ final class CurlMultiLoopIntegrationTests: XCTestCase {
                     expectedBytes: total - mid
                 )
             ],
-            onProgress: { written in
+            onProgress: { written, _ in
                 progressSamples.append(written)
             }
         )

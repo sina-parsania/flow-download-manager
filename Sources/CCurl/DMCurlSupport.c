@@ -156,6 +156,9 @@ typedef struct {
     int fd;
     curl_off_t offset;
     curl_off_t written;
+    /* Expected body size for this easy (-1 unknown). Updated from XFERINFO
+     * dltotal once libcurl learns Content-Length / Content-Range length. */
+    curl_off_t knownTotal;
     int writeError;
     /* Set by DMCurlEasyDownloadRequestStop. Distinct from abortFlag: that one
      * is job-wide and means "the user cancelled"; this one means "give your
@@ -326,7 +329,7 @@ static size_t DMCurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *us
         cursor += wrote;
         remaining -= (size_t)wrote;
         if (ctx->progressCallback != NULL) {
-            if (ctx->progressCallback(ctx->written, ctx->progressUserdata) != 0) {
+            if (ctx->progressCallback(ctx->written, ctx->knownTotal, ctx->progressUserdata) != 0) {
                 if (ctx->abortFlag != NULL) {
                     *(ctx->abortFlag) = 1;
                 }
@@ -344,11 +347,13 @@ static int DMCurlXferInfoCallback(
     curl_off_t ultotal,
     curl_off_t ulnow
 ) {
-    (void)dltotal;
     (void)dlnow;
     (void)ultotal;
     (void)ulnow;
     DMCurlWriteCtx *ctx = (DMCurlWriteCtx *)clientp;
+    if (dltotal > 0) {
+        ctx->knownTotal = dltotal;
+    }
     if (DMCurlShouldAbort(ctx)) {
         return 1;
     }
@@ -389,6 +394,7 @@ CURLcode DMCurlEasyDownloadToFD(
         .fd = fd,
         .offset = fileOffset,
         .written = 0,
+        .knownTotal = -1,
         .writeError = 0,
         .abortFlag = abortFlag,
         .progressCallback = progressCallback,
@@ -625,6 +631,7 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
     download->writeCtx.fd = fd;
     download->writeCtx.offset = fileOffset;
     download->writeCtx.written = 0;
+    download->writeCtx.knownTotal = -1;
     download->writeCtx.writeError = 0;
     download->writeCtx.stopRequested = 0;
     download->writeCtx.abortFlag = abortFlag;

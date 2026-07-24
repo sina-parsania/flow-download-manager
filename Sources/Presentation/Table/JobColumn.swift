@@ -97,7 +97,12 @@ struct JobColumn {
         cell.identifier = id
         let field = NSTextField(labelWithString: "")
         field.translatesAutoresizingMaskIntoConstraints = false
+        field.usesSingleLineMode = true
+        field.maximumNumberOfLines = 1
         field.lineBreakMode = .byTruncatingTail
+        field.cell?.lineBreakMode = .byTruncatingTail
+        field.cell?.truncatesLastVisibleLine = true
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         cell.addSubview(field)
         cell.textField = field
         NSLayoutConstraint.activate([
@@ -110,19 +115,14 @@ struct JobColumn {
 
     private static func nameCell(_ tableView: NSTableView, model: JobRowModel) -> NSView {
         let id = NSUserInterfaceItemIdentifier("cell.name")
-        let cell: NSTableCellView = dequeueTextCell(tableView, id: id)
-        let name = NSMutableAttributedString(string: model.name + "\n", attributes: [
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
-            .foregroundColor: NSColor.labelColor
-        ])
-        name.append(NSAttributedString(string: model.sourceHost, attributes: [
-            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
-            .foregroundColor: NSColor.secondaryLabelColor
-        ]))
-        cell.textField?.attributedStringValue = name
-        cell.textField?.maximumNumberOfLines = 2
-        cell.textField?.usesSingleLineMode = false
-        cell.textField?.setAccessibilityLabel("\(model.name), from \(model.sourceHost)")
+        let cell: NameCellView
+        if let reused = tableView.makeView(withIdentifier: id, owner: nil) as? NameCellView {
+            cell = reused
+        } else {
+            cell = NameCellView()
+            cell.identifier = id
+        }
+        cell.configure(name: model.name, host: model.sourceHost)
         return cell
     }
 
@@ -153,6 +153,63 @@ struct JobColumn {
     }
 }
 
+/// Name + host stacked; each line truncates with an ellipsis (never wraps).
+@MainActor
+final class NameCellView: NSTableCellView {
+    private let nameField = NSTextField(labelWithString: "")
+    private let hostField = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureField(
+            nameField,
+            font: .systemFont(ofSize: NSFont.systemFontSize),
+            color: .labelColor
+        )
+        configureField(
+            hostField,
+            font: .systemFont(ofSize: NSFont.smallSystemFontSize),
+            color: .secondaryLabelColor
+        )
+        addSubview(nameField)
+        addSubview(hostField)
+        textField = nameField
+        NSLayoutConstraint.activate([
+            nameField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            nameField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            nameField.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            hostField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            hostField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            hostField.topAnchor.constraint(equalTo: nameField.bottomAnchor, constant: 1),
+            hostField.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(name: String, host: String) {
+        nameField.stringValue = name
+        hostField.stringValue = host
+        toolTip = host.isEmpty ? name : "\(name)\n\(host)"
+        setAccessibilityLabel("\(name), from \(host)")
+    }
+
+    private func configureField(_ field: NSTextField, font: NSFont, color: NSColor) {
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.font = font
+        field.textColor = color
+        field.usesSingleLineMode = true
+        field.maximumNumberOfLines = 1
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.lineBreakMode = .byTruncatingTail
+        field.cell?.truncatesLastVisibleLine = true
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+}
+
 /// Reusable progress cell: a determinate bar plus a monospaced-digit label.
 /// Honors Reduce Motion by never animating (progress reflects throttled snapshots
 /// — `03-design-system-ui-ux.md` §5).
@@ -171,7 +228,12 @@ final class ProgressCellView: NSTableCellView {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         label.textColor = .secondaryLabelColor
+        label.usesSingleLineMode = true
+        label.maximumNumberOfLines = 1
         label.lineBreakMode = .byTruncatingTail
+        label.cell?.lineBreakMode = .byTruncatingTail
+        label.cell?.truncatesLastVisibleLine = true
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         addSubview(bar)
         addSubview(label)
         NSLayoutConstraint.activate([

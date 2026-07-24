@@ -34,25 +34,41 @@ struct DownloadPinCard: View {
                     .font(FlowTheme.Typeface.title(13))
                     .foregroundStyle(palette.ink)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(row.name)
                 HStack(spacing: 8) {
                     Text(row.sourceHost)
                         .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(-1)
                     Text("·")
+                        .fixedSize()
                     Text(JobRowFormatting.speed(row.speedBytesPerSecond))
+                        .lineLimit(1)
+                        .fixedSize()
                     if row.state == .downloading {
                         let etaText = JobRowFormatting.eta(row.etaSeconds)
                         if etaText != "—" {
                             Text("·")
+                                .fixedSize()
                             Text(etaText)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                     }
                     Text("·")
+                        .fixedSize()
                     Text(row.categoryKey.capitalized)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(-1)
                 }
                 .font(FlowTheme.Typeface.caption(11))
                 .foregroundStyle(palette.inkSoft)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
 
             pauseResumeStatusButton
         }
@@ -131,6 +147,7 @@ struct DownloadPinCard: View {
                 Text(row.state.shortLabel)
                     .font(FlowTheme.Typeface.caption(10))
                     .tracking(0.6)
+                    .lineLimit(1)
             }
             .foregroundStyle(palette.ink)
             .padding(.horizontal, 9)

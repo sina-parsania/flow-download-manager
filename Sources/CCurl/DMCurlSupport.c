@@ -4,14 +4,73 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+/* Single definition so the two easy-handle setup paths cannot drift apart.
+ * Keep in step with VERSION at release time (Documentation/release-checklist.md). */
+#define DM_USER_AGENT "Flow/0.2.0"
+
+/* Process-wide share handle: every easy created here reuses one DNS cache and
+ * one TLS session cache. Segmented downloads open N connections to the same
+ * host at once; without this each one repeats the DNS lookup and a full TLS
+ * handshake. With it the probe warms the cache and the segments resume
+ * sessions, cutting a round trip off every segment's time-to-first-byte.
+ *
+ * CURL_LOCK_DATA_CONNECT is deliberately NOT shared: sharing the connection
+ * cache across threads serializes handle setup, which is the opposite of what
+ * segmented transfers want. */
+static CURLSH *gDMCurlShare = NULL;
+static pthread_mutex_t gDMCurlShareLocks[CURL_LOCK_DATA_LAST];
+
+static void DMCurlShareLock(CURL *handle, curl_lock_data data, curl_lock_access access, void *userptr) {
+    (void)handle;
+    (void)access;
+    (void)userptr;
+    if ((int)data >= 0 && (int)data < CURL_LOCK_DATA_LAST) {
+        (void)pthread_mutex_lock(&gDMCurlShareLocks[(int)data]);
+    }
+}
+
+static void DMCurlShareUnlock(CURL *handle, curl_lock_data data, void *userptr) {
+    (void)handle;
+    (void)userptr;
+    if ((int)data >= 0 && (int)data < CURL_LOCK_DATA_LAST) {
+        (void)pthread_mutex_unlock(&gDMCurlShareLocks[(int)data]);
+    }
+}
+
 CURLcode DMCurlGlobalInit(void) {
-    return curl_global_init(CURL_GLOBAL_DEFAULT);
+    CURLcode code = curl_global_init(CURL_GLOBAL_DEFAULT);
+    if (code != CURLE_OK) {
+        return code;
+    }
+    if (gDMCurlShare == NULL) {
+        for (int i = 0; i < CURL_LOCK_DATA_LAST; i++) {
+            (void)pthread_mutex_init(&gDMCurlShareLocks[i], NULL);
+        }
+        gDMCurlShare = curl_share_init();
+        if (gDMCurlShare != NULL) {
+            curl_share_setopt(gDMCurlShare, CURLSHOPT_LOCKFUNC, DMCurlShareLock);
+            curl_share_setopt(gDMCurlShare, CURLSHOPT_UNLOCKFUNC, DMCurlShareUnlock);
+            curl_share_setopt(gDMCurlShare, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+            curl_share_setopt(gDMCurlShare, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
+        }
+    }
+    /* A share handle is an optimisation: if it could not be created the
+     * transfer still works, just without cache reuse. */
+    return CURLE_OK;
 }
 
 void DMCurlGlobalCleanup(void) {
+    if (gDMCurlShare != NULL) {
+        curl_share_cleanup(gDMCurlShare);
+        gDMCurlShare = NULL;
+        for (int i = 0; i < CURL_LOCK_DATA_LAST; i++) {
+            (void)pthread_mutex_destroy(&gDMCurlShareLocks[i]);
+        }
+    }
     curl_global_cleanup();
 }
 
@@ -35,6 +94,9 @@ static int DMCurlSockoptCallback(void *clientp, curl_socket_t curlfd, curlsockty
 }
 
 static void DMCurlApplyThroughputOptions(CURL *easy) {
+    if (gDMCurlShare != NULL) {
+        curl_easy_setopt(easy, CURLOPT_SHARE, gDMCurlShare);
+    }
     curl_easy_setopt(easy, CURLOPT_BUFFERSIZE, 1024L * 1024L);
     curl_easy_setopt(easy, CURLOPT_TCP_NODELAY, 1L);
     curl_easy_setopt(easy, CURLOPT_SOCKOPTFUNCTION, DMCurlSockoptCallback);
@@ -326,7 +388,7 @@ CURLcode DMCurlEasyDownloadToFD(
     curl_easy_setopt(easy, CURLOPT_XFERINFOFUNCTION, DMCurlXferInfoCallback);
     curl_easy_setopt(easy, CURLOPT_XFERINFODATA, &writeCtx);
     curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(easy, CURLOPT_USERAGENT, "DownloadManager/0.1");
+    curl_easy_setopt(easy, CURLOPT_USERAGENT, DM_USER_AGENT);
     DMCurlApplyThroughputOptions(easy);
     if (rangeHeader != NULL && rangeHeader[0] != '\0') {
         curl_easy_setopt(easy, CURLOPT_RANGE, rangeHeader);
@@ -349,9 +411,9 @@ CURLcode DMCurlEasyDownloadToFD(
     CURLcode code = curl_easy_perform(easy);
     out->code = code;
     out->bytesWritten = writeCtx.written;
-    if (writeCtx.written > 0) {
-        (void)fsync(fd);
-    }
+    // Durability is owned by the Swift transfer layer (one fsync after the
+    // map loop / single-stream finish). Per-easy fsync here serializes N
+    // redundant full-file syncs when many segments share one fd.
 
     if (writeCtx.writeError != 0) {
         code = CURLE_WRITE_ERROR;
@@ -436,7 +498,7 @@ static void DMCurlApplyEasyDownloadOptions(
     curl_easy_setopt(easy, CURLOPT_XFERINFOFUNCTION, DMCurlXferInfoCallback);
     curl_easy_setopt(easy, CURLOPT_XFERINFODATA, writeCtx);
     curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(easy, CURLOPT_USERAGENT, "DownloadManager/0.1");
+    curl_easy_setopt(easy, CURLOPT_USERAGENT, DM_USER_AGENT);
     DMCurlApplyThroughputOptions(easy);
     if (rangeHeader != NULL && rangeHeader[0] != '\0') {
         curl_easy_setopt(easy, CURLOPT_RANGE, rangeHeader);
@@ -468,9 +530,7 @@ static void DMCurlFillDownloadResult(
     out->contentLength = -1;
     out->code = code;
     out->bytesWritten = writeCtx->written;
-    if (writeCtx->written > 0) {
-        (void)fsync(writeCtx->fd);
-    }
+    // See DMCurlEasyDownloadToFD: Swift owns the single post-pass fsync.
     if (writeCtx->writeError != 0) {
         out->code = CURLE_WRITE_ERROR;
     } else if (DMCurlShouldAbort(writeCtx) && code != CURLE_OK) {

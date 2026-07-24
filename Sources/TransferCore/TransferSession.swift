@@ -143,9 +143,19 @@ public enum TransferCore {
         }
 
         let status = Int(result.httpStatus)
-        let successStatuses: Set<Int> = rangeHeader == nil ? [200] : [200, 206]
-        guard successStatuses.contains(status) else {
-            throw TransferError.httpStatus(status)
+        if parsed.isHTTPFamily {
+            let successStatuses: Set<Int> = rangeHeader == nil ? [200] : [200, 206]
+            guard successStatuses.contains(status) else {
+                throw TransferError.httpStatus(status)
+            }
+        } else {
+            // FTP reports 226/250 on a completed transfer and SFTP reports 0.
+            // Applying the HTTP gate here made every non-HTTP link fail. curl
+            // already surfaced real failures as a non-OK CURLcode above, so a
+            // 2xx-or-zero response code is success for these schemes.
+            guard status == 0 || (200 ... 299).contains(status) else {
+                throw TransferError.httpStatus(status)
+            }
         }
 
         let contentLength: Int64? = result.contentLength >= 0 ? Int64(result.contentLength) : nil

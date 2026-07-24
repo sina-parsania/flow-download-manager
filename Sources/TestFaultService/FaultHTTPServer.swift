@@ -16,12 +16,21 @@ import Network
 ///   GET /fixtures/no-range       -> 200 full body even when Range is requested
 ///   GET /fixtures/changing-etag  -> 200 with an ETag that changes each request
 ///   GET /fixtures/truncated      -> Content-Length larger than the bytes sent
+///   GET /fixtures/large          -> 2 MiB ranged body (real multi-segment plans)
+///   GET /fixtures/throughput     -> ranged body with a per-connection rate cap;
+///                                    `?size=&kbps=&slowFirst=&slowKbps=` — the
+///                                    throughput/tail benchmark fixture
 ///   GET /status/<code>           -> responds with that status code
 ///   POST /control/reset          -> clears request log + counters
 ///   GET  /control/logs           -> newline-delimited request log
 public final class FaultHTTPServer: @unchecked Sendable {
     /// Fixed fixture payload (deterministic bytes).
     public static let fixtureBody = Data((0 ..< 4096).map { UInt8($0 % 251) })
+
+    /// 2 MiB body served from `/fixtures/large`. Sized to land in
+    /// `preferredSegmentCount`'s 1 MiB…8 MiB band so segmented transfers under
+    /// test really run more than one range.
+    public static let largeBody = Data((0 ..< (2 * 1024 * 1024)).map { UInt8($0 % 251) })
     public static let strongETag = "\"dm-fixture-v1\""
 
     private let queue = DispatchQueue(label: "org.downloadmanager.local.faultservice")
@@ -29,6 +38,12 @@ public final class FaultHTTPServer: @unchecked Sendable {
     private var listener: NWListener?
     private var requestLog: [String] = []
     private var etagCounter = 0
+    /// Generated throughput bodies, cached by size so a benchmark that issues
+    /// many ranged requests does not rebuild the same buffer each time.
+    private var throughputBodies: [Int: Data] = [:]
+    /// Counts connections served by `/fixtures/throughput`, so `slowFirst` can
+    /// deterministically pick which connections are rate-starved.
+    private var throughputConnections = 0
 
     public private(set) var port: UInt16 = 0
 
@@ -79,6 +94,7 @@ public final class FaultHTTPServer: @unchecked Sendable {
         lock.lock()
         requestLog.removeAll()
         etagCounter = 0
+        throughputConnections = 0
         lock.unlock()
     }
 
@@ -153,6 +169,17 @@ public final class FaultHTTPServer: @unchecked Sendable {
         case "/fixtures/ok":
             serveFixture(rangeHeader: rangeHeader, acceptRanges: true, etag: Self.strongETag, on: connection)
 
+        case "/fixtures/large":
+            // Big enough that `preferredSegmentCount` actually picks a
+            // multi-segment plan; `/fixtures/ok` is 4 KiB and always tiles to 1.
+            serveFixture(
+                body: Self.largeBody,
+                rangeHeader: rangeHeader,
+                acceptRanges: true,
+                etag: Self.strongETag,
+                on: connection
+            )
+
         case "/fixtures/no-range":
             // Ignores Range: always returns the full 200 body.
             serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
@@ -177,7 +204,9 @@ public final class FaultHTTPServer: @unchecked Sendable {
             connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
 
         default:
-            if path.hasPrefix("/status/"), let code = Int(path.dropFirst("/status/".count)) {
+            if path.hasPrefix("/fixtures/throughput") {
+                serveThroughput(path: path, rangeHeader: rangeHeader, on: connection)
+            } else if path.hasPrefix("/status/"), let code = Int(path.dropFirst("/status/".count)) {
                 send(status: code, reason: reason(for: code), body: Data("status \(code)".utf8), on: connection)
             } else {
                 send(status: 404, reason: "Not Found", body: Data(), on: connection)
@@ -185,8 +214,102 @@ public final class FaultHTTPServer: @unchecked Sendable {
         }
     }
 
-    private func serveFixture(rangeHeader: String?, acceptRanges: Bool, etag: String, on connection: NWConnection) {
-        let body = Self.fixtureBody
+    // MARK: throughput fixture
+
+    /// `GET /fixtures/throughput?size=<bytes>&kbps=<cap>&slowFirst=<n>&slowKbps=<cap>`
+    ///
+    /// Range-capable body of `size` bytes. `kbps` caps each connection's send
+    /// rate; the first `slowFirst` connections are capped at `slowKbps` instead.
+    /// The per-connection cap is what makes segmented throughput measurable:
+    /// without it a loopback transfer finishes instantly and parallelism is
+    /// invisible. `slowFirst` reproduces the straggler that dominates the tail.
+    private func serveThroughput(path: String, rangeHeader: String?, on connection: NWConnection) {
+        let query = Self.queryItems(path)
+        let size = query["size"].flatMap(Int.init) ?? (8 * 1024 * 1024)
+        let kbps = query["kbps"].flatMap(Int.init) ?? 0
+        let slowFirst = query["slowFirst"].flatMap(Int.init) ?? 0
+        let slowKbps = query["slowKbps"].flatMap(Int.init) ?? 0
+        guard size > 0, size <= 512 * 1024 * 1024 else {
+            send(status: 400, reason: "Bad Request", body: Data(), on: connection)
+            return
+        }
+
+        lock.lock()
+        let body: Data
+        if let cached = throughputBodies[size] {
+            body = cached
+        } else {
+            body = Data((0 ..< size).map { UInt8($0 % 251) })
+            throughputBodies[size] = body
+        }
+        let index = throughputConnections
+        throughputConnections += 1
+        lock.unlock()
+
+        let rate = index < slowFirst ? slowKbps : kbps
+
+        let range = rangeHeader.flatMap { Self.parseRange($0, total: body.count) }
+        let payload = range.map { body.subdata(in: $0) } ?? body
+        var headers = range.map {
+            "HTTP/1.1 206 Partial Content\r\n"
+                + "Content-Range: bytes \($0.lowerBound)-\($0.upperBound - 1)/\(body.count)\r\n"
+        } ?? "HTTP/1.1 200 OK\r\n"
+        headers += "Content-Length: \(payload.count)\r\n"
+        headers += "Accept-Ranges: bytes\r\n"
+        headers += "ETag: \(Self.strongETag)\r\n"
+        headers += "Connection: close\r\n\r\n"
+
+        connection.send(content: Data(headers.utf8), completion: .contentProcessed { [weak self] _ in
+            self?.sendThrottled(payload, from: 0, kbps: rate, on: connection)
+        })
+    }
+
+    /// Sends `body` in chunks, pacing each chunk so the connection averages
+    /// `kbps` kilobytes/second. `kbps <= 0` sends at full speed.
+    private func sendThrottled(_ body: Data, from offset: Int, kbps: Int, on connection: NWConnection) {
+        guard offset < body.count else {
+            connection.cancel()
+            return
+        }
+        let chunkSize = kbps > 0 ? min(64 * 1024, kbps * 1024) : 256 * 1024
+        let end = min(offset + chunkSize, body.count)
+        let chunk = body.subdata(in: offset ..< end)
+        let delay: TimeInterval = kbps > 0 ? Double(chunk.count) / Double(kbps * 1024) : 0
+
+        connection.send(content: chunk, completion: .contentProcessed { [weak self] error in
+            guard let self, error == nil else {
+                connection.cancel()
+                return
+            }
+            if delay > 0 {
+                queue.asyncAfter(deadline: .now() + delay) {
+                    self.sendThrottled(body, from: end, kbps: kbps, on: connection)
+                }
+            } else {
+                sendThrottled(body, from: end, kbps: kbps, on: connection)
+            }
+        })
+    }
+
+    private static func queryItems(_ path: String) -> [String: String] {
+        guard let mark = path.firstIndex(of: "?") else { return [:] }
+        var items: [String: String] = [:]
+        for pair in path[path.index(after: mark)...].split(separator: "&") {
+            let halves = pair.split(separator: "=", maxSplits: 1)
+            guard halves.count == 2 else { continue }
+            items[String(halves[0])] = String(halves[1])
+        }
+        return items
+    }
+
+    private func serveFixture(
+        body: Data? = nil,
+        rangeHeader: String?,
+        acceptRanges: Bool,
+        etag: String,
+        on connection: NWConnection
+    ) {
+        let body = body ?? Self.fixtureBody
         if acceptRanges, let rangeHeader, let range = Self.parseRange(rangeHeader, total: body.count) {
             let slice = body.subdata(in: range)
             var headers = "HTTP/1.1 206 Partial Content\r\n"

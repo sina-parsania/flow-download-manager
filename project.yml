@@ -118,11 +118,6 @@ targets:
           copyFiles:
             destination: wrapper
             subpath: Contents/Library/LaunchAgents
-      - path: Resources/NativeMessaging/org.downloadmanager.local.ChromeNativeHost.json
-        buildPhase:
-          copyFiles:
-            destination: resources
-            subpath: NativeMessaging
     dependencies:
       - package: DownloadKit
         product: Presentation
@@ -174,7 +169,7 @@ targets:
               - txt
               - csv
 
-  # --- Chrome Native Messaging host (Phase 2) ---
+  # --- Chrome Native Messaging host ---
   ChromeNativeHost:
     type: tool
     platform: macOS
@@ -271,6 +266,12 @@ targets:
     dependencies:
       - package: DownloadKit
         product: Presentation
+      - package: DownloadKit
+        product: TestFaultService
+      - package: DownloadKit
+        product: TransferCore
+      - package: DownloadKit
+        product: TransferCurlBridge
 
   UITests:
     type: bundle.ui-testing

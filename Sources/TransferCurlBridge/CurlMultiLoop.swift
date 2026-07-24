@@ -42,6 +42,13 @@ public enum CurlMultiLoop {
 
     /// Downloads each range into the same open file (positioned writes) until all complete.
     /// When `onProgress` is set, per-segment write progress is summed and reported.
+    ///
+    /// `maxConcurrent` bounds how many easies are ever live in the multi handle at
+    /// once (work-stealing / connection saturation, FR-TRN-009 S1). When `nil` or
+    /// `>= ranges.count`, every range starts immediately (backward compatible).
+    /// When lower, a pending queue refills a freed slot as soon as any easy
+    /// finishes, so a fast connection immediately grabs the next range instead of
+    /// idling until every live easy completes.
     public static func downloadRangesToFile(
         url: String,
         partialURL: URL,
@@ -55,7 +62,8 @@ public enum CurlMultiLoop {
         cookieJarPath: String? = nil,
         extraHeadersPayload: String? = nil,
         onProgress: (@Sendable (Int64) -> Void)? = nil,
-        onSegmentProgress: (@Sendable (Int, Int64) -> Void)? = nil
+        onSegmentProgress: (@Sendable (Int, Int64) -> Void)? = nil,
+        maxConcurrent: Int? = nil
     ) throws -> [Outcome] {
         guard !ranges.isEmpty else { throw MultiError.emptyRequests }
         try CurlBridge.initialize()
@@ -82,10 +90,12 @@ public enum CurlMultiLoop {
             }
         }
 
-        // Owned downloads not yet finished. Cleared as each Finish runs.
-        var liveDownloads: [OpaquePointer] = []
+        // Owned downloads not yet finished (keyed by range index). Cleared as each
+        // Finish runs; anything left here on scope exit (error/abort) is cleaned
+        // up below.
+        var liveByIndex: [Int: OpaquePointer] = [:]
         defer {
-            for download in liveDownloads {
+            for download in liveByIndex.values {
                 if let easy = DMCurlEasyDownloadGetHandle(download) {
                     _ = DMCurlMultiRemoveEasy(multi, easy)
                 }
@@ -94,7 +104,7 @@ public enum CurlMultiLoop {
                 DMCurlEasyDownloadFinish(download, CURLE_ABORTED_BY_CALLBACK, &discarded)
                 DMCurlDownloadResultClear(&discarded)
             }
-            liveDownloads.removeAll()
+            liveByIndex.removeAll()
         }
 
         let connect = Int(connectTimeoutMilliseconds)
@@ -107,17 +117,24 @@ public enum CurlMultiLoop {
                 onSegmentProgress: onSegmentProgress
             )
             : nil
-        // Retain per-segment boxes for the full multi loop lifetime.
-        var progressBoxes: [MultiSegmentProgressBox] = []
-        progressBoxes.reserveCapacity(ranges.count)
+
+        let effectiveMax = max(1, min(maxConcurrent ?? ranges.count, ranges.count))
+        var pending = Array(effectiveMax ..< ranges.count)
+        var outcomesByIndex: [Outcome?] = Array(repeating: nil, count: ranges.count)
+        // Retains a box only while its easy is live; freed right after that
+        // easy is removed from the multi handle and finished.
+        var boxesByIndex: [Int: MultiSegmentProgressBox] = [:]
+        var easyIndexByPointer: [UInt: Int] = [:]
+        // First range failure. Siblings keep running; thrown once they drain.
+        var firstError: Error?
 
         try url.withCString { urlC in
             try withOptionalCString(userpwd) { userpwdC in
                 try withOptionalCString(proxyURL) { proxyC in
                     try withOptionalCString(cookieJarPath) { cookieC in
                         try withOptionalCString(extraHeadersPayload) { headersC in
-                            for (index, range) in ranges.enumerated() {
-                                let progressBox: MultiSegmentProgressBox?
+                            func startEasy(_ index: Int) throws {
+                                let range = ranges[index]
                                 let progressCallback: DMCurlProgressCallback?
                                 let progressUserdata: UnsafeMutableRawPointer?
                                 if let progressState {
@@ -125,8 +142,7 @@ public enum CurlMultiLoop {
                                         segmentIndex: index,
                                         state: progressState
                                     )
-                                    progressBoxes.append(box)
-                                    progressBox = box
+                                    boxesByIndex[index] = box
                                     progressCallback = { written, userdata in
                                         guard let userdata else { return 0 }
                                         let box = Unmanaged<MultiSegmentProgressBox>
@@ -137,11 +153,9 @@ public enum CurlMultiLoop {
                                     }
                                     progressUserdata = Unmanaged.passUnretained(box).toOpaque()
                                 } else {
-                                    progressBox = nil
                                     progressCallback = nil
                                     progressUserdata = nil
                                 }
-                                _ = progressBox
                                 let created: OpaquePointer? = range.rangeHeader.withCString { rangeC in
                                     DMCurlEasyDownloadCreate(
                                         urlC,
@@ -163,6 +177,7 @@ public enum CurlMultiLoop {
                                 guard let created,
                                       let easy = DMCurlEasyDownloadGetHandle(created)
                                 else {
+                                    boxesByIndex.removeValue(forKey: index)
                                     throw MultiError.easyCreateFailed
                                 }
                                 let addCode = DMCurlMultiAddEasy(multi, easy)
@@ -171,147 +186,142 @@ public enum CurlMultiLoop {
                                     discarded.contentLength = -1
                                     DMCurlEasyDownloadFinish(created, CURLE_FAILED_INIT, &discarded)
                                     DMCurlDownloadResultClear(&discarded)
+                                    boxesByIndex.removeValue(forKey: index)
                                     throw MultiError.multiAddFailed
                                 }
-                                liveDownloads.append(created)
+                                liveByIndex[index] = created
+                                easyIndexByPointer[UInt(bitPattern: easy)] = index
                             }
+
+                            func finishEasy(index: Int, performCode: CURLcode) throws {
+                                guard let download = liveByIndex.removeValue(forKey: index) else { return }
+                                if let easy = DMCurlEasyDownloadGetHandle(download) {
+                                    easyIndexByPointer.removeValue(forKey: UInt(bitPattern: easy))
+                                    _ = DMCurlMultiRemoveEasy(multi, easy)
+                                }
+
+                                var result = DMCurlDownloadResult()
+                                result.contentLength = -1
+                                DMCurlEasyDownloadFinish(download, performCode, &result)
+                                // Only now is the easy destroyed, so the progress box it
+                                // points at (passUnretained) can safely be released.
+                                boxesByIndex.removeValue(forKey: index)
+                                defer { DMCurlDownloadResultClear(&result) }
+
+                                if result.code == CURLE_ABORTED_BY_CALLBACK || (abortFlag?.pointee ?? 0) != 0 {
+                                    throw MultiError.aborted
+                                }
+                                guard result.code == CURLE_OK else {
+                                    throw MultiError.curl(result.code)
+                                }
+                                let status = Int(result.httpStatus)
+                                guard status == 206 || status == 200 else {
+                                    throw MultiError.httpStatus(status)
+                                }
+                                let wrote = Int64(result.bytesWritten)
+                                if let expected = ranges[index].expectedBytes, wrote != expected {
+                                    throw MultiError.incompleteWrite(expected: expected, wrote: wrote)
+                                }
+                                outcomesByIndex[index] = Outcome(
+                                    httpStatus: status,
+                                    bytesWritten: wrote,
+                                    finalURL: result.finalURL.map { String(cString: $0) },
+                                    contentType: result.contentType.map { String(cString: $0) },
+                                    etag: result.etag.map { String(cString: $0) },
+                                    contentRange: result.contentRange.map { String(cString: $0) }
+                                )
+                            }
+
+                            /// Drains every `CURLMSG_DONE` available right now, then refills
+                            /// each freed slot from `pending` so a fast connection grabs the
+                            /// next range instead of idling until every live easy completes.
+                            ///
+                            /// Messages are collected before any handle is added or removed:
+                            /// mutating the multi handle while iterating its own message
+                            /// queue is not a contract libcurl documents.
+                            ///
+                            /// A range failure does not tear down healthy siblings. The first
+                            /// error is recorded, refilling stops, and already-running easies
+                            /// are drained to completion so their bytes stay recorded in the
+                            /// caller's segment map — then the error is thrown.
+                            @discardableResult
+                            func drainCompletions() throws -> Int {
+                                var completed: [(index: Int, code: CURLcode)] = []
+                                var msgsLeft: Int32 = 0
+                                while let msg = DMCurlMultiInfoRead(multi, &msgsLeft) {
+                                    guard msg.pointee.msg == CURLMSG_DONE,
+                                          let easy = msg.pointee.easy_handle,
+                                          let index = easyIndexByPointer[UInt(bitPattern: easy)]
+                                    else { continue }
+                                    completed.append((index, msg.pointee.data.result))
+                                }
+
+                                for item in completed {
+                                    do {
+                                        try finishEasy(index: item.index, performCode: item.code)
+                                    } catch {
+                                        if firstError == nil { firstError = error }
+                                    }
+                                    guard firstError == nil, let next = pending.first else { continue }
+                                    pending.removeFirst()
+                                    try startEasy(next)
+                                }
+
+                                if firstError != nil {
+                                    pending.removeAll()
+                                }
+                                return completed.count
+                            }
+
+                            for index in 0 ..< effectiveMax {
+                                try startEasy(index)
+                            }
+
+                            var running: Int32 = 0
+                            var performCode = DMCurlMultiPerform(multi, &running)
+                            guard performCode == CURLM_OK else {
+                                throw MultiError.curl(CURLE_FAILED_INIT)
+                            }
+                            try drainCompletions()
+
+                            while !liveByIndex.isEmpty || !pending.isEmpty {
+                                if let abortFlag, abortFlag.pointee != 0 {
+                                    throw MultiError.aborted
+                                }
+                                var numfds: Int32 = 0
+                                let waitCode = DMCurlMultiWait(multi, 250, &numfds)
+                                guard waitCode == CURLM_OK else {
+                                    throw MultiError.curl(CURLE_FAILED_INIT)
+                                }
+                                performCode = DMCurlMultiPerform(multi, &running)
+                                guard performCode == CURLM_OK else {
+                                    throw MultiError.curl(CURLE_FAILED_INIT)
+                                }
+                                let processed = try drainCompletions()
+                                // libcurl reports nothing active and produced no
+                                // completion, yet handles are still tracked: the
+                                // easy↔index map has desynced. Fail instead of
+                                // spinning on a wait that now returns instantly.
+                                if running == 0, processed == 0, !liveByIndex.isEmpty {
+                                    throw MultiError.curl(CURLE_FAILED_INIT)
+                                }
+                            }
+
+                            if let firstError { throw firstError }
                         }
                     }
                 }
             }
         }
-        // Keep boxes alive through perform/wait.
-        try withExtendedLifetime(progressBoxes) {
-            var running: Int32 = 0
-            var performCode = DMCurlMultiPerform(multi, &running)
-            guard performCode == CURLM_OK else {
-                throw MultiError.curl(CURLE_FAILED_INIT)
-            }
 
-            while running > 0 {
-                if let abortFlag, abortFlag.pointee != 0 {
-                    throw MultiError.aborted
-                }
-                var numfds: Int32 = 0
-                let waitCode = DMCurlMultiWait(multi, 250, &numfds)
-                guard waitCode == CURLM_OK else {
-                    throw MultiError.curl(CURLE_FAILED_INIT)
-                }
-                performCode = DMCurlMultiPerform(multi, &running)
-                guard performCode == CURLM_OK else {
-                    throw MultiError.curl(CURLE_FAILED_INIT)
-                }
-            }
-        }
-
-        var codeByEasy: [UInt: CURLcode] = [:]
-        var msgsLeft: Int32 = 0
-        while true {
-            guard let msg = DMCurlMultiInfoRead(multi, &msgsLeft) else { break }
-            if msg.pointee.msg == CURLMSG_DONE, let easy = msg.pointee.easy_handle {
-                codeByEasy[UInt(bitPattern: easy)] = msg.pointee.data.result
-            }
-        }
-
-        var outcomes: [Outcome] = []
-        outcomes.reserveCapacity(liveDownloads.count)
-
-        // Finish in creation order; take ownership out of liveDownloads first.
-        let ordered = liveDownloads
-        liveDownloads.removeAll(keepingCapacity: false)
-
-        for (index, download) in ordered.enumerated() {
-            let easy = DMCurlEasyDownloadGetHandle(download)
-            let perform: CURLcode
-            if let easy {
-                perform = codeByEasy[UInt(bitPattern: easy)] ?? CURLE_OK
-                _ = DMCurlMultiRemoveEasy(multi, easy)
-            } else {
-                perform = CURLE_FAILED_INIT
-            }
-
-            var result = DMCurlDownloadResult()
-            result.contentLength = -1
-            DMCurlEasyDownloadFinish(download, perform, &result)
-            defer { DMCurlDownloadResultClear(&result) }
-
-            if result.code == CURLE_ABORTED_BY_CALLBACK || (abortFlag?.pointee ?? 0) != 0 {
-                // Finish remaining without leaving incomplete markers in liveDownloads.
-                for leftover in ordered.suffix(from: index + 1) {
-                    if let leftoverEasy = DMCurlEasyDownloadGetHandle(leftover) {
-                        _ = DMCurlMultiRemoveEasy(multi, leftoverEasy)
-                    }
-                    var discarded = DMCurlDownloadResult()
-                    discarded.contentLength = -1
-                    DMCurlEasyDownloadFinish(leftover, CURLE_ABORTED_BY_CALLBACK, &discarded)
-                    DMCurlDownloadResultClear(&discarded)
-                }
-                throw MultiError.aborted
-            }
-            guard result.code == CURLE_OK else {
-                for leftover in ordered.suffix(from: index + 1) {
-                    if let leftoverEasy = DMCurlEasyDownloadGetHandle(leftover) {
-                        _ = DMCurlMultiRemoveEasy(multi, leftoverEasy)
-                    }
-                    var discarded = DMCurlDownloadResult()
-                    discarded.contentLength = -1
-                    DMCurlEasyDownloadFinish(leftover, CURLE_FAILED_INIT, &discarded)
-                    DMCurlDownloadResultClear(&discarded)
-                }
-                throw MultiError.curl(result.code)
-            }
-
-            let status = Int(result.httpStatus)
-            guard status == 206 || status == 200 else {
-                for leftover in ordered.suffix(from: index + 1) {
-                    if let leftoverEasy = DMCurlEasyDownloadGetHandle(leftover) {
-                        _ = DMCurlMultiRemoveEasy(multi, leftoverEasy)
-                    }
-                    var discarded = DMCurlDownloadResult()
-                    discarded.contentLength = -1
-                    DMCurlEasyDownloadFinish(leftover, CURLE_OK, &discarded)
-                    DMCurlDownloadResultClear(&discarded)
-                }
-                throw MultiError.httpStatus(status)
-            }
-
-            let wrote = Int64(result.bytesWritten)
-            if let expected = ranges[index].expectedBytes, wrote != expected {
-                for leftover in ordered.suffix(from: index + 1) {
-                    if let leftoverEasy = DMCurlEasyDownloadGetHandle(leftover) {
-                        _ = DMCurlMultiRemoveEasy(multi, leftoverEasy)
-                    }
-                    var discarded = DMCurlDownloadResult()
-                    discarded.contentLength = -1
-                    DMCurlEasyDownloadFinish(leftover, CURLE_OK, &discarded)
-                    DMCurlDownloadResultClear(&discarded)
-                }
-                throw MultiError.incompleteWrite(expected: expected, wrote: wrote)
-            }
-
-            outcomes.append(
-                Outcome(
-                    httpStatus: status,
-                    bytesWritten: wrote,
-                    finalURL: result.finalURL.map { String(cString: $0) },
-                    contentType: result.contentType.map { String(cString: $0) },
-                    etag: result.etag.map { String(cString: $0) },
-                    contentRange: result.contentRange.map { String(cString: $0) }
-                )
-            )
+        let outcomes = outcomesByIndex.compactMap(\.self)
+        guard outcomes.count == ranges.count else {
+            throw MultiError.curl(CURLE_FAILED_INIT)
         }
 
         multiAlive = false
         DMCurlMultiCleanup(multi)
         return outcomes
-    }
-
-    private static func withExtendedLifetime(
-        _ boxes: [MultiSegmentProgressBox],
-        _ body: () throws -> Void
-    ) throws {
-        _ = boxes
-        try body()
     }
 
     private static func withOptionalCString<T>(

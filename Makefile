@@ -10,7 +10,7 @@ DESTINATION  := platform=macOS,arch=arm64
 DERIVED      := .build/DerivedData
 CONFIG_DEBUG := Debug
 ARTIFACTS    := Artifacts/validation/latest
-FIRST_PARTY  := Sources Tests Extensions Scripts .github Makefile project.yml
+FIRST_PARTY  := Sources Tests BrowserExtension Scripts .github Makefile project.yml
 
 XCODEBUILD := xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-destination '$(DESTINATION)' -derivedDataPath $(DERIVED)
@@ -95,7 +95,15 @@ incomplete-work-scan: ## Fail on banned incomplete-work / unsafe patterns in fir
 verify-fast: format-check lint build-debug test-unit incomplete-work-scan ## Fast local gate
 	@echo "verify-fast: OK"
 
-## ----- Release rehearsal (Phase 5 local) -----
+## ----- Release tooling (local) -----
+
+.PHONY: performance-baseline
+performance-baseline: project ## Record immutable candidate performance descriptor
+	@Scripts/performance-baseline.sh
+
+.PHONY: performance-compare
+performance-compare: ## Compare CANDIDATE against BASELINE=… (>10% regression fails)
+	@Scripts/performance-compare.sh
 
 .PHONY: release-sbom
 release-sbom: ## Write dependency inventory under Artifacts/release/
@@ -114,7 +122,7 @@ release-notarize: ## Notarize a signed DMG (BLOCKED without credentials)
 	@Scripts/release/notarize.sh
 
 .PHONY: install-chrome-native-host
-install-chrome-native-host: ## Register Chrome Native Messaging host (needs DM_CHROME_EXTENSION_ID)
+install-chrome-native-host: ## Register the Chrome Native Messaging host (extension ID is derived; DM_CHROME_EXTENSION_ID overrides)
 	@Scripts/install-chrome-native-host.sh
 
 .PHONY: vendor-media-helpers
@@ -204,12 +212,6 @@ db-integrity-test: project ## Database integrity tests
 .PHONY: recovery-crash-matrix
 recovery-crash-matrix: project ## Crash-boundary reconciliation matrix
 	@set -o pipefail; $(XCODEBUILD) -only-testing:RecoveryTests test 2>&1 | tail -40
-
-## ----- Performance -----
-
-.PHONY: performance-baseline
-performance-baseline: project ## Record a performance baseline
-	@Scripts/performance-baseline.sh
 
 ## ----- Housekeeping -----
 

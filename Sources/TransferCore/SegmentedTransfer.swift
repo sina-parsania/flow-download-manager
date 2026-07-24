@@ -36,6 +36,31 @@ public enum SegmentedTransfer {
         return min(bySize, hostMaxSegments)
     }
 
+    /// Ledger chunk count (FR-TRN-009 S1). Chunks are ~4 MiB, never fewer than
+    /// `connectionCount`, and `connectionCount` still bounds how many are live.
+    ///
+    /// **Tile size is what bounds a straggler's damage.** A slow connection
+    /// holds exactly one chunk, so the tail costs `chunkSize / slowRate`
+    /// regardless of how many connections are running. The cap was 128, which
+    /// silently abandoned that property on anything large: a 4 GiB file tiled
+    /// into 32 MiB chunks, a 40 GiB file into 320 MiB chunks, so the last
+    /// connection to finish held a quarter-gigabyte on its own. 1024 keeps
+    /// chunks at the 4 MiB floor out to 4 GiB and an order of magnitude finer
+    /// beyond it, for ~40 KB of extra `.segmap` JSON at the very top end.
+    ///
+    /// This bounds the tail; it does not redistribute work already in flight.
+    /// Taking the tail off a *live* connection needs a safe-zone split, which
+    /// libcurl's fixed `Range:` request makes a protocol change, not a tuning
+    /// change.
+    static func chunkCount(from start: Int64, total: Int64, connectionCount: Int) -> Int {
+        let minChunk: Int64 = 4 * 1024 * 1024
+        let maxChunks = 1024
+        let span = total - start
+        guard span > 0 else { return max(connectionCount, 1) }
+        let byMinChunk = Int((span + minChunk - 1) / minChunk)
+        return max(connectionCount, min(maxChunks, byMinChunk))
+    }
+
     /// Sidecar path recording which byte ranges of the partial are actually on
     /// disk. The partial's file size is meaningless once preallocated.
     public static func segmentMapURL(for partialURL: URL) -> URL {
@@ -52,6 +77,17 @@ public enum SegmentedTransfer {
         hostMaxSegments: Int? = nil,
         useCurlMulti: Bool = true
     ) throws -> Outcome {
+        // Range probing, segment maps and the 200/206 status gate are all HTTP
+        // semantics. FTP/SFTP were accepted by the UI and then run through this
+        // path anyway, so every one of them failed once with a misleading
+        // "network unavailable". They take the single-stream path instead.
+        if let parsed = try? CurlURLParser.parse(url), !parsed.isHTTPFamily {
+            return try singleOutcome(
+                url: url, partialURL: partialURL, options: options,
+                abortFlag: abortFlag, onProgress: onProgress
+            )
+        }
+
         let sidecarURL = segmentMapURL(for: partialURL)
 
         // Segment-map resume: the authoritative record of downloaded ranges.
@@ -66,6 +102,10 @@ public enum SegmentedTransfer {
                 let probe = try TransferCore.probeRangeSupport(url: url, options: options)
                 if probe.httpStatus == 206,
                    TransferCore.totalLength(from: probe) == ledger.total {
+                    let connectionCount = preferredSegmentCount(
+                        totalBytes: ledger.remainingBytes(),
+                        hostMaxSegments: hostMaxSegments
+                    )
                     return try runMapLoop(
                         url: url,
                         partialURL: partialURL,
@@ -74,7 +114,9 @@ public enum SegmentedTransfer {
                         abortFlag: abortFlag,
                         onProgress: onProgress,
                         probe: probe,
-                        useCurlMulti: useCurlMulti
+                        useCurlMulti: useCurlMulti,
+                        maxConcurrent: connectionCount,
+                        hostMaxSegments: hostMaxSegments
                     )
                 }
                 // Probe reached the server but disagreed. Only wipe when the
@@ -143,18 +185,19 @@ public enum SegmentedTransfer {
             )
         }
 
-        let segments = preferredSegmentCount(totalBytes: total, hostMaxSegments: hostMaxSegments)
-        guard segments > 1, total > 1 else {
+        let connectionCount = preferredSegmentCount(totalBytes: total, hostMaxSegments: hostMaxSegments)
+        guard connectionCount > 1, total > 1 else {
             return try singleOutcome(
                 url: url, partialURL: partialURL, options: options,
                 abortFlag: abortFlag, onProgress: onProgress
             )
         }
 
+        let chunks = chunkCount(from: 0, total: total, connectionCount: connectionCount)
         let ledger = SegmentLedger(
             total: total,
             baseOffset: 0,
-            entries: tile(from: 0, total: total, count: segments),
+            entries: tile(from: 0, total: total, count: chunks),
             sidecarURL: sidecarURL
         )
         // Save the map before preallocating: once the file is truncated to
@@ -170,7 +213,9 @@ public enum SegmentedTransfer {
             abortFlag: abortFlag,
             onProgress: onProgress,
             probe: probe,
-            useCurlMulti: useCurlMulti
+            useCurlMulti: useCurlMulti,
+            maxConcurrent: connectionCount,
+            hostMaxSegments: hostMaxSegments
         )
     }
 
@@ -194,15 +239,16 @@ public enum SegmentedTransfer {
         }
 
         let remaining = total - existing
-        let segments = preferredSegmentCount(totalBytes: remaining, hostMaxSegments: hostMaxSegments)
-        guard segments > 1 else {
+        let connectionCount = preferredSegmentCount(totalBytes: remaining, hostMaxSegments: hostMaxSegments)
+        guard connectionCount > 1 else {
             throw TransferCore.TransferError.httpStatus(probe.httpStatus)
         }
 
+        let chunks = chunkCount(from: existing, total: total, connectionCount: connectionCount)
         let ledger = SegmentLedger(
             total: total,
             baseOffset: existing,
-            entries: tile(from: existing, total: total, count: segments),
+            entries: tile(from: existing, total: total, count: chunks),
             sidecarURL: segmentMapURL(for: partialURL)
         )
         try ledger.saveNow()
@@ -216,7 +262,9 @@ public enum SegmentedTransfer {
             abortFlag: abortFlag,
             onProgress: onProgress,
             probe: probe,
-            useCurlMulti: useCurlMulti
+            useCurlMulti: useCurlMulti,
+            maxConcurrent: connectionCount,
+            hostMaxSegments: hostMaxSegments
         )
     }
 
@@ -231,13 +279,29 @@ public enum SegmentedTransfer {
         abortFlag: TransferAbortFlag?,
         onProgress: TransferCore.ProgressHandler?,
         probe: TransferCore.ResourceIdentity,
-        useCurlMulti: Bool
+        useCurlMulti: Bool,
+        maxConcurrent: Int,
+        hostMaxSegments: Int? = nil
     ) throws -> Outcome {
         // Publish already-downloaded bytes immediately so relaunch UI does not
         // flash 0% before the first curl progress callback.
         onProgress?(ledger.baseOffset + ledger.downloadedBytes())
+        // ONE governor for the whole job, fed the ledger's aggregate byte count.
+        // The per-easy governor inside `downloadSingleStream` cannot cap a
+        // segmented transfer: the curl_multi transport never goes through it at
+        // all, and the Dispatch fallback would build one bucket per segment,
+        // each allowed the full rate. Segment options below have the cap
+        // stripped so this is the only thing throttling.
+        let governor: SyncBandwidthGovernor? = options.maxBytesPerSecond > 0
+            ? SyncBandwidthGovernor(bytesPerSecond: options.maxBytesPerSecond)
+            : nil
+        var segmentOptions = options
+        segmentOptions.maxBytesPerSecond = 0
         let maxAttempts = 3
         var attempt = 0
+        // Host-clamped connection cap for the live multi loop. Chunk count in
+        // the ledger may be finer (S1 tiling); this only bounds concurrency.
+        var connectionLimit = maxConcurrent
         while true {
             if abortFlag?.isSet == true {
                 ledger.flush()
@@ -253,9 +317,10 @@ public enum SegmentedTransfer {
                     url: url,
                     partialURL: partialURL,
                     ranges: remaining.map(\.request),
-                    options: options,
+                    options: segmentOptions,
                     abortFlag: abortFlag,
                     useCurlMulti: useCurlMulti,
+                    maxConcurrent: connectionLimit,
                     onSegmentProgress: { segment, written in
                         guard segment >= 0, segment < entryIndices.count else { return }
                         let done = ledger.record(
@@ -263,6 +328,12 @@ public enum SegmentedTransfer {
                             written: bases[segment] + written
                         )
                         onProgress?(progressOffset + done)
+                        // `done` is the job's cumulative total, so one governor
+                        // sees the aggregate rate across every live segment.
+                        // On the curl_multi transport this callback runs on the
+                        // single multi thread, so sleeping here throttles all
+                        // segments at once — which is exactly the intent.
+                        governor?.noteProgress(totalWritten: done)
                     }
                 )
                 // Both transports verified expected byte counts per range.
@@ -274,11 +345,15 @@ public enum SegmentedTransfer {
                 attempt += 1
                 guard attempt < maxAttempts else { throw error }
                 Thread.sleep(forTimeInterval: Double(attempt))
-                ledger.resplit(
-                    targetCount: preferredSegmentCount(totalBytes: ledger.remainingBytes())
+                connectionLimit = preferredSegmentCount(
+                    totalBytes: ledger.remainingBytes(),
+                    hostMaxSegments: hostMaxSegments
                 )
+                ledger.resplit(targetCount: connectionLimit)
             }
         }
+
+        try synchronizeFile(at: partialURL)
 
         let attrs = try FileManager.default.attributesOfItem(atPath: partialURL.path)
         let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
@@ -315,6 +390,7 @@ public enum SegmentedTransfer {
         options: TransferCore.DownloadOptions,
         abortFlag: TransferAbortFlag?,
         useCurlMulti: Bool,
+        maxConcurrent: Int? = nil,
         onSegmentProgress: (@Sendable (Int, Int64) -> Void)?
     ) throws {
         if useCurlMulti {
@@ -325,7 +401,8 @@ public enum SegmentedTransfer {
                     ranges: ranges,
                     options: options,
                     abortFlag: abortFlag,
-                    onSegmentProgress: onSegmentProgress
+                    onSegmentProgress: onSegmentProgress,
+                    maxConcurrent: maxConcurrent
                 )
                 return
             } catch TransferCore.TransferError.fileOpenFailed {
@@ -335,11 +412,19 @@ public enum SegmentedTransfer {
 
         let state = ConcurrentSegmentState()
         let group = DispatchGroup()
+        // The ledger tiles into far more chunks than there are connections
+        // (up to 128). Without this bound the fallback would open one socket
+        // per chunk and blow straight past the orchestrator's host budget.
+        let slots = DispatchSemaphore(value: max(1, min(maxConcurrent ?? ranges.count, ranges.count)))
 
         for (index, range) in ranges.enumerated() {
             group.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                defer { group.leave() }
+                slots.wait()
+                defer {
+                    slots.signal()
+                    group.leave()
+                }
                 if abortFlag?.isSet == true {
                     state.setError(TransferCore.TransferError.aborted)
                     return
@@ -391,12 +476,26 @@ public enum SegmentedTransfer {
             abortFlag: abortFlag,
             onProgress: onProgress
         )
+        try synchronizeFile(at: partialURL)
         return Outcome(
             identity: single.identity,
             bytesWritten: single.bytesWritten,
             segmentCount: 1,
             partialURL: partialURL
         )
+    }
+
+    /// One durable flush after the transfer finishes. Per-easy fsync in C was
+    /// removed so multi-segment jobs do not serialize N full-file syncs.
+    private static func synchronizeFile(at url: URL) throws {
+        let fd = url.path.withCString { path in
+            open(path, O_WRONLY)
+        }
+        guard fd >= 0 else { throw TransferCore.TransferError.fileOpenFailed }
+        defer { close(fd) }
+        guard fsync(fd) == 0 else {
+            throw TransferCore.TransferError.fileOpenFailed
+        }
     }
 
     /// Splits `[start, total)` into `count` contiguous entries.

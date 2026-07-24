@@ -177,6 +177,17 @@ public struct CurlURL: Sendable, Equatable {
         }
     }
 
+    /// True for the HTTP family only.
+    ///
+    /// Range probing, segmentation and the 200/206 status gate are all HTTP
+    /// semantics. FTP reports 226/250 on success and SFTP reports 0, so running
+    /// them through the HTTP path made every FTP link fail once with a bogus
+    /// "network unavailable" — they were accepted by the UI and then guaranteed
+    /// to fail. Non-HTTP schemes take the single-stream path instead.
+    public var isHTTPFamily: Bool {
+        scheme == "http" || scheme == "https"
+    }
+
     /// Deterministic dedupe key: lowercased scheme/host, omits default ports, keeps path/query.
     public var normalizationKey: String {
         var parts: [String] = [scheme]

@@ -144,9 +144,15 @@ public final class ChromeCompanionSetupController: ObservableObject {
     }
 
     public static func bundledExtensionSourceURL() -> URL? {
-        if let url = Bundle.main.resourceURL?.appendingPathComponent("ChromeCompanion", isDirectory: true),
-           FileManager.default.fileExists(atPath: url.appendingPathComponent("manifest.json").path) {
-            return url
+        let resourceRoot = Bundle.main.resourceURL
+        let bundledCandidates = [
+            resourceRoot?.appendingPathComponent("ChromeCompanion/chrome", isDirectory: true),
+            resourceRoot?.appendingPathComponent("ChromeCompanion", isDirectory: true)
+        ].compactMap { $0 }
+        for url in bundledCandidates {
+            if FileManager.default.fileExists(atPath: url.appendingPathComponent("manifest.json").path) {
+                return url
+            }
         }
         // Source-tree / Xcode run without the copy-files phase.
         let repo = URL(fileURLWithPath: #filePath)

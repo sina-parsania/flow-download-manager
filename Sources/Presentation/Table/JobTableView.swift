@@ -7,7 +7,8 @@ import SwiftUI
 import XPCContracts
 
 /// Selects the right-clicked row when it is not already part of the selection,
-/// so the context menu always targets the row under the pointer.
+/// so the context menu always targets the row under the pointer. Clicks in the
+/// empty area below the last row clear the selection.
 private final class JobListTableView: NSTableView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let local = convert(event.locationInWindow, from: nil)
@@ -16,6 +17,14 @@ private final class JobListTableView: NSTableView {
             selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
         return super.menu(for: event)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let local = convert(event.locationInWindow, from: nil)
+        if row(at: local) < 0 {
+            deselectAll(nil)
+        }
+        super.mouseDown(with: event)
     }
 }
 

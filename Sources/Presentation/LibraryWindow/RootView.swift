@@ -6,8 +6,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import XPCContracts
 
-/// Main library window: editorial sidebar + board/list. Job details open on
-/// double-click into a detachable inspector (not driven by multi-select).
+/// Main library window: editorial sidebar + board/list. Job details open as a
+/// modal on double-click — never as a selection-driven sidebar.
 public struct RootView: View {
     @ObservedObject private var model: LibraryModel
     @ObservedObject private var launchAgent: LaunchAgentModel
@@ -20,6 +20,13 @@ public struct RootView: View {
     public init(model: LibraryModel, launchAgent: LaunchAgentModel) {
         self.model = model
         self.launchAgent = launchAgent
+    }
+
+    private var detailSheetPresented: Binding<Bool> {
+        Binding(
+            get: { model.inspectedID != nil },
+            set: { if !$0 { model.closeInspector() } }
+        )
     }
 
     public var body: some View {
@@ -35,36 +42,6 @@ public struct RootView: View {
                     .toolbarBackground(.hidden, for: .windowToolbar)
                     .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search the board")
                     .toolbar { toolbarContent }
-                    .inspector(isPresented: $model.inspectorVisible) {
-                        InspectorView(
-                            row: model.inspectedRow,
-                            engineClient: model.engineClient,
-                            onCommand: { command in
-                                guard let id = model.inspectedID else { return }
-                                Task { await model.control(jobID: id, command: command) }
-                            },
-                            onPriorityBump: { delta in
-                                guard let id = model.inspectedID else { return }
-                                Task { await model.bumpPriority(jobID: id, by: delta) }
-                            },
-                            onOrganizationChanged: {
-                                Task { await model.refreshFromEngine() }
-                            },
-                            onRevealInFinder: {
-                                guard let id = model.inspectedID else { return }
-                                Task { await model.revealInFinder(jobID: id) }
-                            },
-                            onRemoveFromLibrary: {
-                                guard let id = model.inspectedID else { return }
-                                Task { await model.remove(jobID: id, deleteFiles: false) }
-                            },
-                            onDeleteFromDisk: {
-                                guard let id = model.inspectedID else { return }
-                                pendingDiskDeleteIDs = [id]
-                            }
-                        )
-                        .inspectorColumnWidth(min: 300, ideal: 340, max: 420)
-                    }
             }
             .navigationSplitViewStyle(.balanced)
         }
@@ -73,6 +50,11 @@ public struct RootView: View {
                 .environmentObject(model)
                 .environmentObject(launchAgent)
                 .flowAppearance()
+        }
+        .sheet(isPresented: detailSheetPresented) {
+            JobDetailSheet(model: model) { id in
+                pendingDiskDeleteIDs = [id]
+            }
         }
         .confirmationDialog(
             "Remove files?",
@@ -425,11 +407,11 @@ public struct RootView: View {
             Button {
                 model.toggleInspector()
             } label: {
-                Label("Inspector", systemImage: "sidebar.right")
+                Label("Details", systemImage: "info.circle")
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
-            .disabled(!model.inspectorVisible && model.inspectedID == nil && model.selectedID == nil)
-            .help("Show or hide job details (double-click a download to open)")
+            .disabled(model.inspectedID == nil && model.selectedID == nil)
+            .help("Open details for the selected download (or double-click a row)")
         }
     }
 

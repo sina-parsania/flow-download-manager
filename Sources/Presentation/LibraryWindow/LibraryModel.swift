@@ -46,8 +46,8 @@ public final class LibraryModel: ObservableObject {
         didSet { reconcilePrimarySelection() }
     }
 
-    /// Job shown in the detail inspector. Set by double-click; not tied to
-    /// multi-select so bulk selection never fights the detail pane.
+    /// Job shown in the detail modal. Set by double-click; independent of
+    /// multi-select. `nil` means the modal is dismissed.
     @Published public var inspectedID: JobRowModel.ID?
 
     /// Bound directly to the search field, so typing stays responsive.
@@ -60,8 +60,6 @@ public final class LibraryModel: ObservableObject {
     @Published public private(set) var searchQuery: String = ""
     @Published public var filter: LibraryFilter = .all
     @Published public var layoutMode: LibraryLayoutMode = .board
-    /// Detail pane starts closed; double-click (or View ▸ Inspector) opens it.
-    @Published public var inspectorVisible: Bool = false
     @Published public var addSheetPresented: Bool = false
     @Published public var pendingClipboardText: String?
     @Published public var lastErrorMessage: String?
@@ -138,24 +136,23 @@ public final class LibraryModel: ObservableObject {
         return rows.filter { ids.contains($0.id) }
     }
 
-    /// Opens the detail inspector for one job without changing multi-select.
+    /// Opens the detail modal for one job without changing multi-select.
     public func openInspector(for jobID: JobRowModel.ID) {
         inspectedID = jobID
-        inspectorVisible = true
     }
 
-    /// Toolbar / menu toggle. When opening with no inspected job, uses the
-    /// primary selection if exactly one target is available.
+    public func closeInspector() {
+        inspectedID = nil
+    }
+
+    /// Toolbar / menu: open details for the primary selection, or dismiss.
     public func toggleInspector() {
-        if inspectorVisible {
-            inspectorVisible = false
+        if inspectedID != nil {
+            closeInspector()
             return
         }
-        if inspectedID == nil {
-            inspectedID = selectedID
-        }
-        guard inspectedID != nil else { return }
-        inspectorVisible = true
+        guard let selectedID else { return }
+        openInspector(for: selectedID)
     }
 
     private var isReconcilingSelection = false
@@ -165,8 +162,9 @@ public final class LibraryModel: ObservableObject {
         isReconcilingSelection = true
         defer { isReconcilingSelection = false }
         if selectedIDs.isEmpty {
-            if let selectedID {
-                selectedIDs = [selectedID]
+            // Empty selection is valid (click below the list / clear).
+            if selectedID != nil {
+                selectedID = nil
             }
             return
         }
@@ -174,6 +172,13 @@ public final class LibraryModel: ObservableObject {
             return
         }
         selectedID = selectedIDs.sorted { $0.uuidString < $1.uuidString }.first
+    }
+
+    public func clearSelection() {
+        isReconcilingSelection = true
+        selectedIDs = []
+        selectedID = nil
+        isReconcilingSelection = false
     }
 
     public func select(ids: Set<JobRowModel.ID>, primary: JobRowModel.ID?) {
@@ -288,8 +293,7 @@ public final class LibraryModel: ObservableObject {
             selectedIDs.remove(jobID)
             if selectedID == jobID { selectedID = selectedIDs.first }
             if inspectedID == jobID {
-                inspectedID = nil
-                inspectorVisible = false
+                closeInspector()
             }
             await refreshFromEngine(forceFull: true)
         } catch {
@@ -401,8 +405,7 @@ public final class LibraryModel: ObservableObject {
             self.selectedID = nil
         }
         if let inspectedID, removedIDs.contains(inspectedID) {
-            self.inspectedID = nil
-            inspectorVisible = false
+            closeInspector()
         }
         await refreshFromEngine()
     }
@@ -502,8 +505,7 @@ public final class LibraryModel: ObservableObject {
     private func pruneStaleInspection() {
         guard let inspectedID else { return }
         guard !rows.contains(where: { $0.id == inspectedID }) else { return }
-        self.inspectedID = nil
-        inspectorVisible = false
+        closeInspector()
     }
 
     private func etaElapsedSeconds() -> Double {

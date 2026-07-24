@@ -5,10 +5,10 @@ import Domain
 import SwiftUI
 import XPCContracts
 
-/// Inspector Overview for one inspected job (`03-design-system-ui-ux.md` §7).
-/// Opened by double-click; identity is independent of multi-select.
+/// Job detail form for one inspected download (`03-design-system-ui-ux.md` §7).
+/// Presented inside ``JobDetailSheet``; identity is independent of multi-select.
 struct InspectorView: View {
-    let row: JobRowModel?
+    let row: JobRowModel
     let engineClient: EngineClient
     let onCommand: (JobCommandKind) -> Void
     let onPriorityBump: (Int) -> Void
@@ -42,297 +42,279 @@ struct InspectorView: View {
     @FocusState private var nameFieldFocused: Bool
 
     var body: some View {
-        Group {
-            if let row {
-                Form {
-                    Section("Overview") {
-                        nameRow(for: row)
-                        labeled("Source", row.sourceHost)
-                        LabeledContent("URL") {
-                            Text(row.sourceURL)
-                                .font(.caption.monospaced())
-                                .textSelection(.enabled)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .help(row.sourceURL)
-                                .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
-                        .accessibilityLabel("Download URL")
-                        labeled("State", row.state.displayName)
-                        Picker("Category", selection: $selectedCategoryKey) {
-                            ForEach(ClassificationEngine.builtInStableKeys, id: \.self) { key in
-                                Text(categoryDisplayName(key)).tag(key)
-                            }
-                        }
-                        .disabled(isSavingOrganization)
-                        .onChange(of: selectedCategoryKey) { _, newValue in
-                            Task { await saveCategory(jobID: row.id, categoryKey: newValue) }
-                        }
-                        .accessibilityLabel("Category")
+        Form {
+            Section("Overview") {
+                nameRow(for: row)
+                labeled("Source", row.sourceHost)
+                LabeledContent("URL") {
+                    Text(row.sourceURL)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(row.sourceURL)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .accessibilityLabel("Download URL")
+                labeled("State", row.state.displayName)
+                Picker("Category", selection: $selectedCategoryKey) {
+                    ForEach(ClassificationEngine.builtInStableKeys, id: \.self) { key in
+                        Text(categoryDisplayName(key)).tag(key)
                     }
-                    Section("Organization") {
-                        if projects.isEmpty {
-                            Text("No projects yet.")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                            Button("Create project…") {
-                                newProjectName = ""
-                                showCreateProjectSheet = true
-                            }
-                            .disabled(isSavingOrganization)
-                            .accessibilityLabel("Create project")
-                        } else {
-                            Picker("Project", selection: $selectedProjectID) {
-                                Text("None").tag("")
-                                ForEach(projects, id: \.id) { project in
-                                    Text(project.name).tag(project.id)
-                                }
-                            }
-                            .disabled(isSavingOrganization)
-                            .onChange(of: selectedProjectID) { _, newValue in
-                                Task { await saveProject(jobID: row.id, projectID: newValue) }
-                            }
-                            .accessibilityLabel("Project")
-                            Button("New project…") {
-                                newProjectName = ""
-                                showCreateProjectSheet = true
-                            }
-                            .disabled(isSavingOrganization)
-                            .accessibilityLabel("New project")
+                }
+                .disabled(isSavingOrganization)
+                .onChange(of: selectedCategoryKey) { _, newValue in
+                    Task { await saveCategory(jobID: row.id, categoryKey: newValue) }
+                }
+                .accessibilityLabel("Category")
+            }
+            Section("Organization") {
+                if projects.isEmpty {
+                    Text("No projects yet.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    Button("Create project…") {
+                        newProjectName = ""
+                        showCreateProjectSheet = true
+                    }
+                    .disabled(isSavingOrganization)
+                    .accessibilityLabel("Create project")
+                } else {
+                    Picker("Project", selection: $selectedProjectID) {
+                        Text("None").tag("")
+                        ForEach(projects, id: \.id) { project in
+                            Text(project.name).tag(project.id)
                         }
+                    }
+                    .disabled(isSavingOrganization)
+                    .onChange(of: selectedProjectID) { _, newValue in
+                        Task { await saveProject(jobID: row.id, projectID: newValue) }
+                    }
+                    .accessibilityLabel("Project")
+                    Button("New project…") {
+                        newProjectName = ""
+                        showCreateProjectSheet = true
+                    }
+                    .disabled(isSavingOrganization)
+                    .accessibilityLabel("New project")
+                }
 
-                        if tags.isEmpty {
-                            Text("No tags yet.")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                            Button("Create tag…") {
-                                newTagName = ""
-                                showCreateTagSheet = true
-                            }
-                            .disabled(isSavingOrganization)
-                            .accessibilityLabel("Create tag")
-                        } else {
-                            ForEach(tags, id: \.id) { tag in
-                                Toggle(tag.name, isOn: Binding(
-                                    get: { selectedTagIDs.contains(tag.id) },
-                                    set: { enabled in
-                                        if enabled {
-                                            selectedTagIDs.insert(tag.id)
-                                        } else {
-                                            selectedTagIDs.remove(tag.id)
-                                        }
-                                        Task { await saveTags(jobID: row.id) }
-                                    }
-                                ))
-                                .disabled(isSavingOrganization)
-                                .accessibilityLabel("Tag \(tag.name)")
-                            }
-                            Button("New tag…") {
-                                newTagName = ""
-                                showCreateTagSheet = true
-                            }
-                            .disabled(isSavingOrganization)
-                            .accessibilityLabel("New tag")
-                        }
+                if tags.isEmpty {
+                    Text("No tags yet.")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    Button("Create tag…") {
+                        newTagName = ""
+                        showCreateTagSheet = true
                     }
-                    Section("Transfer") {
-                        labeled("Progress", JobRowFormatting.progressText(
-                            fraction: row.progressFraction, transferred: row.bytesTransferred, total: row.totalBytes
-                        ))
-                        labeled("Speed", JobRowFormatting.speed(row.speedBytesPerSecond))
-                        labeled("Time remaining", JobRowFormatting.eta(row.etaSeconds))
-                        labeled("Size", JobRowFormatting.size(row.totalBytes))
-                        sentence("Speed limit", speedLimitSentence)
-                        sentence("Connections", connectionsSentence)
-                        sentence("Checksum", integritySentence(for: row))
-                    }
-                    Section("Events") {
-                        if let eventsError {
-                            Text(eventsError)
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                        } else {
-                            Button {
-                                showEventsSheet = true
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "list.bullet.rectangle")
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundStyle(palette.signal)
-                                        .frame(width: 28, height: 28)
-                                        .background(
-                                            palette.signal.opacity(0.18),
-                                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        )
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(events.isEmpty ? "No activity yet" : "\(events.count) recent events")
-                                            .font(FlowTheme.Typeface.body(13))
-                                            .foregroundStyle(palette.ink)
-                                        Text(eventsSummaryLine)
-                                            .font(FlowTheme.Typeface.caption(11))
-                                            .foregroundStyle(palette.inkSoft)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer(minLength: 0)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(palette.inkSoft)
+                    .disabled(isSavingOrganization)
+                    .accessibilityLabel("Create tag")
+                } else {
+                    ForEach(tags, id: \.id) { tag in
+                        Toggle(tag.name, isOn: Binding(
+                            get: { selectedTagIDs.contains(tag.id) },
+                            set: { enabled in
+                                if enabled {
+                                    selectedTagIDs.insert(tag.id)
+                                } else {
+                                    selectedTagIDs.remove(tag.id)
                                 }
-                                .contentShape(Rectangle())
+                                Task { await saveTags(jobID: row.id) }
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Open events")
-                            .accessibilityHint("Shows a detailed activity log for this download")
-                        }
+                        ))
+                        .disabled(isSavingOrganization)
+                        .accessibilityLabel("Tag \(tag.name)")
                     }
-                    Section("Actions") {
-                        HStack {
-                            Button("Pause") { onCommand(.pause) }
-                                .disabled(!Self.canPause(row.state))
-                            Button("Resume") { onCommand(.resume) }
-                                .disabled(!Self.canResume(row.state))
-                            Button("Cancel") { onCommand(.cancel) }
-                                .disabled(!Self.canCancel(row.state))
-                        }
-                        HStack {
-                            Button("Retry") { onCommand(.retry) }
-                                .disabled(!Self.canRetry(row.state))
-                                .help("Retry without wiping partial data")
-                            Button("Restart") { onCommand(.restart) }
-                                .disabled(!Self.canRestart(row.state))
-                                .help("Restart from scratch (wipe partial)")
-                        }
-                        HStack {
-                            Text("Priority \(row.priority)")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Priority Down") { onPriorityBump(-1) }
-                                .disabled(row.priority <= Self.priorityFloor)
-                                .accessibilityLabel("Priority Down")
-                            Button("Priority Up") { onPriorityBump(1) }
-                                .disabled(row.priority >= Self.priorityCeiling)
-                                .accessibilityLabel("Priority Up")
-                        }
-                        if row.state == .completed || row.state == .downloading
-                            || row.state == .paused || row.state == .failed
-                            || row.state == .cancelled || row.state == .queued {
-                            Button("Open in Finder") {
-                                onRevealInFinder?()
+                    Button("New tag…") {
+                        newTagName = ""
+                        showCreateTagSheet = true
+                    }
+                    .disabled(isSavingOrganization)
+                    .accessibilityLabel("New tag")
+                }
+            }
+            Section("Transfer") {
+                labeled("Progress", JobRowFormatting.progressText(
+                    fraction: row.progressFraction, transferred: row.bytesTransferred, total: row.totalBytes
+                ))
+                labeled("Speed", JobRowFormatting.speed(row.speedBytesPerSecond))
+                labeled("Time remaining", JobRowFormatting.eta(row.etaSeconds))
+                labeled("Size", JobRowFormatting.size(row.totalBytes))
+                sentence("Speed limit", speedLimitSentence)
+                sentence("Connections", connectionsSentence)
+                sentence("Checksum", integritySentence(for: row))
+            }
+            Section("Events") {
+                if let eventsError {
+                    Text(eventsError)
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                } else {
+                    Button {
+                        showEventsSheet = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "list.bullet.rectangle")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(palette.signal)
+                                .frame(width: 28, height: 28)
+                                .background(
+                                    palette.signal.opacity(0.18),
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(events.isEmpty ? "No activity yet" : "\(events.count) recent events")
+                                    .font(FlowTheme.Typeface.body(13))
+                                    .foregroundStyle(palette.ink)
+                                Text(eventsSummaryLine)
+                                    .font(FlowTheme.Typeface.caption(11))
+                                    .foregroundStyle(palette.inkSoft)
+                                    .lineLimit(1)
                             }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(palette.inkSoft)
                         }
-                        Divider()
-                        Button("Remove from List") {
-                            onRemoveFromLibrary?()
-                        }
-                        .help("Remove from Flow only — keeps the file on disk")
-                        .disabled(onRemoveFromLibrary == nil)
-                        Button("Remove Files", role: .destructive) {
-                            onDeleteFromDisk?()
-                        }
-                        .help("Delete the file from disk and remove it from Flow")
-                        .disabled(onDeleteFromDisk == nil)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open events")
+                    .accessibilityHint("Shows a detailed activity log for this download")
+                }
+            }
+            Section("Actions") {
+                HStack {
+                    Button("Pause") { onCommand(.pause) }
+                        .disabled(!Self.canPause(row.state))
+                    Button("Resume") { onCommand(.resume) }
+                        .disabled(!Self.canResume(row.state))
+                    Button("Cancel") { onCommand(.cancel) }
+                        .disabled(!Self.canCancel(row.state))
+                }
+                HStack {
+                    Button("Retry") { onCommand(.retry) }
+                        .disabled(!Self.canRetry(row.state))
+                        .help("Retry without wiping partial data")
+                    Button("Restart") { onCommand(.restart) }
+                        .disabled(!Self.canRestart(row.state))
+                        .help("Restart from scratch (wipe partial)")
+                }
+                HStack {
+                    Text("Priority \(row.priority)")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Priority Down") { onPriorityBump(-1) }
+                        .disabled(row.priority <= Self.priorityFloor)
+                        .accessibilityLabel("Priority Down")
+                    Button("Priority Up") { onPriorityBump(1) }
+                        .disabled(row.priority >= Self.priorityCeiling)
+                        .accessibilityLabel("Priority Up")
+                }
+                if row.state == .completed || row.state == .downloading
+                    || row.state == .paused || row.state == .failed
+                    || row.state == .cancelled || row.state == .queued {
+                    Button("Open in Finder") {
+                        onRevealInFinder?()
                     }
                 }
-                .formStyle(.grouped)
-                .task(id: row.id) {
-                    syncOrganizationSelection(from: row)
-                    draftName = row.name
-                    isEditingName = false
-                    await loadOrganization()
-                    await loadEvents(for: row.id)
-                    await loadTransferSettings(for: row.id)
+                Divider()
+                Button("Remove from List") {
+                    onRemoveFromLibrary?()
                 }
-                .onChange(of: row.state) { _, _ in
-                    // The verification outcome only exists once the job leaves the
-                    // transfer states, so re-read on every state change.
-                    Task { await loadTransferSettings(for: row.id) }
+                .help("Remove from Flow only — keeps the file on disk")
+                .disabled(onRemoveFromLibrary == nil)
+                Button("Remove Files", role: .destructive) {
+                    onDeleteFromDisk?()
                 }
-                .onChange(of: row.name) { _, newName in
-                    if !isEditingName {
-                        draftName = newName
-                    }
-                }
-                .onChange(of: row.categoryKey) { _, _ in
-                    syncOrganizationSelection(from: row)
-                }
-                .onChange(of: row.projectID) { _, _ in
-                    syncOrganizationSelection(from: row)
-                }
-                .onChange(of: row.tagIDs) { _, _ in
-                    syncOrganizationSelection(from: row)
-                }
-                .sheet(isPresented: $showEventsSheet) {
-                    JobEventsSheet(
-                        jobName: row.name,
-                        jobID: row.id,
-                        events: $events,
-                        engineClient: engineClient,
-                        onReload: { await loadEvents(for: row.id) }
-                    )
-                    .flowAppearance()
-                }
-                .sheet(isPresented: $showCreateProjectSheet) {
-                    organizationNameSheet(
-                        title: "New project",
-                        subtitle: "Creates a project and assigns it to this download.",
-                        placeholder: "Project name",
-                        name: $newProjectName,
-                        focus: $projectNameFocused,
-                        isBusy: isSavingOrganization,
-                        confirmTitle: "Create & Assign",
-                        onCancel: {
-                            showCreateProjectSheet = false
-                            newProjectName = ""
-                        },
-                        onConfirm: {
-                            Task { await createProject(andAssignTo: row.id) }
-                        }
-                    )
-                    .flowAppearance()
-                    .onAppear { projectNameFocused = true }
-                }
-                .sheet(isPresented: $showCreateTagSheet) {
-                    organizationNameSheet(
-                        title: "New tag",
-                        subtitle: "Creates a tag and attaches it to this download.",
-                        placeholder: "Tag name",
-                        name: $newTagName,
-                        focus: $tagNameFocused,
-                        isBusy: isSavingOrganization,
-                        confirmTitle: "Create & Attach",
-                        onCancel: {
-                            showCreateTagSheet = false
-                            newTagName = ""
-                        },
-                        onConfirm: {
-                            Task { await createTag(andAttachTo: row.id) }
-                        }
-                    )
-                    .flowAppearance()
-                    .onAppear { tagNameFocused = true }
-                }
-                .alert("Organization", isPresented: $showOrganizationAlert) {
-                    Button("OK", role: .cancel) {}
-                } message: {
-                    Text(organizationError ?? "Something went wrong.")
-                }
-            } else {
-                VStack(spacing: 10) {
-                    Spacer()
-                    Text("Double-click a download")
-                        .font(FlowTheme.Typeface.title(16))
-                        .foregroundStyle(palette.ink)
-                    Text("Details open here without changing your multi-select.")
-                        .font(FlowTheme.Typeface.body(12))
-                        .foregroundStyle(palette.inkSoft)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
+                .help("Delete the file from disk and remove it from Flow")
+                .disabled(onDeleteFromDisk == nil)
             }
         }
-        .accessibilityLabel("Inspector")
+        .formStyle(.grouped)
+        .task(id: row.id) {
+            syncOrganizationSelection(from: row)
+            draftName = row.name
+            isEditingName = false
+            await loadOrganization()
+            await loadEvents(for: row.id)
+            await loadTransferSettings(for: row.id)
+        }
+        .onChange(of: row.state) { _, _ in
+            // The verification outcome only exists once the job leaves the
+            // transfer states, so re-read on every state change.
+            Task { await loadTransferSettings(for: row.id) }
+        }
+        .onChange(of: row.name) { _, newName in
+            if !isEditingName {
+                draftName = newName
+            }
+        }
+        .onChange(of: row.categoryKey) { _, _ in
+            syncOrganizationSelection(from: row)
+        }
+        .onChange(of: row.projectID) { _, _ in
+            syncOrganizationSelection(from: row)
+        }
+        .onChange(of: row.tagIDs) { _, _ in
+            syncOrganizationSelection(from: row)
+        }
+        .sheet(isPresented: $showEventsSheet) {
+            JobEventsSheet(
+                jobName: row.name,
+                jobID: row.id,
+                events: $events,
+                engineClient: engineClient,
+                onReload: { await loadEvents(for: row.id) }
+            )
+            .flowAppearance()
+        }
+        .sheet(isPresented: $showCreateProjectSheet) {
+            organizationNameSheet(
+                title: "New project",
+                subtitle: "Creates a project and assigns it to this download.",
+                placeholder: "Project name",
+                name: $newProjectName,
+                focus: $projectNameFocused,
+                isBusy: isSavingOrganization,
+                confirmTitle: "Create & Assign",
+                onCancel: {
+                    showCreateProjectSheet = false
+                    newProjectName = ""
+                },
+                onConfirm: {
+                    Task { await createProject(andAssignTo: row.id) }
+                }
+            )
+            .flowAppearance()
+            .onAppear { projectNameFocused = true }
+        }
+        .sheet(isPresented: $showCreateTagSheet) {
+            organizationNameSheet(
+                title: "New tag",
+                subtitle: "Creates a tag and attaches it to this download.",
+                placeholder: "Tag name",
+                name: $newTagName,
+                focus: $tagNameFocused,
+                isBusy: isSavingOrganization,
+                confirmTitle: "Create & Attach",
+                onCancel: {
+                    showCreateTagSheet = false
+                    newTagName = ""
+                },
+                onConfirm: {
+                    Task { await createTag(andAttachTo: row.id) }
+                }
+            )
+            .flowAppearance()
+            .onAppear { tagNameFocused = true }
+        }
+        .alert("Organization", isPresented: $showOrganizationAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(organizationError ?? "Something went wrong.")
+        }
+        .accessibilityLabel("Download details")
     }
 
     private var eventsSummaryLine: String {
@@ -559,12 +541,12 @@ struct InspectorView: View {
             return
         }
         guard !isSavingName else { return }
-        if let row, !canRenameWhileActive(row.state) {
+        if !canRenameWhileActive(row.state) {
             organizationError = "Pause the download before renaming."
             showOrganizationAlert = true
             return
         }
-        if trimmed == row?.name {
+        if trimmed == row.name {
             isEditingName = false
             return
         }
@@ -600,7 +582,7 @@ struct InspectorView: View {
     @MainActor
     private func saveCategory(jobID: UUID, categoryKey: String) async {
         guard !isSavingOrganization else { return }
-        if categoryKey == row?.categoryKey { return }
+        if categoryKey == row.categoryKey { return }
         isSavingOrganization = true
         defer { isSavingOrganization = false }
         do {
@@ -613,11 +595,9 @@ struct InspectorView: View {
         } catch {
             organizationError = "Unable to update category: \(error.localizedDescription)"
             showOrganizationAlert = true
-            if let row {
-                selectedCategoryKey = ClassificationEngine.builtInStableKeys.contains(row.categoryKey)
-                    ? row.categoryKey
-                    : "other"
-            }
+            selectedCategoryKey = ClassificationEngine.builtInStableKeys.contains(row.categoryKey)
+                ? row.categoryKey
+                : "other"
         }
     }
 
@@ -625,7 +605,7 @@ struct InspectorView: View {
     private func saveProject(jobID: UUID, projectID: String) async {
         guard !isSavingOrganization else { return }
         let normalized = projectID.isEmpty ? nil : projectID
-        if normalized == (row?.projectID) { return }
+        if normalized == row.projectID { return }
         isSavingOrganization = true
         defer { isSavingOrganization = false }
         do {
@@ -638,9 +618,7 @@ struct InspectorView: View {
         } catch {
             organizationError = "Unable to update project: \(error.localizedDescription)"
             showOrganizationAlert = true
-            if let row {
-                selectedProjectID = row.projectID ?? ""
-            }
+            selectedProjectID = row.projectID ?? ""
         }
     }
 
@@ -708,7 +686,7 @@ struct InspectorView: View {
     private func saveTags(jobID: UUID) async {
         guard !isSavingOrganization else { return }
         let next = Array(selectedTagIDs).sorted()
-        if next == (row?.tagIDs.sorted() ?? []) { return }
+        if next == row.tagIDs.sorted() { return }
         isSavingOrganization = true
         defer { isSavingOrganization = false }
         do {
@@ -720,9 +698,7 @@ struct InspectorView: View {
             onOrganizationChanged()
         } catch {
             organizationError = "Unable to update tags."
-            if let row {
-                selectedTagIDs = Set(row.tagIDs)
-            }
+            selectedTagIDs = Set(row.tagIDs)
         }
     }
 

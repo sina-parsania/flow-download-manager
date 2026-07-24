@@ -53,6 +53,14 @@ public struct DownloadBoardView: View {
                         onDeleteFromDisk: { onDeleteFromDisk?(row.id) }
                     )
                 }
+                Color.clear
+                    .frame(maxWidth: .infinity, minHeight: 120)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedID = nil
+                        selectedIDs = []
+                    }
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)

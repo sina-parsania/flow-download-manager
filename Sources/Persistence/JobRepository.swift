@@ -805,10 +805,10 @@ public enum JobRepository {
         }
     }
 
-    /// Deletes a terminal job row (and owned resource). Never touches destination
-    /// Deletes a terminal job row (+ owned resource when unused). Does **not**
+    /// Deletes a job row (+ owned resource when unused). Does **not**
     /// touch on-disk destination files — callers pass `deleteFiles` over XPC when
-    /// the user chooses “Delete File & Remove”.
+    /// the user chooses “Remove Files”. Active jobs must be aborted by the
+    /// engine before calling this; the row itself may be in any state.
     /// Returns the previous state for event/logging.
     @discardableResult
     public static func deleteTerminalJob(
@@ -818,11 +818,6 @@ public enum JobRepository {
         try database.pool.write { db in
             guard let job = try JobRecord.fetchOne(db, key: id) else {
                 throw JobRepositoryError.jobNotFound(id)
-            }
-            guard let state = JobState(rawValue: job.state),
-                  JobState.terminalStates.contains(state)
-            else {
-                throw JobRepositoryError.notTerminal(id, state: job.state)
             }
             let previousState = job.state
             let resourceID = job.resourceID

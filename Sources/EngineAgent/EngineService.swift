@@ -484,6 +484,20 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         }
 
         do {
+            // Abort any in-flight transfer before wiping files / dropping the row
+            // so curl is not writing into a deleted path.
+            if let orchestrator = services.orchestrator {
+                let jobID = request.jobID
+                let gate = DispatchSemaphore(value: 0)
+                Task {
+                    await orchestrator.requestCancel(jobID: jobID)
+                    await orchestrator.clearProgress(jobID: jobID)
+                    await orchestrator.clearControl(jobID: jobID)
+                    gate.signal()
+                }
+                _ = gate.wait(timeout: .now() + .milliseconds(250))
+            }
+
             if request.deleteFiles,
                let details = try? JobRepository.loadJobForTransfer(
                    database: database,
@@ -518,8 +532,6 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(response, nil)
         } catch let error as JobRepositoryError {
             switch error {
-            case .notTerminal:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not terminal"))
             case .jobNotFound:
                 reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not found"))
             default:

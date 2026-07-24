@@ -258,7 +258,8 @@ public final class LibraryModel: ObservableObject {
 
     public func bumpSelectedPriority(by delta: Int) async {
         guard let row = selectedRow else { return }
-        let next = row.priority + delta
+        let next = min(20, max(-20, row.priority + delta))
+        guard next != row.priority else { return }
         do {
             _ = try await engineClient.setJobPriority(
                 jobID: row.id.uuidString.lowercased(),

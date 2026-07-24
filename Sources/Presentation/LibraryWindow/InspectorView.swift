@@ -185,17 +185,18 @@ struct InspectorView: View {
                     Section("Actions") {
                         HStack {
                             Button("Pause") { onCommand(.pause) }
-                                .disabled(![.queued, .connecting, .downloading, .scheduled].contains(row.state))
+                                .disabled(!Self.canPause(row.state))
                             Button("Resume") { onCommand(.resume) }
-                                .disabled(row.state != .paused)
+                                .disabled(!Self.canResume(row.state))
                             Button("Cancel") { onCommand(.cancel) }
+                                .disabled(!Self.canCancel(row.state))
                         }
                         HStack {
                             Button("Retry") { onCommand(.retry) }
-                                .disabled(!(row.state == .failed || row.state == .cancelled))
+                                .disabled(!Self.canRetry(row.state))
                                 .help("Retry without wiping partial data")
                             Button("Restart") { onCommand(.restart) }
-                                .disabled(!(row.state == .paused || row.state == .failed || row.state == .cancelled))
+                                .disabled(!Self.canRestart(row.state))
                                 .help("Restart from scratch (wipe partial)")
                         }
                         HStack {
@@ -203,8 +204,10 @@ struct InspectorView: View {
                                 .foregroundStyle(.secondary)
                             Spacer()
                             Button("Priority Down") { onPriorityBump(-1) }
+                                .disabled(row.priority <= Self.priorityFloor)
                                 .accessibilityLabel("Priority Down")
                             Button("Priority Up") { onPriorityBump(1) }
+                                .disabled(row.priority >= Self.priorityCeiling)
                                 .accessibilityLabel("Priority Up")
                         }
                         if row.state == .completed || row.state == .downloading
@@ -214,17 +217,17 @@ struct InspectorView: View {
                                 onRevealInFinder?()
                             }
                         }
-                        if DeleteJobGuard.allowsDelete(row.state) {
-                            Divider()
-                            Button("Remove from Library") {
-                                onRemoveFromLibrary?()
-                            }
-                            .help("Remove from Flow only — keeps the file on disk")
-                            Button("Delete File & Remove…", role: .destructive) {
-                                onDeleteFromDisk?()
-                            }
-                            .help("Delete the file from disk and remove it from Flow")
+                        Divider()
+                        Button("Remove from List") {
+                            onRemoveFromLibrary?()
                         }
+                        .help("Remove from Flow only — keeps the file on disk")
+                        .disabled(onRemoveFromLibrary == nil)
+                        Button("Remove Files", role: .destructive) {
+                            onDeleteFromDisk?()
+                        }
+                        .help("Delete the file from disk and remove it from Flow")
+                        .disabled(onDeleteFromDisk == nil)
                     }
                 }
                 .formStyle(.grouped)
@@ -744,6 +747,35 @@ struct InspectorView: View {
             events = []
             eventsError = "Unable to load events."
         }
+    }
+
+    private static let priorityFloor = -20
+    private static let priorityCeiling = 20
+
+    private static func canPause(_ state: JobState) -> Bool {
+        switch state {
+        case .downloading, .connecting, .queued, .ready, .scheduled,
+             .verifying, .merging, .postProcessing, .retryWaiting:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func canResume(_ state: JobState) -> Bool {
+        state == .paused || state == .retryWaiting
+    }
+
+    private static func canCancel(_ state: JobState) -> Bool {
+        !JobState.terminalStates.contains(state)
+    }
+
+    private static func canRetry(_ state: JobState) -> Bool {
+        state == .failed || state == .cancelled
+    }
+
+    private static func canRestart(_ state: JobState) -> Bool {
+        state == .paused || state == .failed || state == .cancelled
     }
 }
 

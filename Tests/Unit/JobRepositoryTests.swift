@@ -488,7 +488,7 @@ final class JobRepositoryTests: XCTestCase {
         XCTAssertEqual(byID[result.jobIDs[1]]?.queuePosition, 50)
     }
 
-    func testDeleteTerminalJobRejectsNonTerminalAndRemovesTerminalRow() throws {
+    func testDeleteJobRemovesAnyStateAndLeavesOnDiskFilesAlone() throws {
         let (database, root, downloads) = try openTempDatabase()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -503,13 +503,12 @@ final class JobRepositoryTests: XCTestCase {
             ]
         )
 
-        XCTAssertThrowsError(
-            try JobRepository.deleteTerminalJob(database: database, id: result.jobIDs[0])
-        ) { error in
-            guard case JobRepositoryError.notTerminal = error else {
-                return XCTFail("expected notTerminal, got \(error)")
-            }
-        }
+        // Queued (non-terminal) jobs may be removed from the library.
+        let queuedPrevious = try JobRepository.deleteTerminalJob(
+            database: database,
+            id: result.jobIDs[0]
+        )
+        XCTAssertEqual(queuedPrevious, "queued")
 
         _ = try JobRepository.updateJobState(
             database: database,
@@ -535,7 +534,7 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.deleteTerminalJob(database: database, id: result.jobIDs[2])
 
         let remaining = try JobRepository.fetchJobRows(database: database)
-        XCTAssertEqual(remaining.map(\.job.id), [result.jobIDs[0]])
+        XCTAssertTrue(remaining.isEmpty)
     }
 
     func testRequeueInterruptedTransfersIgnoresQueuedAndTerminal() throws {

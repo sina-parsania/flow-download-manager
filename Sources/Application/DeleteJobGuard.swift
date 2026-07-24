@@ -3,11 +3,14 @@
 import Domain
 import Foundation
 
-/// Pure guard: only terminal jobs may be removed from the library (DB row delete).
+/// Pure guard for library removal (DB row delete ± optional on-disk wipe).
 public enum DeleteJobGuard {
-    /// Completed, failed, and cancelled may be deleted. Active/queued states may not.
+    /// Any job may be removed from the library. Active transfers are aborted by
+    /// the engine before the row is deleted; partial/final files are only wiped
+    /// when the caller passes `deleteFiles: true`.
     public static func allowsDelete(_ state: JobState) -> Bool {
-        JobState.terminalStates.contains(state)
+        _ = state
+        return true
     }
 
     /// Failed jobs eligible for bulk “Clear Failed”.

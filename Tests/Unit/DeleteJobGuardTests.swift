@@ -5,17 +5,11 @@ import Domain
 import XCTest
 
 final class DeleteJobGuardTests: XCTestCase {
-    func testAllowsDeleteOnlyTerminalStates() {
-        for state in JobState.terminalStates {
+    func testAllowsDeleteForEveryState() {
+        for state in JobState.allCases {
             XCTAssertTrue(
                 DeleteJobGuard.allowsDelete(state),
-                "\(state.rawValue) should allow delete"
-            )
-        }
-        for state in JobState.allCases where !JobState.terminalStates.contains(state) {
-            XCTAssertFalse(
-                DeleteJobGuard.allowsDelete(state),
-                "\(state.rawValue) must not allow delete"
+                "\(state.rawValue) should allow remove from list / remove files"
             )
         }
     }

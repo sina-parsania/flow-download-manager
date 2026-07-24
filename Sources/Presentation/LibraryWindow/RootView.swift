@@ -71,14 +71,14 @@ public struct RootView: View {
                 .flowAppearance()
         }
         .confirmationDialog(
-            "Delete from disk?",
+            "Remove files?",
             isPresented: Binding(
                 get: { pendingDiskDeleteID != nil },
                 set: { if !$0 { pendingDiskDeleteID = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Delete File & Remove", role: .destructive) {
+            Button("Remove Files", role: .destructive) {
                 guard let id = pendingDiskDeleteID else { return }
                 pendingDiskDeleteID = nil
                 Task { await model.remove(jobID: id, deleteFiles: true) }
@@ -355,10 +355,10 @@ public struct RootView: View {
             .help("Resume all paused downloads")
 
             Menu {
-                Button("Remove from Library") {
+                Button("Remove from List") {
                     Task { await model.removeSelectedTerminal(deleteFiles: false) }
                 }
-                Button("Delete File & Remove…", role: .destructive) {
+                Button("Remove Files…", role: .destructive) {
                     guard let id = model.selectedID else { return }
                     pendingDiskDeleteID = id
                 }
@@ -367,7 +367,7 @@ public struct RootView: View {
             }
             .disabled(!canRemove)
             .accessibilityLabel("Remove selected download")
-            .help("Remove from library only, or delete the file from disk too")
+            .help("Remove from list only, or delete the file from disk too")
 
             Button {
                 // Bulk and irreversible — the only remove action that can wipe

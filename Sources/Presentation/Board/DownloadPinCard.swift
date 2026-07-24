@@ -107,6 +107,7 @@ struct DownloadPinCard: View {
         Button("Resume") { onCommand?(.resume) }
             .disabled(!canResume)
         Button("Cancel") { onCommand?(.cancel) }
+            .disabled(!canCancel)
         Divider()
         Button("Retry") { onCommand?(.retry) }
             .disabled(!canRetry)
@@ -114,11 +115,11 @@ struct DownloadPinCard: View {
             .disabled(!canRestart)
         Divider()
         Button("Open in Finder") { onRevealInFinder?() }
-        if canRemove {
-            Divider()
-            Button("Remove from Library") { onRemoveFromLibrary?() }
-            Button("Delete File & Remove…", role: .destructive) { onDeleteFromDisk?() }
-        }
+        Divider()
+        Button("Remove from List") { onRemoveFromLibrary?() }
+            .disabled(onRemoveFromLibrary == nil)
+        Button("Remove Files…", role: .destructive) { onDeleteFromDisk?() }
+            .disabled(onDeleteFromDisk == nil)
     }
 
     private var pauseResumeStatusButton: some View {
@@ -256,16 +257,16 @@ struct DownloadPinCard: View {
         row.state == .paused || row.state == .retryWaiting
     }
 
+    private var canCancel: Bool {
+        !JobState.terminalStates.contains(row.state)
+    }
+
     private var canRetry: Bool {
         row.state == .failed || row.state == .cancelled
     }
 
     private var canRestart: Bool {
         row.state == .paused || row.state == .failed || row.state == .cancelled
-    }
-
-    private var canRemove: Bool {
-        row.state == .completed || row.state == .failed || row.state == .cancelled
     }
 
     private var accessibilitySummary: String {

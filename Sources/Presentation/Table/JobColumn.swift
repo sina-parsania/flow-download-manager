@@ -153,11 +153,12 @@ struct JobColumn {
     }
 }
 
-/// Name + host stacked; each line truncates with an ellipsis (never wraps).
+/// Name + host stacked and vertically centered; each line truncates with an ellipsis.
 @MainActor
 final class NameCellView: NSTableCellView {
     private let nameField = NSTextField(labelWithString: "")
     private let hostField = NSTextField(labelWithString: "")
+    private let stack = NSStackView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -171,17 +172,18 @@ final class NameCellView: NSTableCellView {
             font: .systemFont(ofSize: NSFont.smallSystemFontSize),
             color: .secondaryLabelColor
         )
-        addSubview(nameField)
-        addSubview(hostField)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(nameField)
+        stack.addArrangedSubview(hostField)
+        addSubview(stack)
         textField = nameField
         NSLayoutConstraint.activate([
-            nameField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            nameField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            nameField.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            hostField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            hostField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            hostField.topAnchor.constraint(equalTo: nameField.bottomAnchor, constant: 1),
-            hostField.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4)
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
 
@@ -284,6 +286,7 @@ final class FlowProgressBarView: NSView {
 final class ProgressCellView: NSTableCellView {
     private let bar = FlowProgressBarView()
     private let label = NSTextField(labelWithString: "")
+    private let stack = NSStackView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -297,16 +300,20 @@ final class ProgressCellView: NSTableCellView {
         label.cell?.lineBreakMode = .byTruncatingTail
         label.cell?.truncatesLastVisibleLine = true
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        addSubview(bar)
-        addSubview(label)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(bar)
+        stack.addArrangedSubview(label)
+        addSubview(stack)
         NSLayoutConstraint.activate([
-            bar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            bar.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             bar.heightAnchor.constraint(equalToConstant: 8),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            label.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 3)
+            bar.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            label.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
 

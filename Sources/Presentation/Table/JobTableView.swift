@@ -77,7 +77,7 @@ public struct JobTableView: NSViewRepresentable {
         let tableView = JobListTableView()
         tableView.style = .inset
         tableView.usesAlternatingRowBackgroundColors = true
-        tableView.rowHeight = 40
+        tableView.rowHeight = 56
         tableView.allowsMultipleSelection = true
         tableView.allowsEmptySelection = true
         // Click-drag across rows extends the selection (with multi-select on).

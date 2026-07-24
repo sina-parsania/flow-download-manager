@@ -25,12 +25,12 @@ struct DownloadPinCard: View {
         row.id.hashValue & 0xFFFF
     }
 
-    private let rowHeight: CGFloat = 64
+    private let rowHeight: CGFloat = 74
 
     var body: some View {
         HStack(spacing: 12) {
             pauseResumeBadgeButton
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(row.name)
                     .font(FlowTheme.Typeface.title(13))
                     .foregroundStyle(palette.ink)
@@ -73,9 +73,9 @@ struct DownloadPinCard: View {
 
             pauseResumeStatusButton
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, minHeight: rowHeight, maxHeight: rowHeight, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, minHeight: rowHeight, maxHeight: rowHeight, alignment: .center)
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(palette.pinSurface)

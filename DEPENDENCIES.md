@@ -1,15 +1,15 @@
 # Dependencies
 
-This document is the authoritative dependency manifest for **Download Manager**
-(native macOS 14.0+, Apple Silicon / arm64 only). It records every third-party
-component and the exact terms under which it is used.
+This document is the authoritative dependency manifest for **Flow Download
+Manager** ("Flow", native macOS 14.0+, Apple Silicon / arm64 only). It records
+every third-party component and the exact terms under which it is used.
 
-Project status: **Phase 1 in progress — Universal Transfer Release.** Phase 0
-foundation remains; this document now also covers the pinned libcurl stack
-introduced for transfer networking.
+Project status: current as of **v0.2.0**, the shipping community build. The
+manifest below covers GRDB.swift and the pinned static libcurl stack used for
+transfer networking.
 
 Scope of "shipped runtime dependency": a component whose code is distributed to
-end users inside the signed, notarized product (linked, embedded, or bundled).
+end users inside the released product (linked, embedded, or bundled).
 Build-time and developer tooling is listed separately and is **not** distributed.
 
 ## Shipped runtime dependencies
@@ -37,8 +37,8 @@ Notes:
 
 These tools support building, formatting, and linting the source. They run on
 developer and CI machines only. **None of them are linked, embedded, bundled, or
-otherwise distributed** in the signed product, and none of their code reaches end
-users.
+otherwise distributed** in the released product, and none of their code reaches
+end users.
 
 They are installed via Homebrew by `make bootstrap-tools`.
 
@@ -48,7 +48,7 @@ They are installed via Homebrew by `make bootstrap-tools`.
 | SwiftFormat | Source code formatting | No — build-time only |
 | SwiftLint | Static lint / style enforcement | No — build-time only |
 
-## Planned for later phases (NOT present yet)
+## Planned for later releases (NOT present yet)
 
 - libtorrent
 - yt-dlp / yt-dlp-ejs / Deno

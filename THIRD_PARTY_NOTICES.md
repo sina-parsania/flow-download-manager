@@ -1,16 +1,16 @@
 # Third-Party Notices
 
 This file lists the license notices for third-party components that are
-distributed as part of Download Manager. It covers only components that ship
-inside the application bundle; developer-only tools used to build, test, or
-release the software but not distributed to users are not listed here.
+distributed as part of Flow Download Manager ("Flow"). It covers only components
+that ship inside the application bundle; developer-only tools used to build,
+test, or release the software but not distributed to users are not listed here.
 
 Each component is reproduced below under its own heading with its exact license
 text, as required by that component's license.
 
-Phase 1 ships GRDB.swift plus the pinned static libcurl stack (curl, OpenSSL,
-nghttp2, libssh2). Additional components will be added here with their exact
-notices as later phases ship.
+Flow v0.2.0 ships GRDB.swift plus the pinned static libcurl stack (curl,
+OpenSSL, nghttp2, libssh2). Additional components will be added here with their
+exact notices as later releases ship.
 
 ---
 

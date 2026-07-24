@@ -1,14 +1,15 @@
-# Contributing to Download Manager
+# Contributing to Flow Download Manager
 
-Thanks for your interest in contributing. Download Manager is a native macOS
-download manager (macOS 14.0+, Apple Silicon only) built as a main app plus a
-per-user `DownloadEngineAgent` LaunchAgent communicating over an authenticated,
+Thanks for your interest in contributing. Flow Download Manager ("Flow") is a
+native macOS download manager (macOS 14.0+, Apple Silicon only) built as a main
+app plus a per-user `DownloadEngineAgent` communicating over an authenticated,
 versioned XPC interface.
 
-The project is at **Phase 0 — repository foundation**. There are no shipping user
-download features yet; contributions at this stage strengthen the build system,
-policies, architecture scaffolding, tests, and tooling. Contributions are accepted
-under **GPL-3.0-or-later** (see [License](#license)).
+**Flow v0.2.0 has shipped** as an installable community build (see
+[`CHANGELOG.md`](CHANGELOG.md)), so contributions land on software people are
+running: fixes and features in the transfer engine and UI, plus the build
+system, policies, tests, and tooling that keep releases shippable. Contributions
+are accepted under **GPL-3.0-or-later** (see [License](#license)).
 
 Before writing code, read [`AGENTS.md`](AGENTS.md) — it is the authoritative
 operating guide and defines the module layering and architecture boundaries that
@@ -82,7 +83,7 @@ pass; fix the underlying code.
   mechanically-guaranteed generated constants that are explicitly allowlisted.
 - **No empty or broadly-silent `catch`** blocks.
 - **No skipped, disabled, or focused-only tests.**
-- **No code, UI, or schema for a future phase.** In-scope work is complete;
+- **No code, UI, or schema for a future release.** In-scope work is complete;
   out-of-scope work is absent — no target, no stub, no dead flag. A deferred
   requirement is removed from committed scope, not left half-implemented.
 

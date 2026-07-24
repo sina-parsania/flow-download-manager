@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-DIR="Artifacts/validation/phase0/$TS"
+DIR="Artifacts/validation/evidence/$TS"
 mkdir -p "$DIR"
 
 Scripts/doctor.sh > "$DIR/environment.txt" 2>&1 || true
@@ -37,5 +37,5 @@ cat > "$DIR/summary.md" <<SUMMARY
 This bundle contains no secrets, private URLs, cookies, headers or signing identities.
 SUMMARY
 
-ln -sfn "$TS" "Artifacts/validation/phase0/latest" 2>/dev/null || true
+ln -sfn "$TS" "Artifacts/validation/evidence/latest" 2>/dev/null || true
 echo "evidence bundle: $DIR"

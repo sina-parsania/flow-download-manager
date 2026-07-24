@@ -1,20 +1,22 @@
 # Privacy Policy
 
-This document describes how Download Manager handles data. It is an engineering
-privacy policy for a local-first application, not legal advice. A qualified
-privacy reviewer must review it before public release.
+This document describes how Flow Download Manager ("Flow") handles data. It is
+an engineering privacy policy for a local-first application, not legal advice. A
+qualified privacy reviewer must review it before public release.
 
-**Project status.** Download Manager is at **Phase 0 — repository foundation**.
-No user-facing download, browser, media, or torrent features have shipped yet.
-This policy describes the data-handling architecture and the commitments that
-those features are being built to honor. It will be revised as each phase ships
+**Project status.** Flow v0.2.0 has shipped as an installable community build.
+Downloading, the library/history, and the Chrome companion are live; browser
+cookie transfer, media, and torrent features have not shipped. This policy
+describes the data-handling architecture as built, and the commitments the
+remaining features are being built to honor. It is revised as each release ships
 and its actual behavior is verified against network capture.
 
 **Platform.** Native macOS 14.0 or later on Apple Silicon (arm64), distributed
-directly under Developer ID (code-signed and notarized), not via the Mac App
-Store. The product is composed of a main app and a per-user LaunchAgent
-(`DownloadEngineAgent`) that communicate over an authenticated, versioned XPC
-interface. All components described here run on the user's own Mac.
+from GitHub rather than the Mac App Store; community builds are unsigned /
+ad-hoc, with Developer ID signing and notarization optional. The product is
+composed of a main app and a per-user engine (`DownloadEngineAgent`) that
+communicate over an authenticated, versioned XPC interface. All components
+described here run on the user's own Mac.
 
 ## 1. Summary
 
@@ -96,7 +98,7 @@ choosing to share it.
 
 ## 4. Your controls
 
-The app is being built to give you direct control over your data. Each control
+The app gives you direct control over your data. Each control
 below states what it does to your **downloaded files**, which are yours and are
 never removed as a side effect of clearing metadata:
 
@@ -120,22 +122,22 @@ never removed as a side effect of clearing metadata:
 ## 5. Opt-in features with privacy implications
 
 Two capabilities have privacy consequences beyond local processing. **Neither is
-present yet** — they are planned for later phases. When they ship, each will be
+present yet** — they are planned for later releases. When they ship, each will be
 **opt-in** and will state its implications during onboarding before you enable
 it:
 
-- **Browser cookie transfer.** A future browser-integration phase may, at your
+- **Browser cookie transfer.** A future browser-integration release may, at your
   request, transfer cookies from your browser so a download can authenticate as
   your logged-in session. Onboarding will state the purpose, the host scope, how
   long anything is retained, and how to revoke access. Captured data is handled
   by the local engine, never sent to a project-operated server.
-- **BitTorrent public-IP exposure.** A future torrent phase involves
+- **BitTorrent public-IP exposure.** A future torrent release involves
   peer-to-peer participation, which can expose your public IP address to peers
   and trackers. Onboarding will explain this exposure, seeding behavior, and the
   relevant controls before you use the feature. The app does not claim anonymity.
 
-Until those phases ship, these features do not exist in the app and this section
-describes intended policy only.
+Until those releases ship, these features do not exist in the app and this
+section describes intended policy only.
 
 ## 6. Third parties
 

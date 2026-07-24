@@ -1,4 +1,4 @@
-# Phase 5 — Release checklist
+# Release checklist
 
 Two tracks. **Community GitHub** is the default and does **not** need Developer ID.
 
@@ -13,8 +13,8 @@ Goal: free source + unsigned DMG others can run with one Gatekeeper bypass.
 5. GitHub Release: attach unsigned DMG + SBOM; say clearly **not notarized**
 6. Prefer tagging a reviewed commit; never attach signing secrets
 
-**Community Phase 5 done** when the above are published. Gatekeeper warnings are
-expected and documented.
+**A community release is done** when the above are published. Gatekeeper warnings
+are expected and documented. This is the track v0.2.0 shipped on.
 
 ## Track B — Optional Developer ID (paid Apple Program)
 

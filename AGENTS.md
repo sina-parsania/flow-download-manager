@@ -1,4 +1,4 @@
-# AGENTS.md — Download Manager
+# AGENTS.md — Flow Download Manager
 
 Authoritative operating guide for coding agents in this repository. Read this and
 the linked contracts before editing. The normative specification lives in
@@ -7,13 +7,15 @@ file is the terse working summary.
 
 ## What this is
 
-A native macOS (14.0+, arm64-only) download manager built as a main app plus a
-per-user `DownloadEngineAgent` LaunchAgent that talk over versioned, authenticated
-XPC. Distribution is **GitHub community builds** by default (unsigned / ad-hoc OK;
-see ADR 0008). Optional Developer ID notarization is supported but **not required**.
-License: `GPL-3.0-or-later`. Current state: **Phases 1–5 community path in progress** —
-Universal Transfer + Chrome Native Messaging + media/torrent/release plumbing landed;
-manual VoiceOver and optional notarization remain open.
+**Flow** (full name: Flow Download Manager) is a native macOS (14.0+, arm64-only)
+download manager built as a main app plus a per-user `DownloadEngineAgent` that
+talk over versioned, authenticated XPC. Distribution is **GitHub community builds**
+by default (unsigned / ad-hoc OK; see ADR 0008). Optional Developer ID notarization
+is supported but **not required**. License: `GPL-3.0-or-later`.
+
+Current state: **v0.2.0 shipped** — an installable community DMG (`VERSION` =
+`0.2.0`, `CHANGELOG.md`, one-line installer in `README.md`). Open items: a manual
+VoiceOver pass and optional Developer ID notarization.
 
 ## Build & test commands
 
@@ -76,6 +78,6 @@ CI on pull requests never signs, notarizes or requires production secrets.
 
 ## Handoff
 
-Every phase ends with `Artifacts/handoffs/<phase>-<UTC>.md` per
+Every work slice ends with `Artifacts/handoffs/<slice>-<UTC>.md` per
 `07-handoff-protocol.md` in the private spec pack,
 led by `COMPLETE | INCOMPLETE | BLOCKED` with raw command/artifact evidence.

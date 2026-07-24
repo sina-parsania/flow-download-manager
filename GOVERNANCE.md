@@ -1,10 +1,11 @@
 # Governance
 
-How **Download Manager** is maintained, how decisions are made, and how releases
-are authorized. This document is normative repository policy. It describes the
-governing model and process, not delivered user features: the project is at
-**Phase 0 — repository foundation**, and no user-facing download capability has
-shipped yet.
+How **Flow Download Manager** ("Flow") is maintained, how decisions are made, and
+how releases are authorized. This document is normative repository policy: it
+describes the governing model and process, not the delivered user features —
+those live in [`README.md`](README.md) and [`CHANGELOG.md`](CHANGELOG.md). Flow
+ships today as a community build (v0.2.0), so these rules govern releases that
+reach real users.
 
 It complements, and does not override, the operating contracts already in the
 repository: [`AGENTS.md`](AGENTS.md), the master plan and release train
@@ -28,7 +29,7 @@ legal entity implied by this document.
   request.
 - **Maintainers** — people with review and merge authority. Maintainers are
   responsible for code quality, architecture-boundary enforcement
-  (`AGENTS.md` §"Architecture boundaries"), scope discipline (no future-phase
+  (`AGENTS.md` §"Architecture boundaries"), scope discipline (no unreleased
   surface area lands early), and for keeping `main` releasable.
 - **Release owner** — a single designated maintainer who owns the release train.
   The release owner accepts or rejects S4 defects for a release
@@ -45,11 +46,11 @@ legal entity implied by this document.
   upgrade.
 
 The current holders of the release owner and dependency/CVE review roles are
-recorded as part of the Phase 5 documentation set (`06` §1). Until that set is
-published, treat the role holder as
-**`<release-owner configured by the project>`** and set it before any public
-release. This document uses roles, not personal names, so it does not go stale
-when people rotate.
+recorded in the release documentation (`06` §1). That entry is still an unset
+placeholder — treat the role holder as
+**`<release-owner configured by the project>`** until a real name is filled in.
+This document uses roles, not personal names, so it does not go stale when
+people rotate.
 
 ## 2. How decisions are made
 
@@ -92,9 +93,9 @@ require agreement from a majority of maintainers, including the release owner.
 - Continuous integration policy: PR CI runs the stable gates and **must run
   without any signing, notarization, or publishing credential**. No production
   secret is available to CI on pull requests (`AGENTS.md`
-  §"Remote-action approval policy", `06` §4). CI as a running pipeline is itself
-  Phase 0 foundation work; this section is the policy it must satisfy, stated in
-  normative voice.
+  §"Remote-action approval policy", `06` §4). CI runs today as
+  `.github/workflows/ci.yml`; this section is the policy that pipeline must
+  satisfy.
 - Remote actions that mutate shared state — pushing, tagging, creating GitHub
   releases/issues/PRs, publishing the extension, signing/notarizing with
   protected credentials, uploading an appcast — require explicit human
@@ -103,26 +104,28 @@ require agreement from a majority of maintainers, including the release owner.
 
 ## 4. Release process and two-person approval
 
-The project ships a phased release train, Phases 0 through 5 (`00` §3). The
-governance rules differ between an internal phase completion and a build that is
-actually signed, notarized, and published to users.
+The staged build-out described in `00` §3 has completed and Flow now ships
+versioned releases from `main`. The governance rules differ between an internal
+release-candidate sign-off and a build that is actually published to users.
 
-**Phase completion (internal).** A phase is complete only when its phase exit
-gate is green (`00` §7): every in-scope requirement has automated verification
-and a traceability entry; all affected unit, integration, UI, performance,
-recovery, sanitizer, and fuzz suites pass; zero first-party warnings; the
-accessibility checks pass; documentation matches actual behavior with no
-future UI exposed; the threat model and dependency manifest reflect the new
-attack surface; and known S1–S3 defects are zero, with S4 issues explicitly
-accepted by the release owner. Evidence is captured under
-`Artifacts/validation/<phase>/<timestamp>/` (`05` §13) and referenced in the
+**Release-candidate sign-off (internal).** A candidate is complete only when its
+exit gate is green (`00` §7): every in-scope requirement has automated
+verification and a traceability entry; all affected unit, integration, UI,
+performance, recovery, sanitizer, and fuzz suites pass; zero first-party
+warnings; the accessibility checks pass; documentation matches actual behavior
+with no unreleased UI exposed; the threat model and dependency manifest reflect
+the new attack surface; and known S1–S3 defects are zero, with S4 issues
+explicitly accepted by the release owner. Evidence is captured under
+`Artifacts/validation/<label>/<timestamp>/` (`05` §13) and referenced in the
 handoff (`07-handoff-protocol.md`).
 
 **Signed / notarized / published builds require two-person approval.** The
-Developer ID signing, Hardened Runtime, notarization, stapled DMG, and Sparkle 2
-appcast machinery are Phase 5 deliverables (`00` §3, `06` §5). Producing a
-build that is signed, notarized, or published to users requires, in addition to
-the applicable phase exit gate:
+release tooling exists today under `Scripts/release/` and
+[`Documentation/release-checklist.md`](Documentation/release-checklist.md),
+covering both the default unsigned community track and the optional Developer ID
+track (signing, Hardened Runtime, notarization, stapled DMG) — see `00` §3,
+`06` §5. Producing a build that is signed, notarized, or published to users
+requires, in addition to the applicable exit gate:
 
 - **Two distinct humans** to approve the signing/notarization/publishing action.
   The release owner is one authorized approver but **cannot supply both
@@ -144,12 +147,12 @@ the general development flow (`06` §4, `00` §6). Ordinary development and PR
 validation neither need nor receive release credentials. Nothing on a pull
 request path can sign, notarize, or publish.
 
-**Phase gates that must pass before a release.** Before a build is released, the
-four gate families the release train enforces must be green on the release
+**Gates that must pass before a release.** Before a build is released, the four
+gate families the release train enforces must be green on the release
 candidate:
 
 - **Build/test** — clean build with warnings as errors and the full test
-  suites (`05` §6, and the phase exit gate in `00` §7).
+  suites (`05` §6, and the release exit gate in `00` §7).
 - **Sanitizer** — ASan and TSan (run separately, never combined), Main Thread
   Checker, and the C/C++ UBSan/static-analyzer runs, each with zero reports
   (`05` §8).
@@ -173,10 +176,10 @@ expedited signed update. Critical or high remotely exploitable findings block
 release and trigger an expedited, signed update through the normal signing path
 (so the two-person approval of §4 still applies). Security fixes ship with
 regression tests and follow the advisory/credit policy. The private reporting
-channel and supported-version policy are published in `SECURITY.md` as part of
-the Phase 5 documentation set; until then the reporting address is
-**`<security-contact configured by the release owner>`** and must be set before
-public release.
+channel and supported-version policy are published in
+[`SECURITY.md`](SECURITY.md). The reporting address there is still an unset
+placeholder — **`<security-contact configured by the release owner>`** — and
+must be replaced with a real, monitored channel.
 
 **Dependency and CVE review is owned by the dependency/CVE review owner**
 (`06` §2, §11). A dependency vulnerability scan runs at least weekly and on
@@ -193,14 +196,14 @@ requested. The path:
 
 1. A track record of merged pull requests, reviews, or issue triage that shows
    good judgment, respect for the architecture boundaries and strict gates, and
-   discipline about phase scope.
+   discipline about release scope.
 2. Nomination by an existing maintainer.
 3. Agreement by lazy consensus among the maintainers — approval from the other
    maintainers with no sustained, substantive objection, and confirmation from
    the release owner.
 
 A new maintainer receives review and merge rights and is added to the
-role-based maintainer list in the Phase 5 documentation set. Maintainers are
+role-based maintainer list in the release documentation. Maintainers are
 expected to disclose conflicts of interest and to recuse themselves where
 appropriate. A maintainer may step down at any time and be listed as emeritus;
 maintainers who are inactive for an extended period, or who repeatedly act
@@ -211,7 +214,7 @@ rights and can be reversed by the same process that grants maintainership.
 ---
 
 Placeholders in this document (**`<release-owner configured by the project>`**,
-**`<security-contact configured by the release owner>`**) are deliberate: they
-must be replaced with real values by the release owner before any public
-release. This file will not invent an organization, domain, email address, or
-legal entity in their place.
+**`<security-contact configured by the release owner>`**) are deliberate and
+still outstanding: they must be replaced with real values by the release owner.
+This file will not invent an organization, domain, email address, or legal
+entity in their place.

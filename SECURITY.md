@@ -1,13 +1,16 @@
 # Security Policy
 
-Download Manager is a native macOS application (macOS 14.0+, Apple Silicon /
-arm64 only) distributed as a code-signed, notarized Developer ID build outside
-the Mac App Store. It runs as a main app plus a per-user `DownloadEngineAgent`
-LaunchAgent that communicate over an authenticated, versioned XPC interface.
+Flow Download Manager ("Flow") is a native macOS application (macOS 14.0+,
+Apple Silicon / arm64 only) distributed from GitHub outside the Mac App Store.
+Community builds ship **unsigned / ad-hoc** by design (see
+[ADR 0008](Documentation/adr/0008-community-github-distribution.md)); optional
+Developer ID signing and notarization are supported but not required. Flow runs
+as a main app plus a per-user `DownloadEngineAgent` that communicate over an
+authenticated, versioned XPC interface.
 
-The project is currently at **Phase 0 — repository foundation**. There are no
-shipping user download features yet; this policy governs the security of the
-codebase, its architecture, and the release pipeline as they are built.
+**Flow v0.2.0 has shipped** as an installable community release, so this policy
+governs software that real users are running today: the shipping download
+features, the codebase and its architecture, and the release pipeline.
 
 We take security seriously and appreciate coordinated, good-faith reports.
 
@@ -71,7 +74,7 @@ has shipped and the coordinated disclosure date has passed.
 
 ### In scope
 
-- The main **Download Manager** application.
+- The main **Flow** application.
 - The per-user **`DownloadEngineAgent`** LaunchAgent.
 - The **XPC interface** between the app and the agent (authentication, peer
   code-signing validation, message/version handling, DTO decoding).
@@ -87,7 +90,7 @@ has shipped and the coordinated disclosure date has passed.
 - Social engineering of maintainers or users (phishing, pretexting, physical
   access attacks, and similar).
 - Findings that depend on unsupported OS versions, non-Apple-Silicon hardware, or
-  builds modified outside the official signed distribution.
+  builds modified outside the official GitHub distribution.
 - Best-practice or hardening suggestions with no demonstrable security impact.
 
 If you are unsure whether something is in scope, report it privately and let us
@@ -96,14 +99,14 @@ assess.
 ## Release Impact of Security Findings
 
 A confirmed **critical or high-severity, remotely exploitable** finding is a
-**release blocker**: it stops the affected release and triggers an **expedited,
-code-signed and notarized update** through the normal Developer ID distribution
-channel once a fix is validated. Lower-severity issues are scheduled into regular
-releases.
+**release blocker**: it stops the affected release and triggers an **expedited
+update** through the normal GitHub release channel once a fix is validated —
+code-signed and notarized when a Developer ID is in use. Lower-severity issues
+are scheduled into regular releases.
 
 ## Privacy and Telemetry
 
-Download Manager performs its processing **locally** and ships **no telemetry**:
+Flow performs its processing **locally** and ships **no telemetry**:
 no analytics, no usage or crash reporting uploaded by default, and no background
 network reporting. There is no account system. This is a deliberate design
 constraint — reports of any undisclosed data collection or exfiltration are

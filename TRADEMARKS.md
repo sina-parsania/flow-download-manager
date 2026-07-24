@@ -19,12 +19,19 @@ marks.
 
 For this policy, "the marks" means:
 
-- the project name ("Download Manager", the working public name), and
-- any associated logo, icon, wordmark, or other brand assets.
+- **Flow** and **Flow Download Manager** — the product names under which this
+  software is published (see [`README.md`](README.md) and the
+  `CFBundleDisplayName` in [`project.yml`](project.yml)) — and
+- any associated logo, icon, wordmark, or other brand assets, including the app
+  icon shipped in the `Flow Download Manager.app` bundle.
+
+`DownloadManager` (the Xcode target, scheme, bundle identifier, and build-product
+name) is an internal build identifier, not a mark, and this policy does not
+restrict it.
 
 The marks are (or will be) controlled by the project owner. Any registered
 trademarks and the precise legal owner are **owner-supplied placeholders** and
-must be filled in before public release:
+must be filled in:
 
 - Mark owner: `<mark-owner configured by the release owner>`
 - Registered marks (if any): `<registered-marks configured by the release owner>`
@@ -32,9 +39,9 @@ must be filled in before public release:
 ## What you may do
 
 - **Nominative / fair use.** You may use the name to refer to this project
-  truthfully — for example, "compatible with Download Manager", "a fork of
-  Download Manager", or in reviews, articles, and documentation. This does not
-  imply endorsement or affiliation.
+  truthfully — for example, "compatible with Flow", "a fork of Flow Download
+  Manager", or in reviews, articles, and documentation. This does not imply
+  endorsement or affiliation.
 - **Unmodified redistribution.** You may redistribute unmodified official
   builds under the project name, provided you do not misrepresent their origin.
 
@@ -56,12 +63,12 @@ your own choosing.
 
 ## Status
 
-This project is at an early stage (repository foundation). This policy states
-intent and rules for the marks; the specific owner and any registered-mark
-details are placeholders to be finalized before public release.
+Flow ships publicly today as a community build (v0.2.0). This policy states the
+rules for the marks as published; the specific mark owner and any registered-mark
+details are still placeholders and remain to be finalized.
 
 ## Questions
 
 Requests for permission to use the marks should go to the release owner:
-`<brand-contact configured by the release owner>` (must be set before public
-release).
+`<brand-contact configured by the release owner>` (still unset — must be
+replaced with a real, monitored channel).

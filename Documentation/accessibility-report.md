@@ -1,8 +1,8 @@
-# Accessibility report — Phase 1 automated lane
+# Accessibility report — automated lane
 
-Status: automated accessibility foundation expanded for Phase 1 controls;
-interactive VoiceOver/keyboard scripts still require a human UI lane before
-claiming Phase 1 COMPLETE.
+Status (as of v0.2.0): the automated accessibility foundation covers the shipping
+controls; the interactive VoiceOver/keyboard scripts below still require a human
+UI lane and remain the one open accessibility item.
 
 ## Automated foundation (verified in source)
 

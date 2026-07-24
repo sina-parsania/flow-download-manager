@@ -139,11 +139,11 @@ it:
 Until those releases ship, these features do not exist in the app and this
 section describes intended policy only.
 
-**Application updates (Sparkle).** Check for Updates (and scheduled automatic
-checks) contact the project appcast on GitHub to see whether a newer build
-exists. If you continue, Sparkle downloads that build and installs it on your
-Mac. The project does not receive analytics from this path; GitHub’s policies
-apply to those HTTPS requests.
+**Application updates (Sparkle).** Check for Updates is manual by default. If you
+enable automatic checks (and optionally automatic download) in Settings, Flow
+contacts the project appcast on GitHub on a schedule. Installs still happen on
+your Mac via Sparkle; the project does not receive analytics from this path.
+GitHub’s policies apply to those HTTPS requests.
 
 ## 6. Third parties
 

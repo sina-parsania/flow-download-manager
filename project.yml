@@ -158,8 +158,9 @@ targets:
         # Sparkle 2 — EdDSA public key (private key stays in maintainer Keychain).
         SUFeedURL: https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/docs/appcast.xml
         SUPublicEDKey: /b6wI3YAIL72PL4z6IGRbUjTmCjdxQCzSZ9SXEFCqn8=
-        SUEnableAutomaticChecks: true
-        SUAutomaticallyUpdate: true
+        # Manual Check for Updates by default — automatic paths are Settings opt-ins.
+        SUEnableAutomaticChecks: false
+        SUAutomaticallyUpdate: false
         SUScheduledCheckInterval: 86400
         # Local-dev URL scheme only (FR-ING dock / URL handoff). Not for production distribution.
         CFBundleURLTypes:

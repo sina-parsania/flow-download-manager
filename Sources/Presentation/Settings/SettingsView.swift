@@ -12,6 +12,8 @@ public struct SettingsView: View {
     @EnvironmentObject private var updateCheck: UpdateCheckController
     @AppStorage(ClipboardMonitor.userDefaultsKey) private var clipboardMonitoringEnabled = false
     @AppStorage(FlowAppearanceMode.userDefaultsKey) private var appearanceModeRaw = FlowAppearanceMode.system.rawValue
+    @AppStorage(UpdateCheckController.automaticChecksDefaultsKey) private var automaticUpdateChecks = false
+    @AppStorage(UpdateCheckController.automaticDownloadDefaultsKey) private var automaticUpdateDownload = false
 
     public init() {}
 
@@ -316,9 +318,24 @@ public struct SettingsView: View {
                     updateCheck.checkForUpdates()
                 }
                 .accessibilityLabel("Check for Updates")
+                Toggle("Check for updates automatically", isOn: $automaticUpdateChecks)
+                    .accessibilityLabel("Check for updates automatically")
+                    .onChange(of: automaticUpdateChecks) { _, enabled in
+                        updateCheck.setAutomaticallyChecksForUpdates(enabled)
+                        if !enabled {
+                            automaticUpdateDownload = false
+                            updateCheck.setAutomaticallyDownloadsUpdates(false)
+                        }
+                    }
+                Toggle("Download updates automatically", isOn: $automaticUpdateDownload)
+                    .disabled(!automaticUpdateChecks)
+                    .accessibilityLabel("Download updates automatically")
+                    .onChange(of: automaticUpdateDownload) { _, enabled in
+                        updateCheck.setAutomaticallyDownloadsUpdates(enabled)
+                    }
                 Text(
-                    "Flow checks the signed appcast and can download and install updates "
-                        + "in the background. You do not need to open GitHub."
+                    "Updates stay manual unless you turn these on. Check for Updates always "
+                        + "downloads and installs from inside Flow — no GitHub visit required."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

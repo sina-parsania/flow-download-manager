@@ -10,6 +10,7 @@ public struct SettingsView: View {
     @StateObject private var model = SettingsModel()
     @EnvironmentObject private var launchAgent: LaunchAgentModel
     @EnvironmentObject private var updateCheck: UpdateCheckController
+    @EnvironmentObject private var chromeCompanion: ChromeCompanionSetupController
     @AppStorage(ClipboardMonitor.userDefaultsKey) private var clipboardMonitoringEnabled = false
     @AppStorage(FlowAppearanceMode.userDefaultsKey) private var appearanceModeRaw = FlowAppearanceMode.system.rawValue
     @AppStorage(UpdateCheckController.automaticChecksDefaultsKey) private var automaticUpdateChecks = false
@@ -307,6 +308,23 @@ public struct SettingsView: View {
                 }
             }
 
+            Section("Browser companion") {
+                Text(
+                    "Chrome cannot install Flow’s companion automatically — community "
+                        + "builds are not on the Chrome Web Store yet. Flow can register "
+                        + "the native host and open the one-time Load unpacked steps for you."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                LabeledContent("Status", value: chromeCompanion.statusLine)
+                Button(chromeCompanion.isRegistered ? "Set Up Again…" : "Set Up Chrome Companion…") {
+                    chromeCompanion.runSetup()
+                }
+                .disabled(chromeCompanion.isBusy)
+                .accessibilityLabel("Set up Chrome companion")
+            }
+
             Section("About") {
                 LabeledContent("Product", value: "Flow Download Manager")
                 LabeledContent(
@@ -351,11 +369,19 @@ public struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(minWidth: 480, minHeight: 480)
-        .task { await model.reload() }
+        .task {
+            chromeCompanion.refreshStatus()
+            await model.reload()
+        }
         .alert(updateCheck.alertTitle, isPresented: $updateCheck.isAlertPresented) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(updateCheck.alertMessage)
+        }
+        .alert(chromeCompanion.resultTitle, isPresented: $chromeCompanion.isResultPresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(chromeCompanion.resultMessage)
         }
     }
 }

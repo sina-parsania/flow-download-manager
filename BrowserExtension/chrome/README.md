@@ -4,7 +4,12 @@ Manifest V3 extension that sends URLs to the local `ChromeNativeHost` over
 Chrome Native Messaging. The host enqueues through authenticated XPC; the
 extension never touches the queue database or partial files.
 
-## Local load
+## Local load (developers)
+
+Prefer **Settings → Browser companion → Set Up Chrome Companion…** in a running
+Flow build. That path works for end users without a source checkout.
+
+Manual / script path:
 
 1. Install Flow (`Documentation/install-from-github.md`) or build the
    **DownloadManager** app, which embeds `ChromeNativeHost` in `Contents/MacOS/`.

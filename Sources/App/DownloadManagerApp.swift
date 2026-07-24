@@ -17,6 +17,7 @@ struct DownloadManagerApp: App {
     @StateObject private var menuBar = MenuBarController()
     @StateObject private var clipboardMonitor = ClipboardMonitor()
     @StateObject private var updateCheck = UpdateCheckController()
+    @StateObject private var chromeCompanion = ChromeCompanionSetupController()
 
     init() {
         // Non-UI diagnostic path: report / re-register SMAppService, then exit.
@@ -36,6 +37,7 @@ struct DownloadManagerApp: App {
                 .frame(minWidth: 900, minHeight: 520)
                 .flowAppearance()
                 .environmentObject(launchAgent)
+                .environmentObject(chromeCompanion)
                 .onAppear {
                     menuBar.install(
                         library: library,
@@ -46,6 +48,7 @@ struct DownloadManagerApp: App {
                         library.presentClipboardLinks(text)
                     }
                     clipboardMonitor.syncWithPreference()
+                    chromeCompanion.presentIntroIfNeeded()
                 }
                 // Rebuild on job identity/state, not on `rows` — that changes on
                 // every progress tick, which rebuilt the whole menu twice a
@@ -66,6 +69,26 @@ struct DownloadManagerApp: App {
                     Button("OK", role: .cancel) {}
                 } message: {
                     Text(updateCheck.alertMessage)
+                }
+                .alert("Chrome companion", isPresented: $chromeCompanion.isIntroPresented) {
+                    Button("Set Up…") {
+                        chromeCompanion.runSetup()
+                    }
+                    Button("Not Now", role: .cancel) {
+                        chromeCompanion.dismissIntro()
+                    }
+                } message: {
+                    Text(
+                        "Send links from Chrome into Flow. The companion is not on the "
+                            + "Chrome Web Store for community builds, so Flow registers the "
+                            + "native host and walks you through a one-time Load unpacked step. "
+                            + "You can also find this later in Settings → Browser companion."
+                    )
+                }
+                .alert(chromeCompanion.resultTitle, isPresented: $chromeCompanion.isResultPresented) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text(chromeCompanion.resultMessage)
                 }
         }
         .commands {
@@ -103,6 +126,7 @@ struct DownloadManagerApp: App {
             SettingsView()
                 .environmentObject(launchAgent)
                 .environmentObject(updateCheck)
+                .environmentObject(chromeCompanion)
                 .flowAppearance()
         }
     }

@@ -99,8 +99,18 @@ open .build/DerivedData/Build/Products/Debug/DownloadManager.app
 
 ## Chrome companion
 
-The companion extension hands links to Flow through a native messaging host
-embedded in the app bundle. Register the host manifest from a source checkout:
+Chrome cannot install Flow’s companion automatically — community builds are not
+on the Chrome Web Store yet. Inside Flow:
+
+**Settings → Browser companion → Set Up Chrome Companion…**
+
+That registers the native messaging host, copies the extension into
+`~/Library/Application Support/Flow Download Manager/ChromeCompanion/`, reveals
+the folder in Finder, and opens `chrome://extensions`. Then turn on Developer
+mode → **Load unpacked** → pick that folder. First launch also shows a short
+alert with the same path.
+
+From a source checkout you can still use the script:
 
 ```bash
 Scripts/install-chrome-native-host.sh
@@ -109,11 +119,10 @@ Scripts/install-chrome-native-host.sh
 It finds the host inside an installed **Flow Download Manager.app** (or a local
 build), derives the unpacked extension ID from the extension directory the same
 way Chrome does, and writes the manifest for every Chromium-family browser it
-finds. Then load `BrowserExtension/chrome` at `chrome://extensions` →
-Developer mode → **Load unpacked**.
+finds.
 
-If Chrome shows a different extension ID than the script printed, re-run it with
-`DM_CHROME_EXTENSION_ID=<that id>`.
+If Chrome shows a different extension ID than expected, re-run setup from
+Settings, or the script with `DM_CHROME_EXTENSION_ID=<that id>`.
 
 ### What the extension sends
 

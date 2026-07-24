@@ -116,6 +116,12 @@ targets:
       - path: Resources/Localizable.xcstrings
       - path: Resources/Assets.xcassets
       - path: Resources/Updates/appcast.xml
+      - path: BrowserExtension/chrome
+        type: folder
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: ChromeCompanion
       # LaunchAgent plist embedded at Contents/Library/LaunchAgents/ for SMAppService.
       - path: Resources/LaunchAgents/org.downloadmanager.local.DownloadEngineAgent.plist
         buildPhase:

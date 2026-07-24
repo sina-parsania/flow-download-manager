@@ -10,11 +10,16 @@ import XPCContracts
 /// so the context menu always targets the row under the pointer. Clicks in the
 /// empty area below the last row clear the selection.
 private final class JobListTableView: NSTableView {
+    var onContextMenuRow: ((Int) -> Void)?
+
     override func menu(for event: NSEvent) -> NSMenu? {
         let local = convert(event.locationInWindow, from: nil)
         let row = row(at: local)
-        if row >= 0, !selectedRowIndexes.contains(row) {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        if row >= 0 {
+            onContextMenuRow?(row)
+            if !selectedRowIndexes.contains(row) {
+                selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
         }
         return super.menu(for: event)
     }
@@ -102,6 +107,9 @@ public struct JobTableView: NSViewRepresentable {
         }
 
         context.coordinator.tableView = tableView
+        tableView.onContextMenuRow = { [weak coordinator = context.coordinator] row in
+            coordinator?.contextMenuRow = row
+        }
         tableView.dataSource = context.coordinator
         tableView.delegate = context.coordinator
         tableView.menu = context.coordinator.makeContextMenu()
@@ -140,6 +148,7 @@ public struct JobTableView: NSViewRepresentable {
         private var sortKey: JobTableSortKey?
         private var sortAscending = true
         private var isApplyingSelection = false
+        var contextMenuRow: Int = -1
 
         init(
             selectedID: Binding<JobRowModel.ID?>,
@@ -247,6 +256,11 @@ public struct JobTableView: NSViewRepresentable {
             ))
             menu.addItem(.separator())
             menu.addItem(item(
+                "Info",
+                action: #selector(contextInfo),
+                enabled: hasSelection && onOpenInspector != nil
+            ))
+            menu.addItem(item(
                 "Open in Finder",
                 action: #selector(contextReveal),
                 enabled: hasSelection && onRevealInFinder != nil
@@ -272,6 +286,18 @@ public struct JobTableView: NSViewRepresentable {
                 guard index >= 0, index < displayedRows.count else { return nil }
                 return displayedRows[index]
             }
+        }
+
+        private func contextTargetID() -> JobRowModel.ID? {
+            if contextMenuRow >= 0, contextMenuRow < displayedRows.count {
+                return displayedRows[contextMenuRow].id
+            }
+            return selectedID ?? selectedDisplayedRows().first?.id
+        }
+
+        @objc private func contextInfo() {
+            guard let id = contextTargetID() else { return }
+            onOpenInspector?(id)
         }
 
         @objc private func contextPause() {

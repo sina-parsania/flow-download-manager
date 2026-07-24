@@ -139,6 +139,8 @@ struct DownloadPinCard: View {
         Button("Restart") { onCommand?(.restart) }
             .disabled(!canRestart)
         Divider()
+        Button("Info") { onOpenInspector?() }
+            .disabled(onOpenInspector == nil)
         Button("Open in Finder") { onRevealInFinder?() }
         Divider()
         Button("Remove from List") { onRemoveFromLibrary?() }

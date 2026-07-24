@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@colbymchenry/codegraph@0.7.3", "serve", "--mcp"],
+      "comment": "Resolved code knowledge graph. Prefer codegraph search/callers/blast_radius over raw grep for Swift symbol navigation — this repo's four-files-per-RPC XPC surface is exactly the shape callers/blast_radius answers well. Fall back to Grep for string literals and non-code content."
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "respectGitignore": true,
+  "permissions": {
+    "allow": [
+      "Bash(make doctor)",
+      "Bash(make project)",
+      "Bash(make format*)",
+      "Bash(make lint)",
+      "Bash(make build-debug)",
+      "Bash(make verify-fast)",
+      "Bash(make test-*)",
+      "Bash(make incomplete-work-scan)",
+      "Bash(make performance-*)",
+      "Bash(make analyze)",
+      "Bash(xcodebuild -project DownloadManager.xcodeproj*)",
+      "Bash(swiftformat --lint*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git grep*)",
+      "Bash(git branch*)",
+      "Bash(git show*)",
+      "mcp__codegraph__search",
+      "mcp__codegraph__callers",
+      "mcp__codegraph__callees",
+      "mcp__codegraph__blast_radius",
+      "mcp__codegraph__context",
+      "mcp__codegraph__implementers",
+      "mcp__codegraph__dead_code",
+      "mcp__codegraph__semantic_search"
+    ],
+    "ask": [
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git rebase*)",
+      "Bash(git reset --hard*)",
+      "Bash(gh release*)",
+      "Bash(gh pr create*)",
+      "Bash(make release-*)",
+      "Bash(make install-release)",
+      "Bash(codesign*)",
+      "Bash(xcrun notarytool*)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/remind-lanes-on-hot-path-edit.sh'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

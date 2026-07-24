@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Download Manager Companion",
-  "version": "0.2.0",
-  "description": "Send links to the local Download Manager native host.",
+  "name": "Flow Download Manager Companion",
+  "version": "0.3.0",
+  "description": "Send links to Flow Download Manager via the local native host.",
   "permissions": [
     "contextMenus",
     "nativeMessaging",

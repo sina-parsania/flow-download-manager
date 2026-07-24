@@ -26,6 +26,7 @@ public struct JobTableView: NSViewRepresentable {
     public let rows: [JobRowModel]
     @Binding public var selectedID: JobRowModel.ID?
     @Binding public var selectedIDs: Set<JobRowModel.ID>
+    public var onOpenInspector: ((JobRowModel.ID) -> Void)?
     public var onCommand: ((JobCommandKind) -> Void)?
     public var onRemoveFromList: (() -> Void)?
     public var onRemoveFiles: (() -> Void)?
@@ -35,6 +36,7 @@ public struct JobTableView: NSViewRepresentable {
         rows: [JobRowModel],
         selectedID: Binding<JobRowModel.ID?>,
         selectedIDs: Binding<Set<JobRowModel.ID>>,
+        onOpenInspector: ((JobRowModel.ID) -> Void)? = nil,
         onCommand: ((JobCommandKind) -> Void)? = nil,
         onRemoveFromList: (() -> Void)? = nil,
         onRemoveFiles: (() -> Void)? = nil,
@@ -43,6 +45,7 @@ public struct JobTableView: NSViewRepresentable {
         self.rows = rows
         _selectedID = selectedID
         _selectedIDs = selectedIDs
+        self.onOpenInspector = onOpenInspector
         self.onCommand = onCommand
         self.onRemoveFromList = onRemoveFromList
         self.onRemoveFiles = onRemoveFiles
@@ -53,6 +56,7 @@ public struct JobTableView: NSViewRepresentable {
         Coordinator(
             selectedID: $selectedID,
             selectedIDs: $selectedIDs,
+            onOpenInspector: onOpenInspector,
             onCommand: onCommand,
             onRemoveFromList: onRemoveFromList,
             onRemoveFiles: onRemoveFiles,
@@ -73,6 +77,8 @@ public struct JobTableView: NSViewRepresentable {
         tableView.allowsColumnResizing = true
         tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         tableView.setAccessibilityLabel("Downloads")
+        tableView.target = context.coordinator
+        tableView.doubleAction = #selector(Coordinator.doubleClicked(_:))
 
         for spec in JobColumn.all {
             let column = NSTableColumn(identifier: spec.identifier)
@@ -101,6 +107,7 @@ public struct JobTableView: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.onOpenInspector = onOpenInspector
         context.coordinator.onCommand = onCommand
         context.coordinator.onRemoveFromList = onRemoveFromList
         context.coordinator.onRemoveFiles = onRemoveFiles
@@ -114,6 +121,7 @@ public struct JobTableView: NSViewRepresentable {
         weak var tableView: NSTableView?
         @Binding private var selectedID: JobRowModel.ID?
         @Binding private var selectedIDs: Set<JobRowModel.ID>
+        var onOpenInspector: ((JobRowModel.ID) -> Void)?
         var onCommand: ((JobCommandKind) -> Void)?
         var onRemoveFromList: (() -> Void)?
         var onRemoveFiles: (() -> Void)?
@@ -127,6 +135,7 @@ public struct JobTableView: NSViewRepresentable {
         init(
             selectedID: Binding<JobRowModel.ID?>,
             selectedIDs: Binding<Set<JobRowModel.ID>>,
+            onOpenInspector: ((JobRowModel.ID) -> Void)?,
             onCommand: ((JobCommandKind) -> Void)?,
             onRemoveFromList: (() -> Void)?,
             onRemoveFiles: (() -> Void)?,
@@ -134,10 +143,18 @@ public struct JobTableView: NSViewRepresentable {
         ) {
             _selectedID = selectedID
             _selectedIDs = selectedIDs
+            self.onOpenInspector = onOpenInspector
             self.onCommand = onCommand
             self.onRemoveFromList = onRemoveFromList
             self.onRemoveFiles = onRemoveFiles
             self.onRevealInFinder = onRevealInFinder
+        }
+
+        @objc func doubleClicked(_ sender: Any?) {
+            guard let tableView else { return }
+            let row = tableView.clickedRow
+            guard row >= 0, row < displayedRows.count else { return }
+            onOpenInspector?(displayedRows[row].id)
         }
 
         func replaceRows(_ rows: [JobRowModel], reload: Bool) {

@@ -6,7 +6,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import XPCContracts
 
-/// Main library window: editorial sidebar + Pinterest board (or dense list) + inspector.
+/// Main library window: editorial sidebar + board/list. Job details open on
+/// double-click into a detachable inspector (not driven by multi-select).
 public struct RootView: View {
     @ObservedObject private var model: LibraryModel
     @ObservedObject private var launchAgent: LaunchAgentModel
@@ -36,27 +37,29 @@ public struct RootView: View {
                     .toolbar { toolbarContent }
                     .inspector(isPresented: $model.inspectorVisible) {
                         InspectorView(
-                            row: model.selectedRow,
+                            row: model.inspectedRow,
                             engineClient: model.engineClient,
                             onCommand: { command in
-                                Task { await model.controlSelected(command) }
+                                guard let id = model.inspectedID else { return }
+                                Task { await model.control(jobID: id, command: command) }
                             },
                             onPriorityBump: { delta in
-                                Task { await model.bumpSelectedPriority(by: delta) }
+                                guard let id = model.inspectedID else { return }
+                                Task { await model.bumpPriority(jobID: id, by: delta) }
                             },
                             onOrganizationChanged: {
                                 Task { await model.refreshFromEngine() }
                             },
                             onRevealInFinder: {
-                                guard let id = model.selectedID else { return }
+                                guard let id = model.inspectedID else { return }
                                 Task { await model.revealInFinder(jobID: id) }
                             },
                             onRemoveFromLibrary: {
-                                guard let id = model.selectedID else { return }
+                                guard let id = model.inspectedID else { return }
                                 Task { await model.remove(jobID: id, deleteFiles: false) }
                             },
                             onDeleteFromDisk: {
-                                guard let id = model.selectedID else { return }
+                                guard let id = model.inspectedID else { return }
                                 pendingDiskDeleteIDs = [id]
                             }
                         )
@@ -180,6 +183,9 @@ public struct RootView: View {
                             rows: model.visibleRows,
                             selectedID: $model.selectedID,
                             selectedIDs: $model.selectedIDs,
+                            onOpenInspector: { id in
+                                model.openInspector(for: id)
+                            },
                             onCommand: { id, command in
                                 Task { await model.control(jobID: id, command: command) }
                             },
@@ -198,6 +204,9 @@ public struct RootView: View {
                             rows: model.visibleRows,
                             selectedID: $model.selectedID,
                             selectedIDs: $model.selectedIDs,
+                            onOpenInspector: { id in
+                                model.openInspector(for: id)
+                            },
                             onCommand: { command in
                                 Task { await model.controlSelected(command) }
                             },
@@ -414,12 +423,13 @@ public struct RootView: View {
             .help("Remove all failed downloads from the library (keeps any leftover files)")
 
             Button {
-                model.inspectorVisible.toggle()
+                model.toggleInspector()
             } label: {
                 Label("Inspector", systemImage: "sidebar.right")
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
-            .help("Toggle inspector")
+            .disabled(!model.inspectorVisible && model.inspectedID == nil && model.selectedID == nil)
+            .help("Show or hide job details (double-click a download to open)")
         }
     }
 

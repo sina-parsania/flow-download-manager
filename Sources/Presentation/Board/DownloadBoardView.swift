@@ -9,6 +9,7 @@ public struct DownloadBoardView: View {
     public let rows: [JobRowModel]
     @Binding public var selectedID: JobRowModel.ID?
     @Binding public var selectedIDs: Set<JobRowModel.ID>
+    public var onOpenInspector: ((JobRowModel.ID) -> Void)?
     public var onCommand: ((JobRowModel.ID, JobCommandKind) -> Void)?
     public var onRevealInFinder: ((JobRowModel.ID) -> Void)?
     public var onRemoveFromLibrary: ((JobRowModel.ID) -> Void)?
@@ -18,6 +19,7 @@ public struct DownloadBoardView: View {
         rows: [JobRowModel],
         selectedID: Binding<JobRowModel.ID?>,
         selectedIDs: Binding<Set<JobRowModel.ID>> = .constant([]),
+        onOpenInspector: ((JobRowModel.ID) -> Void)? = nil,
         onCommand: ((JobRowModel.ID, JobCommandKind) -> Void)? = nil,
         onRevealInFinder: ((JobRowModel.ID) -> Void)? = nil,
         onRemoveFromLibrary: ((JobRowModel.ID) -> Void)? = nil,
@@ -26,6 +28,7 @@ public struct DownloadBoardView: View {
         self.rows = rows
         _selectedID = selectedID
         _selectedIDs = selectedIDs
+        self.onOpenInspector = onOpenInspector
         self.onCommand = onCommand
         self.onRevealInFinder = onRevealInFinder
         self.onRemoveFromLibrary = onRemoveFromLibrary
@@ -43,6 +46,7 @@ public struct DownloadBoardView: View {
                             selectedID = row.id
                             selectedIDs = [row.id]
                         },
+                        onOpenInspector: { onOpenInspector?(row.id) },
                         onCommand: { command in onCommand?(row.id, command) },
                         onRevealInFinder: { onRevealInFinder?(row.id) },
                         onRemoveFromLibrary: { onRemoveFromLibrary?(row.id) },

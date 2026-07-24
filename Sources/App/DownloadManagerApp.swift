@@ -69,9 +69,14 @@ struct DownloadManagerApp: App {
             }
             CommandGroup(after: .sidebar) {
                 Button(library.inspectorVisible ? "Hide Inspector" : "Show Inspector") {
-                    library.inspectorVisible.toggle()
+                    library.toggleInspector()
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
+                .disabled(
+                    !library.inspectorVisible
+                        && library.inspectedID == nil
+                        && library.selectedID == nil
+                )
                 Divider()
                 Button("Pause All") {
                     Task { await library.pauseAll() }

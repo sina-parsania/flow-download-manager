@@ -5,7 +5,8 @@ import Domain
 import SwiftUI
 import XPCContracts
 
-/// Inspector Overview for the selected job (`03-design-system-ui-ux.md` §7).
+/// Inspector Overview for one inspected job (`03-design-system-ui-ux.md` §7).
+/// Opened by double-click; identity is independent of multi-select.
 struct InspectorView: View {
     let row: JobRowModel?
     let engineClient: EngineClient
@@ -51,8 +52,10 @@ struct InspectorView: View {
                             Text(row.sourceURL)
                                 .font(.caption.monospaced())
                                 .textSelection(.enabled)
-                                .lineLimit(4)
-                                .multilineTextAlignment(.trailing)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(row.sourceURL)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                         .accessibilityLabel("Download URL")
                         labeled("State", row.state.displayName)
@@ -316,10 +319,10 @@ struct InspectorView: View {
             } else {
                 VStack(spacing: 10) {
                     Spacer()
-                    Text("Select a pin")
+                    Text("Double-click a download")
                         .font(FlowTheme.Typeface.title(16))
                         .foregroundStyle(palette.ink)
-                    Text("Details land here when you tap a download on the board.")
+                    Text("Details open here without changing your multi-select.")
                         .font(FlowTheme.Typeface.body(12))
                         .foregroundStyle(palette.inkSoft)
                         .multilineTextAlignment(.center)
@@ -461,8 +464,10 @@ struct InspectorView: View {
                     Text(row.name)
                         .font(.body.monospacedDigit())
                         .textSelection(.enabled)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.trailing)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(row.name)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                     Button("Edit") {
                         draftName = row.name
                         isEditingName = true

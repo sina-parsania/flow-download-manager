@@ -35,8 +35,8 @@ public enum LibraryFilter: Hashable, Sendable {
 @MainActor
 public final class LibraryModel: ObservableObject {
     @Published public var rows: [JobRowModel]
-    /// Primary selection (inspector + single-target menus). Always a member of
-    /// ``selectedIDs`` when the set is non-empty.
+    /// Primary selection for single-target menus. Always a member of
+    /// ``selectedIDs`` when the set is non-empty. Independent of ``inspectedID``.
     @Published public var selectedID: JobRowModel.ID? {
         didSet { reconcilePrimarySelection() }
     }
@@ -45,6 +45,10 @@ public final class LibraryModel: ObservableObject {
     @Published public var selectedIDs: Set<JobRowModel.ID> = [] {
         didSet { reconcilePrimarySelection() }
     }
+
+    /// Job shown in the detail inspector. Set by double-click; not tied to
+    /// multi-select so bulk selection never fights the detail pane.
+    @Published public var inspectedID: JobRowModel.ID?
 
     /// Bound directly to the search field, so typing stays responsive.
     @Published public var searchText: String = "" {
@@ -56,7 +60,8 @@ public final class LibraryModel: ObservableObject {
     @Published public private(set) var searchQuery: String = ""
     @Published public var filter: LibraryFilter = .all
     @Published public var layoutMode: LibraryLayoutMode = .board
-    @Published public var inspectorVisible: Bool = true
+    /// Detail pane starts closed; double-click (or View ▸ Inspector) opens it.
+    @Published public var inspectorVisible: Bool = false
     @Published public var addSheetPresented: Bool = false
     @Published public var pendingClipboardText: String?
     @Published public var lastErrorMessage: String?
@@ -122,10 +127,35 @@ public final class LibraryModel: ObservableObject {
         return rows.first { $0.id == selectedID }
     }
 
+    public var inspectedRow: JobRowModel? {
+        guard let inspectedID else { return nil }
+        return rows.first { $0.id == inspectedID }
+    }
+
     public var selectedRows: [JobRowModel] {
         let ids = selectedIDs
         guard !ids.isEmpty else { return selectedRow.map { [$0] } ?? [] }
         return rows.filter { ids.contains($0.id) }
+    }
+
+    /// Opens the detail inspector for one job without changing multi-select.
+    public func openInspector(for jobID: JobRowModel.ID) {
+        inspectedID = jobID
+        inspectorVisible = true
+    }
+
+    /// Toolbar / menu toggle. When opening with no inspected job, uses the
+    /// primary selection if exactly one target is available.
+    public func toggleInspector() {
+        if inspectorVisible {
+            inspectorVisible = false
+            return
+        }
+        if inspectedID == nil {
+            inspectedID = selectedID
+        }
+        guard inspectedID != nil else { return }
+        inspectorVisible = true
     }
 
     private var isReconcilingSelection = false
@@ -257,6 +287,10 @@ public final class LibraryModel: ObservableObject {
             )
             selectedIDs.remove(jobID)
             if selectedID == jobID { selectedID = selectedIDs.first }
+            if inspectedID == jobID {
+                inspectedID = nil
+                inspectorVisible = false
+            }
             await refreshFromEngine(forceFull: true)
         } catch {
             lastErrorMessage = deleteFiles
@@ -323,7 +357,12 @@ public final class LibraryModel: ObservableObject {
     }
 
     public func bumpSelectedPriority(by delta: Int) async {
-        guard let row = selectedRow else { return }
+        guard let id = selectedID else { return }
+        await bumpPriority(jobID: id, by: delta)
+    }
+
+    public func bumpPriority(jobID: JobRowModel.ID, by delta: Int) async {
+        guard let row = rows.first(where: { $0.id == jobID }) else { return }
         let next = min(20, max(-20, row.priority + delta))
         guard next != row.priority else { return }
         do {
@@ -360,6 +399,10 @@ public final class LibraryModel: ObservableObject {
         }
         if let selectedID, removedIDs.contains(selectedID) {
             self.selectedID = nil
+        }
+        if let inspectedID, removedIDs.contains(inspectedID) {
+            self.inspectedID = nil
+            inspectorVisible = false
         }
         await refreshFromEngine()
     }
@@ -421,6 +464,7 @@ public final class LibraryModel: ObservableObject {
         notifyTerminalTransitions(from: rows, to: mapped.rows)
         remainingTimeSmoothers = remainingTimeSmoothers.filter { mapped.liveIDs.contains($0.key) }
         rows = mapped.rows
+        pruneStaleInspection()
     }
 
     private func applyChangeBatch(from client: EngineClient) async throws {
@@ -452,6 +496,14 @@ public final class LibraryModel: ObservableObject {
         notifyTerminalTransitions(from: rows, to: outcome.rows)
         remainingTimeSmoothers = remainingTimeSmoothers.filter { liveIDs.contains($0.key) }
         rows = outcome.rows
+        pruneStaleInspection()
+    }
+
+    private func pruneStaleInspection() {
+        guard let inspectedID else { return }
+        guard !rows.contains(where: { $0.id == inspectedID }) else { return }
+        self.inspectedID = nil
+        inspectorVisible = false
     }
 
     private func etaElapsedSeconds() -> Double {

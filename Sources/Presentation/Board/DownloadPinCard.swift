@@ -10,6 +10,7 @@ struct DownloadPinCard: View {
     let row: JobRowModel
     let isSelected: Bool
     let onSelect: () -> Void
+    var onOpenInspector: (() -> Void)?
     var onCommand: ((JobCommandKind) -> Void)?
     var onRevealInFinder: (() -> Void)?
     var onRemoveFromLibrary: (() -> Void)?
@@ -100,12 +101,19 @@ struct DownloadPinCard: View {
         .shadow(color: palette.ink.opacity(isSelected ? 0.12 : 0.04), radius: isSelected ? 10 : 4, y: 3)
         .opacity(appeared ? 1 : 0)
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .onTapGesture(perform: onSelect)
+        .onTapGesture(count: 2) {
+            onOpenInspector?()
+        }
+        .onTapGesture(count: 1, perform: onSelect)
         .contextMenu { pinContextMenu }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary)
         .accessibilityValue(progressAccessibilityValue)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityHint("Double-click to show details")
+        .accessibilityAction(named: "Show Details") {
+            onOpenInspector?()
+        }
         .onAppear {
             guard !reduceMotion else {
                 appeared = true

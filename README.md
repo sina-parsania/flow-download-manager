@@ -8,6 +8,12 @@
 
 Flow is free, open source, and distributed from GitHub. No Mac App Store tax. No subscription. Community builds ship **unsigned / ad-hoc** by design ([ADR 0008](Documentation/adr/0008-community-github-distribution.md)) — same model many serious open-source Mac tools use.
 
+<p align="center">
+  <img src="docs/images/library-dark.png" alt="Flow library — dark appearance" width="48%" />
+  &nbsp;
+  <img src="docs/images/library-light.png" alt="Flow library — light appearance" width="48%" />
+</p>
+
 ---
 
 ## Install in one line

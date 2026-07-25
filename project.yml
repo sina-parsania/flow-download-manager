@@ -116,18 +116,25 @@ targets:
       - path: Resources/Localizable.xcstrings
       - path: Resources/Assets.xcassets
       - path: Resources/Updates/appcast.xml
-      - path: BrowserExtension/chrome
-        type: folder
-        buildPhase:
-          copyFiles:
-            destination: resources
-            subpath: ChromeCompanion
       # LaunchAgent plist embedded at Contents/Library/LaunchAgents/ for SMAppService.
       - path: Resources/LaunchAgents/org.downloadmanager.local.DownloadEngineAgent.plist
         buildPhase:
           copyFiles:
             destination: wrapper
             subpath: Contents/Library/LaunchAgents
+    postCompileScripts:
+      - name: Sync Chrome Companion Resources
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          SRC="${SRCROOT}/BrowserExtension/chrome"
+          DEST="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ChromeCompanion"
+          mkdir -p "${DEST}"
+          rsync -a --delete \
+            --exclude 'README.md' \
+            --exclude '.DS_Store' \
+            "${SRC}/" "${DEST}/"
+          test -f "${DEST}/manifest.json"
     dependencies:
       - package: DownloadKit
         product: Presentation

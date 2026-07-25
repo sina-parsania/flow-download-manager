@@ -17,10 +17,12 @@ public final class ChromeCompanionSetupController: ObservableObject {
     @Published public var resultTitle = ""
     @Published public var resultMessage = ""
     @Published public var statusLine = "Not set up yet"
+    @Published public var extensionFolderPath = ""
     @Published public var isBusy = false
     @Published public var isRegistered = false
 
     public init() {
+        extensionFolderPath = Self.installedExtensionDirectory().path
         refreshStatus()
     }
 
@@ -38,8 +40,28 @@ public final class ChromeCompanionSetupController: ObservableObject {
         isIntroPresented = false
     }
 
+    public func copyExtensionFolderPath() {
+        let path = extensionFolderPath.isEmpty
+            ? Self.installedExtensionDirectory().path
+            : extensionFolderPath
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    public func revealExtensionFolder() {
+        let url = URL(fileURLWithPath: extensionFolderPath.isEmpty
+            ? Self.installedExtensionDirectory().path
+            : extensionFolderPath)
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url.deletingLastPathComponent())
+        }
+    }
+
     public func refreshStatus() {
         let supportURL = Self.installedExtensionDirectory()
+        extensionFolderPath = supportURL.path
         let hostURL = Self.embeddedHostURL()
         let manifestURL = Self.chromeManifestURL()
         guard let hostURL else {
@@ -47,7 +69,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
             statusLine = "ChromeNativeHost missing from this build"
             return
         }
-        guard FileManager.default.fileExists(atPath: supportURL.path),
+        guard FileManager.default.fileExists(atPath: supportURL.appendingPathComponent("manifest.json").path),
               FileManager.default.fileExists(atPath: manifestURL.path),
               let data = try? Data(contentsOf: manifestURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -81,6 +103,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
 
         do {
             let extensionURL = try Self.materializeExtensionDirectory()
+            extensionFolderPath = extensionURL.path
             let hostURL = try Self.requireEmbeddedHostURL()
             let ids = ChromeUnpackedExtensionID.candidates(for: extensionURL).map {
                 ChromeUnpackedExtensionID.make(directoryPath: $0)
@@ -90,6 +113,8 @@ public final class ChromeCompanionSetupController: ObservableObject {
             UserDefaults.standard.set(true, forKey: Self.introDismissedDefaultsKey)
             isIntroPresented = false
 
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(extensionURL.path, forType: .string)
             NSWorkspace.shared.activateFileViewerSelecting([extensionURL])
             if let extensionsURL = URL(string: "chrome://extensions"),
                let chromeApp = NSWorkspace.shared.urlForApplication(
@@ -105,16 +130,17 @@ public final class ChromeCompanionSetupController: ObservableObject {
 
             resultTitle = "Almost done in Chrome"
             resultMessage = """
-            Flow registered the native host and opened the companion folder.
+            Load this exact folder in Chrome (path also copied to the clipboard):
 
-            Chrome cannot install this companion automatically (community builds \
-            are not on the Chrome Web Store yet). In the Extensions page:
+            \(extensionURL.path)
 
-            1. Turn on Developer mode (top right)
+            Steps:
+            1. chrome://extensions → turn on Developer mode
             2. Click Load unpacked
-            3. Choose the folder Flow just revealed in Finder
+            3. Press ⌘⇧G, paste the path above, press Return, then Open
 
-            Then open the companion popup and tap Check native host.
+            The folder must contain manifest.json (not a parent folder).
+            Then open the companion popup → Check native host.
             """
             isResultPresented = true
             EngineLog.browserExtension.info("Chrome companion setup wrote host manifests")
@@ -130,10 +156,11 @@ public final class ChromeCompanionSetupController: ObservableObject {
 
     // MARK: - Paths
 
+    /// Stable install dir without spaces in the product segment (easier in Chrome’s Go to Folder).
     public static func installedExtensionDirectory() -> URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return root
-            .appendingPathComponent("Flow Download Manager", isDirectory: true)
+            .appendingPathComponent("org.downloadmanager.local.DownloadManager", isDirectory: true)
             .appendingPathComponent("ChromeCompanion", isDirectory: true)
     }
 
@@ -146,15 +173,15 @@ public final class ChromeCompanionSetupController: ObservableObject {
     public static func bundledExtensionSourceURL() -> URL? {
         let resourceRoot = Bundle.main.resourceURL
         let bundledCandidates = [
-            resourceRoot?.appendingPathComponent("ChromeCompanion/chrome", isDirectory: true),
-            resourceRoot?.appendingPathComponent("ChromeCompanion", isDirectory: true)
+            resourceRoot?.appendingPathComponent("ChromeCompanion", isDirectory: true),
+            resourceRoot?.appendingPathComponent("ChromeCompanion/chrome", isDirectory: true)
         ].compactMap(\.self)
         for url in bundledCandidates {
             if FileManager.default.fileExists(atPath: url.appendingPathComponent("manifest.json").path) {
                 return url
             }
         }
-        // Source-tree / Xcode run without the copy-files phase.
+        // Source-tree / Xcode run without the sync script.
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -169,7 +196,10 @@ public final class ChromeCompanionSetupController: ObservableObject {
 
     static func chromeManifestURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Google/Chrome/NativeMessagingHosts", isDirectory: true)
+            .appendingPathComponent(
+                "Library/Application Support/Google/Chrome/NativeMessagingHosts",
+                isDirectory: true
+            )
             .appendingPathComponent("\(hostName).json", isDirectory: false)
     }
 
@@ -186,12 +216,42 @@ public final class ChromeCompanionSetupController: ObservableObject {
         }
         let destination = installedExtensionDirectory()
         let fm = FileManager.default
-        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         if fm.fileExists(atPath: destination.path) {
             try fm.removeItem(at: destination)
         }
         try fm.copyItem(at: source, to: destination)
+        try flattenIfNestedChromeFolder(at: destination)
+        guard fm.fileExists(atPath: destination.appendingPathComponent("manifest.json").path) else {
+            throw CompanionSetupError.extensionMissing
+        }
         return destination
+    }
+
+    /// XcodeGen folder copies sometimes land as `ChromeCompanion/chrome/manifest.json`.
+    static func flattenIfNestedChromeFolder(at destination: URL) throws {
+        let nested = destination.appendingPathComponent("chrome", isDirectory: true)
+        let nestedManifest = nested.appendingPathComponent("manifest.json")
+        let topManifest = destination.appendingPathComponent("manifest.json")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: nestedManifest.path),
+              !fm.fileExists(atPath: topManifest.path)
+        else { return }
+        for item in try fm.contentsOfDirectory(
+            at: nested,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            let target = destination.appendingPathComponent(item.lastPathComponent)
+            if fm.fileExists(atPath: target.path) {
+                try fm.removeItem(at: target)
+            }
+            try fm.moveItem(at: item, to: target)
+        }
+        try fm.removeItem(at: nested)
     }
 
     static func writeNativeHostManifests(hostURL: URL, extensionIDs: [String]) throws {
@@ -202,7 +262,10 @@ public final class ChromeCompanionSetupController: ObservableObject {
             "type": "stdio",
             "allowed_origins": extensionIDs.map { "chrome-extension://\($0)/" }
         ]
-        let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+        let data = try JSONSerialization.data(
+            withJSONObject: document,
+            options: [.prettyPrinted, .sortedKeys]
+        )
         var body = String(data: data, encoding: .utf8) ?? ""
         if !body.hasSuffix("\n") { body.append("\n") }
         guard let utf8 = body.data(using: .utf8) else {

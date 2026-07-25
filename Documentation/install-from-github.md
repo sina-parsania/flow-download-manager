@@ -104,11 +104,14 @@ on the Chrome Web Store yet. Inside Flow:
 
 **Settings → Browser companion → Set Up Chrome Companion…**
 
-That registers the native messaging host, copies the extension into
-`~/Library/Application Support/Flow Download Manager/ChromeCompanion/`, reveals
-the folder in Finder, and opens `chrome://extensions`. Then turn on Developer
-mode → **Load unpacked** → pick that folder. First launch also shows a short
-alert with the same path.
+That registers the native messaging host, copies the extension into a stable
+folder under Application Support, copies the **absolute path** to the clipboard,
+reveals it in Finder, and opens `chrome://extensions`. Then:
+
+1. Developer mode → **Load unpacked**
+2. ⌘⇧G → paste the path → Open (the folder that contains `manifest.json`)
+
+First launch also shows a short alert with the same path.
 
 From a source checkout you can still use the script:
 

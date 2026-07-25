@@ -318,6 +318,22 @@ public struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 LabeledContent("Status", value: chromeCompanion.statusLine)
+                Text(chromeCompanion.extensionFolderPath)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Chrome companion folder path")
+                HStack {
+                    Button("Copy Path") {
+                        chromeCompanion.copyExtensionFolderPath()
+                    }
+                    .accessibilityLabel("Copy Chrome companion folder path")
+                    Button("Reveal in Finder") {
+                        chromeCompanion.revealExtensionFolder()
+                    }
+                    .accessibilityLabel("Reveal Chrome companion folder in Finder")
+                }
                 Button(chromeCompanion.isRegistered ? "Set Up Again…" : "Set Up Chrome Companion…") {
                     chromeCompanion.runSetup()
                 }

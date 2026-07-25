@@ -310,35 +310,46 @@ public struct SettingsView: View {
 
             Section("Browser companion") {
                 Text(
-                    "Chrome cannot install Flow’s companion automatically — community "
-                        + "builds are not on the Chrome Web Store yet. Flow can register "
-                        + "the native host and open the one-time Load unpacked steps for you."
+                    "Chrome won’t install Flow’s companion silently (no Web Store listing "
+                        + "for community builds). Flow attaches it automatically when Chrome "
+                        + "is opened from here — no Load unpacked."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 LabeledContent("Status", value: chromeCompanion.statusLine)
-                Text(chromeCompanion.extensionFolderPath)
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityLabel("Chrome companion folder path")
-                HStack {
-                    Button("Copy Path") {
-                        chromeCompanion.copyExtensionFolderPath()
-                    }
-                    .accessibilityLabel("Copy Chrome companion folder path")
-                    Button("Reveal in Finder") {
-                        chromeCompanion.revealExtensionFolder()
-                    }
-                    .accessibilityLabel("Reveal Chrome companion folder in Finder")
-                }
-                Button(chromeCompanion.isRegistered ? "Set Up Again…" : "Set Up Chrome Companion…") {
-                    chromeCompanion.runSetup()
+                Button("Open Chrome with Companion") {
+                    chromeCompanion.openChromeWithCompanion()
                 }
                 .disabled(chromeCompanion.isBusy)
-                .accessibilityLabel("Set up Chrome companion")
+                .accessibilityLabel("Open Chrome with Flow companion")
+                Button("Install Chrome Launcher in Applications") {
+                    chromeCompanion.installApplicationsLauncher()
+                }
+                .disabled(chromeCompanion.isBusy)
+                .accessibilityLabel("Install Chrome launcher in Applications")
+                DisclosureGroup("Advanced") {
+                    Text(chromeCompanion.extensionFolderPath)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Copy Path") {
+                            chromeCompanion.copyExtensionFolderPath()
+                        }
+                        Button("Reveal in Finder") {
+                            chromeCompanion.revealExtensionFolder()
+                        }
+                    }
+                    Text(
+                        "Only needed if you want a permanent Load unpacked install in Chrome. "
+                            + "The one-click button above is enough for daily use."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("About") {
@@ -398,6 +409,19 @@ public struct SettingsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(chromeCompanion.resultMessage)
+        }
+        .alert("Restart Chrome?", isPresented: $chromeCompanion.isRestartChromePresented) {
+            Button("Restart Chrome", role: .destructive) {
+                chromeCompanion.confirmRestartChromeAndOpen()
+            }
+            Button("Cancel", role: .cancel) {
+                chromeCompanion.cancelRestartChrome()
+            }
+        } message: {
+            Text(
+                "Chrome is already running, so Flow needs to restart it once to "
+                    + "attach the companion. Your last session will be restored."
+            )
         }
     }
 }

@@ -4,16 +4,21 @@ import AppKit
 import Foundation
 import SharedObservability
 
-/// Installs Flow’s Chrome companion for end users: copies the bundled extension
-/// into Application Support, registers the native-messaging host for Chromium
-/// browsers, and opens the one-time Chrome “Load unpacked” steps.
+/// Makes the Chrome companion usable without the Chrome Web Store.
+///
+/// Chrome blocks silent install of unpacked extensions, so Flow:
+/// 1. Registers the native-messaging host + materializes the extension folder
+/// 2. Restarts Chrome with `--load-extension` (one click — no Load unpacked)
+/// 3. Optionally drops a small launcher in `~/Applications`
 @MainActor
 public final class ChromeCompanionSetupController: ObservableObject {
     public static let introDismissedDefaultsKey = "chromeCompanion.introDismissed"
     public static let hostName = "org.downloadmanager.local.ChromeNativeHost"
+    public static let launcherAppName = "Open Chrome with Flow Companion.app"
 
     @Published public var isIntroPresented = false
     @Published public var isResultPresented = false
+    @Published public var isRestartChromePresented = false
     @Published public var resultTitle = ""
     @Published public var resultMessage = ""
     @Published public var statusLine = "Not set up yet"
@@ -28,10 +33,6 @@ public final class ChromeCompanionSetupController: ObservableObject {
 
     public func presentIntroIfNeeded() {
         guard !UserDefaults.standard.bool(forKey: Self.introDismissedDefaultsKey) else { return }
-        guard !isRegistered else {
-            UserDefaults.standard.set(true, forKey: Self.introDismissedDefaultsKey)
-            return
-        }
         isIntroPresented = true
     }
 
@@ -41,17 +42,13 @@ public final class ChromeCompanionSetupController: ObservableObject {
     }
 
     public func copyExtensionFolderPath() {
-        let path = extensionFolderPath.isEmpty
-            ? Self.installedExtensionDirectory().path
-            : extensionFolderPath
+        let path = resolvedExtensionPath()
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(path, forType: .string)
     }
 
     public func revealExtensionFolder() {
-        let url = URL(fileURLWithPath: extensionFolderPath.isEmpty
-            ? Self.installedExtensionDirectory().path
-            : extensionFolderPath)
+        let url = URL(fileURLWithPath: resolvedExtensionPath())
         if FileManager.default.fileExists(atPath: url.path) {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } else {
@@ -69,7 +66,10 @@ public final class ChromeCompanionSetupController: ObservableObject {
             statusLine = "ChromeNativeHost missing from this build"
             return
         }
-        guard FileManager.default.fileExists(atPath: supportURL.appendingPathComponent("manifest.json").path),
+        let hasExtension = FileManager.default.fileExists(
+            atPath: supportURL.appendingPathComponent("manifest.json").path
+        )
+        guard hasExtension,
               FileManager.default.fileExists(atPath: manifestURL.path),
               let data = try? Data(contentsOf: manifestURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -78,7 +78,9 @@ public final class ChromeCompanionSetupController: ObservableObject {
               let origins = json["allowed_origins"] as? [String]
         else {
             isRegistered = false
-            statusLine = "Native host not registered yet"
+            statusLine = hasExtension
+                ? "Extension ready — open Chrome from Flow to attach it"
+                : "Not set up yet — use Open Chrome with Companion"
             return
         }
         let expectedIDs = Set(
@@ -86,77 +88,158 @@ public final class ChromeCompanionSetupController: ObservableObject {
                 "chrome-extension://\($0)/"
             }
         )
-        let allowed = Set(origins)
-        if expectedIDs.isSubset(of: allowed) {
+        if expectedIDs.isSubset(of: Set(origins)) {
             isRegistered = true
-            statusLine = "Native host registered — Load unpacked in Chrome if you haven’t yet"
+            statusLine = "Ready — Open Chrome with Companion (one click)"
         } else {
             isRegistered = false
-            statusLine = "Host manifest is stale — run Set Up again"
+            statusLine = "Host manifest is stale — open Chrome with Companion again"
         }
     }
 
-    public func runSetup() {
+    /// Registers the host, then opens Chrome with the companion attached.
+    public func openChromeWithCompanion() {
         guard !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
 
         do {
-            let extensionURL = try Self.materializeExtensionDirectory()
-            extensionFolderPath = extensionURL.path
-            let hostURL = try Self.requireEmbeddedHostURL()
-            let ids = ChromeUnpackedExtensionID.candidates(for: extensionURL).map {
-                ChromeUnpackedExtensionID.make(directoryPath: $0)
-            }
-            try Self.writeNativeHostManifests(hostURL: hostURL, extensionIDs: ids)
-            refreshStatus()
+            try prepareCompanionFiles()
             UserDefaults.standard.set(true, forKey: Self.introDismissedDefaultsKey)
             isIntroPresented = false
 
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(extensionURL.path, forType: .string)
-            NSWorkspace.shared.activateFileViewerSelecting([extensionURL])
-            if let extensionsURL = URL(string: "chrome://extensions"),
-               let chromeApp = NSWorkspace.shared.urlForApplication(
-                   withBundleIdentifier: "com.google.Chrome"
-               ) {
-                let configuration = NSWorkspace.OpenConfiguration()
-                NSWorkspace.shared.open(
-                    [extensionsURL],
-                    withApplicationAt: chromeApp,
-                    configuration: configuration
-                )
+            if Self.isChromeRunning() {
+                isRestartChromePresented = true
+                return
             }
-
-            resultTitle = "Almost done in Chrome"
-            resultMessage = """
-            Load this exact folder in Chrome (path also copied to the clipboard):
-
-            \(extensionURL.path)
-
-            Steps:
-            1. chrome://extensions → turn on Developer mode
-            2. Click Load unpacked
-            3. Press ⌘⇧G, paste the path above, press Return, then Open
-
-            The folder must contain manifest.json (not a parent folder).
-            Then open the companion popup → Check native host.
-            """
-            isResultPresented = true
-            EngineLog.browserExtension.info("Chrome companion setup wrote host manifests")
+            try launchChromeWithExtension()
+            presentOpenedResult()
         } catch {
-            resultTitle = "Couldn’t set up the companion"
-            resultMessage = error.localizedDescription
-            isResultPresented = true
-            EngineLog.browserExtension.error(
-                "Chrome companion setup failed \(EngineLog.redacted(error), privacy: .public)"
-            )
+            presentFailure(error)
         }
     }
 
-    // MARK: - Paths
+    public func confirmRestartChromeAndOpen() {
+        isRestartChromePresented = false
+        guard !isBusy else { return }
+        Task {
+            isBusy = true
+            defer { isBusy = false }
+            do {
+                try prepareCompanionFiles()
+                Self.quitChrome()
+                try await Task.sleep(for: .milliseconds(1200))
+                try launchChromeWithExtension()
+                presentOpenedResult()
+            } catch {
+                presentFailure(error)
+            }
+        }
+    }
 
-    /// Stable install dir without spaces in the product segment (easier in Chrome’s Go to Folder).
+    public func cancelRestartChrome() {
+        isRestartChromePresented = false
+    }
+
+    /// Drops `~/Applications/Open Chrome with Flow Companion.app` for Dock/double-click use.
+    public func installApplicationsLauncher() {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try prepareCompanionFiles()
+            let launcher = try Self.writeApplicationsLauncher(extensionPath: resolvedExtensionPath())
+            NSWorkspace.shared.activateFileViewerSelecting([launcher])
+            resultTitle = "Launcher installed"
+            resultMessage = """
+            Created:
+
+            \(launcher.path)
+
+            Double-click it (or keep it in the Dock) whenever you want Chrome with the \
+            Flow companion already attached — no Load unpacked step.
+            """
+            isResultPresented = true
+        } catch {
+            presentFailure(error)
+        }
+    }
+
+    // MARK: - Private actions
+
+    private func prepareCompanionFiles() throws {
+        let extensionURL = try Self.materializeExtensionDirectory()
+        extensionFolderPath = extensionURL.path
+        let hostURL = try Self.requireEmbeddedHostURL()
+        let ids = ChromeUnpackedExtensionID.candidates(for: extensionURL).map {
+            ChromeUnpackedExtensionID.make(directoryPath: $0)
+        }
+        try Self.writeNativeHostManifests(hostURL: hostURL, extensionIDs: ids)
+        refreshStatus()
+    }
+
+    private func launchChromeWithExtension() throws {
+        let extensionPath = resolvedExtensionPath()
+        guard FileManager.default.fileExists(
+            atPath: URL(fileURLWithPath: extensionPath).appendingPathComponent("manifest.json").path
+        ) else {
+            throw CompanionSetupError.extensionMissing
+        }
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") != nil
+        else {
+            throw CompanionSetupError.chromeMissing
+        }
+
+        // `open --args` is the reliable way to pass Chrome flags; NSWorkspace
+        // sometimes drops them when an instance is already registered.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [
+            "-na",
+            "Google Chrome",
+            "--args",
+            "--load-extension=\(extensionPath)",
+            "--restore-last-session"
+        ]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw CompanionSetupError.chromeMissing
+        }
+    }
+
+    private func presentOpenedResult() {
+        resultTitle = "Chrome opened with Flow"
+        resultMessage = """
+        The companion is attached for this Chrome session.
+
+        Pin “Flow Download Manager Companion” from the puzzle icon, then use the \
+        popup or right-click → send link.
+
+        Tip: Settings → Install Chrome launcher puts a one-click app in ~/Applications \
+        so you don’t need Flow open first.
+        """
+        isResultPresented = true
+        EngineLog.browserExtension.info("Chrome launched with companion load-extension")
+    }
+
+    private func presentFailure(_ error: Error) {
+        resultTitle = "Couldn’t set up the companion"
+        resultMessage = error.localizedDescription
+        isResultPresented = true
+        EngineLog.browserExtension.error(
+            "Chrome companion setup failed \(EngineLog.redacted(error), privacy: .public)"
+        )
+    }
+
+    private func resolvedExtensionPath() -> String {
+        extensionFolderPath.isEmpty
+            ? Self.installedExtensionDirectory().path
+            : extensionFolderPath
+    }
+
+    // MARK: - Paths / Chrome process
+
     public static func installedExtensionDirectory() -> URL {
         let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return root
@@ -181,7 +264,6 @@ public final class ChromeCompanionSetupController: ObservableObject {
                 return url
             }
         }
-        // Source-tree / Xcode run without the sync script.
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -210,6 +292,25 @@ public final class ChromeCompanionSetupController: ObservableObject {
         return url
     }
 
+    static func isChromeRunning() -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").isEmpty
+    }
+
+    static func quitChrome() {
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome") {
+            app.terminate()
+        }
+        let deadline = Date().addingTimeInterval(8)
+        while isChromeRunning(), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        if isChromeRunning() {
+            for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome") {
+                app.forceTerminate()
+            }
+        }
+    }
+
     static func materializeExtensionDirectory() throws -> URL {
         guard let source = bundledExtensionSourceURL() else {
             throw CompanionSetupError.extensionMissing
@@ -231,7 +332,6 @@ public final class ChromeCompanionSetupController: ObservableObject {
         return destination
     }
 
-    /// XcodeGen folder copies sometimes land as `ChromeCompanion/chrome/manifest.json`.
     static func flattenIfNestedChromeFolder(at destination: URL) throws {
         let nested = destination.appendingPathComponent("chrome", isDirectory: true)
         let nestedManifest = nested.appendingPathComponent("manifest.json")
@@ -307,12 +407,52 @@ public final class ChromeCompanionSetupController: ObservableObject {
             try utf8.write(to: target, options: .atomic)
         }
     }
+
+    static func writeApplicationsLauncher(extensionPath: String) throws -> URL {
+        let apps = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications", isDirectory: true)
+        try FileManager.default.createDirectory(at: apps, withIntermediateDirectories: true)
+        let appURL = apps.appendingPathComponent(launcherAppName, isDirectory: true)
+        if FileManager.default.fileExists(atPath: appURL.path) {
+            try FileManager.default.removeItem(at: appURL)
+        }
+
+        let escapedForAppleScript = extensionPath
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let source = """
+        on run
+          set extPath to "\(escapedForAppleScript)"
+          do shell script "/usr/bin/open -na " & quoted form of "/Applications/Google Chrome.app" & " --args --load-extension=" & quoted form of extPath & " --restore-last-session"
+        end run
+        """
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("flow-chrome-launcher-\(UUID().uuidString).applescript")
+        try source.write(to: temp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osacompile")
+        process.arguments = ["-o", appURL.path, temp.path]
+        let err = Pipe()
+        process.standardError = err
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+                ?? "osacompile failed"
+            throw CompanionSetupError.launcherFailed(message)
+        }
+        return appURL
+    }
 }
 
 private enum CompanionSetupError: LocalizedError {
     case hostMissing
     case extensionMissing
+    case chromeMissing
     case manifestEncodeFailed
+    case launcherFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -320,8 +460,12 @@ private enum CompanionSetupError: LocalizedError {
             return "This Flow build is missing ChromeNativeHost."
         case .extensionMissing:
             return "The Chrome companion files are not bundled in this build."
+        case .chromeMissing:
+            return "Google Chrome is not installed."
         case .manifestEncodeFailed:
             return "Could not encode the native host manifest."
+        case let .launcherFailed(detail):
+            return "Could not create the Chrome launcher. \(detail)"
         }
     }
 }

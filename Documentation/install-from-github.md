@@ -99,19 +99,14 @@ open .build/DerivedData/Build/Products/Debug/DownloadManager.app
 
 ## Chrome companion
 
-Chrome cannot install Flow’s companion automatically — community builds are not
-on the Chrome Web Store yet. Inside Flow:
+Chrome won’t install Flow’s companion silently for community builds (no Web Store
+listing). Inside Flow use:
 
-**Settings → Browser companion → Set Up Chrome Companion…**
+**Settings → Browser companion → Open Chrome with Companion**
 
-That registers the native messaging host, copies the extension into a stable
-folder under Application Support, copies the **absolute path** to the clipboard,
-reveals it in Finder, and opens `chrome://extensions`. Then:
-
-1. Developer mode → **Load unpacked**
-2. ⌘⇧G → paste the path → Open (the folder that contains `manifest.json`)
-
-First launch also shows a short alert with the same path.
+That registers the native host and restarts Chrome with the companion already
+attached — no Load unpacked. Optional: **Install Chrome Launcher in Applications**
+for a Dock/double-click shortcut.
 
 From a source checkout you can still use the script:
 

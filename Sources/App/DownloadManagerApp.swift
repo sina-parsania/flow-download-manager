@@ -71,18 +71,18 @@ struct DownloadManagerApp: App {
                     Text(updateCheck.alertMessage)
                 }
                 .alert("Chrome companion", isPresented: $chromeCompanion.isIntroPresented) {
-                    Button("Set Up…") {
-                        chromeCompanion.runSetup()
+                    Button("Open Chrome with Companion") {
+                        chromeCompanion.openChromeWithCompanion()
                     }
                     Button("Not Now", role: .cancel) {
                         chromeCompanion.dismissIntro()
                     }
                 } message: {
                     Text(
-                        "Send links from Chrome into Flow. The companion is not on the "
-                            + "Chrome Web Store for community builds, so Flow registers the "
-                            + "native host and walks you through a one-time Load unpacked step. "
-                            + "You can also find this later in Settings → Browser companion."
+                        "Send links from Chrome into Flow with one click. Chrome can’t "
+                            + "install this companion silently for community builds, so Flow "
+                            + "opens Chrome with the companion already attached. "
+                            + "Also in Settings → Browser companion."
                     )
                 }
                 .alert(chromeCompanion.resultTitle, isPresented: $chromeCompanion.isResultPresented) {
@@ -90,11 +90,27 @@ struct DownloadManagerApp: App {
                 } message: {
                     Text(chromeCompanion.resultMessage)
                 }
+                .alert("Restart Chrome?", isPresented: $chromeCompanion.isRestartChromePresented) {
+                    Button("Restart Chrome", role: .destructive) {
+                        chromeCompanion.confirmRestartChromeAndOpen()
+                    }
+                    Button("Cancel", role: .cancel) {
+                        chromeCompanion.cancelRestartChrome()
+                    }
+                } message: {
+                    Text(
+                        "Chrome is already running, so Flow needs to restart it once to "
+                            + "attach the companion. Your last session will be restored."
+                    )
+                }
         }
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     updateCheck.checkForUpdates()
+                }
+                Button("Open Chrome with Companion") {
+                    chromeCompanion.openChromeWithCompanion()
                 }
             }
             CommandGroup(replacing: .newItem) {

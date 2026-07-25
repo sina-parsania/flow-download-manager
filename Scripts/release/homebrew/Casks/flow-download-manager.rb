@@ -11,8 +11,8 @@
 # "Flow Download Manager.app" and names the image
 # DownloadManager-<version>-unsigned.dmg.
 cask "flow-download-manager" do
-  version "0.2.0"
-  sha256 "7f8bfbc97964ed18b187078e455391256effa08d57de03e05410b1776369f1c9"
+  version "0.3.1"
+  sha256 "3bb7598c9904cb4dd7c990102bd193d45c1d8a81379c6d77fd3f698df753f827"
 
   url "https://github.com/sina-parsania/flow-download-manager/releases/download/v#{version}/DownloadManager-#{version}-unsigned.dmg",
       verified: "github.com/sina-parsania/flow-download-manager/"
@@ -35,7 +35,7 @@ cask "flow-download-manager" do
             launchctl: "org.downloadmanager.local.DownloadEngineAgent"
 
   zap trash: [
-    "~/Library/Application Support/Google/Chrome/NativeMessagingHosts/org.downloadmanager.local.ChromeNativeHost.json",
+    "~/Library/Application Support/Google/Chrome/NativeMessagingHosts/org.downloadmanager.local.chrome_native_host.json",
     "~/Library/Application Support/org.downloadmanager.local.DownloadEngineAgent",
     "~/Library/Caches/org.downloadmanager.local.DownloadManager",
     "~/Library/HTTPStorages/org.downloadmanager.local.DownloadManager",

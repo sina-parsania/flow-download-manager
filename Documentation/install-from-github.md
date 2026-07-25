@@ -25,7 +25,7 @@ Useful flags:
 | Flag | Effect |
 | --- | --- |
 | `--system` | Install to `/Applications` (may need admin) |
-| `--tag v0.3.0` | Pin a release tag |
+| `--tag v0.3.1` | Pin a release tag |
 | `--dir ~/Apps` | Custom install parent directory |
 | `--no-open` | Install only |
 | `--dmg /path/to.dmg` | Install from a local DMG (skip download) |
@@ -99,9 +99,8 @@ open .build/DerivedData/Build/Products/Debug/DownloadManager.app
 
 ## Chrome companion
 
-Chrome 137+ blocks `--load-extension` on branded Chrome. Flow restarts Chrome with
-`--disable-features=DisableLoadExtensionCommandLineSwitch` so the companion can
-attach for that session — no Load unpacked.
+Chrome 137+ blocks silent install into your everyday Chrome profile. Flow uses a
+dedicated Chrome profile and installs the companion there once via DevTools.
 
 **Settings → Browser companion → Open Chrome with Companion**
 

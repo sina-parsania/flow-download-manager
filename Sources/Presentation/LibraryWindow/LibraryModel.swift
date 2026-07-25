@@ -209,8 +209,27 @@ public final class LibraryModel: ObservableObject {
     }
 
     public func presentClipboardLinks(_ text: String) {
-        pendingClipboardText = text
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incoming.isEmpty else { return }
+        // Always publish through `pendingClipboardText` so an already-open Compose
+        // sheet can merge via onChange instead of spawning another window draft.
+        pendingClipboardText = incoming
         addSheetPresented = true
+        NotificationCenter.default.post(name: .flowRevealMainWindow, object: nil)
+    }
+
+    /// Dedupes lines so repeated Chrome handoffs land in one Compose draft.
+    public nonisolated static func mergeLinkBlocks(existing: String, incoming: String) -> String {
+        var ordered: [String] = []
+        var seen: Set<String> = []
+        for block in [existing, incoming] {
+            for line in block.split(whereSeparator: \.isNewline) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { continue }
+                ordered.append(trimmed)
+            }
+        }
+        return ordered.joined(separator: "\n")
     }
 
     public func presentOpenURLLinks(_ urls: [String]) {

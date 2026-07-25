@@ -9,6 +9,14 @@ const pingButton = document.getElementById("ping");
 const takeover = document.getElementById("takeover");
 const cookies = document.getElementById("cookies");
 
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.classList.remove("ok", "error", "busy");
+  if (kind) {
+    statusEl.classList.add(kind);
+  }
+}
+
 chrome.storage.local.get("downloadTakeoverEnabled").then((stored) => {
   takeover.checked = Boolean(stored.downloadTakeoverEnabled);
 });
@@ -30,51 +38,68 @@ cookies.addEventListener("change", async () => {
   if (!cookies.checked) {
     await chrome.storage.local.set({ [COOKIES_KEY]: false });
     await chrome.permissions.remove(COOKIE_PERMISSION);
-    statusEl.textContent = "Cookies will not be sent.";
+    setStatus("Cookies will not be sent.", null);
     return;
   }
   const granted = await chrome.permissions.request(COOKIE_PERMISSION);
   cookies.checked = granted;
   await chrome.storage.local.set({ [COOKIES_KEY]: granted });
-  statusEl.textContent = granted
-    ? "Cookies will be sent with single links."
-    : "Permission declined — cookies will not be sent.";
+  setStatus(
+    granted ? "Cookies will be sent with single links." : "Permission declined — cookies off.",
+    granted ? "ok" : "error"
+  );
 });
 
 pingButton.addEventListener("click", () => {
-  statusEl.textContent = "Checking…";
+  setStatus("Checking…", "busy");
   chrome.runtime.sendMessage({ type: "ping" }, (result) => {
-    if (chrome.runtime.lastError || !result?.ok) {
-      statusEl.textContent =
-          "Host unavailable. Open Flow → Settings → Open Chrome with Companion, then try again.";
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, "error");
       return;
     }
-    statusEl.textContent = "Host OK.";
+    if (!result?.ok) {
+      setStatus(result?.error || result?.response?.message || "Host unavailable.", "error");
+      return;
+    }
+    setStatus("Connected to Flow.", "ok");
   });
 });
 
 function describe(result) {
   const response = result?.response;
-  if (chrome.runtime.lastError || !result?.ok || !response || response.ok === false) {
-    return response?.message || "Failed — Flow is not reachable.";
+  if (chrome.runtime.lastError) {
+    return { text: chrome.runtime.lastError.message, kind: "error" };
   }
-  if (response.message) {
-    return response.message;
+  if (!result?.ok || !response || response.ok === false) {
+    return {
+      text: result?.error || response?.message || "Failed — Flow is not reachable.",
+      kind: "error"
+    };
   }
-  return "Queued.";
+  if (response.route === "appHandoff") {
+    return {
+      text: response.message || "Opened in Flow — click Add to start.",
+      kind: "ok"
+    };
+  }
+  return {
+    text: response.message || "Queued in Flow.",
+    kind: "ok"
+  };
 }
 
 sendButton.addEventListener("click", async () => {
-  statusEl.textContent = "Sending…";
+  setStatus("Sending…", "busy");
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.url) {
-    statusEl.textContent = "No active tab URL.";
+    setStatus("No active tab URL.", "error");
     return;
   }
   chrome.runtime.sendMessage(
     { type: "enqueueURLs", urls: [tab.url], referer: tab.url },
     (result) => {
-      statusEl.textContent = describe(result);
+      const outcome = describe(result);
+      setStatus(outcome.text, outcome.kind);
     }
   );
 });

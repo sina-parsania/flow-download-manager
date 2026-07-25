@@ -57,6 +57,9 @@ public struct WorkspaceAppHandoff: AppHandoffPerforming {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         configuration.addsToRecentItems = false
+        if #available(macOS 12.0, *) {
+            configuration.createsNewApplicationInstance = false
+        }
         do {
             _ = try await NSWorkspace.shared.open(
                 [url],

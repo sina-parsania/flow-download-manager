@@ -11,6 +11,7 @@ public struct SettingsView: View {
     @EnvironmentObject private var launchAgent: LaunchAgentModel
     @EnvironmentObject private var updateCheck: UpdateCheckController
     @EnvironmentObject private var chromeCompanion: ChromeCompanionSetupController
+    @EnvironmentObject private var launchAtLogin: LaunchAtLoginController
     @AppStorage(ClipboardMonitor.userDefaultsKey) private var clipboardMonitoringEnabled = false
     @AppStorage(FlowAppearanceMode.userDefaultsKey) private var appearanceModeRaw = FlowAppearanceMode.system.rawValue
     @AppStorage(UpdateCheckController.automaticChecksDefaultsKey) private var automaticUpdateChecks = false
@@ -63,6 +64,33 @@ public struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("General") {
+                Toggle(
+                    "Launch at Login",
+                    isOn: Binding(
+                        get: { launchAtLogin.isEnabled },
+                        set: { launchAtLogin.setEnabled($0) }
+                    )
+                )
+                .accessibilityLabel("Launch at Login")
+                Text(
+                    "Keep Flow in the menu bar after you log in — like Neat Download Manager. "
+                        + "Flow stays out of the Dock."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                if let error = launchAtLogin.lastErrorMessage {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Login Items Settings") {
+                        launchAtLogin.openLoginItemsSettings()
+                    }
+                }
             }
 
             Section("Post-processing") {
@@ -310,9 +338,9 @@ public struct SettingsView: View {
 
             Section("Browser companion") {
                 Text(
-                    "Chrome 137+ blocks silent extension loading. Flow restarts Chrome with a "
-                        + "temporary developer switch so the companion attaches in one click — "
-                        + "no Load unpacked."
+                    "Chrome 137+ blocks installing into your everyday Chrome profile. "
+                        + "Flow keeps a dedicated Chrome profile with the companion already "
+                        + "installed — one click opens it."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -419,8 +447,8 @@ public struct SettingsView: View {
             }
         } message: {
             Text(
-                "Chrome is already running, so Flow needs to restart it once to "
-                    + "attach the companion. Your last session will be restored."
+                "Flow will open its dedicated Chrome profile (your everyday Chrome "
+                    + "can stay open). The companion is installed only in that profile."
             )
         }
     }

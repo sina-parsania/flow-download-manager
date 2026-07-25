@@ -51,7 +51,11 @@ for helper in \
   "$STAGED_APP/Contents/MacOS/DownloadEngineAgent" \
   "$STAGED_APP/Contents/MacOS/ChromeNativeHost"; do
   if [[ -e "$helper" ]]; then
-    codesign --force --sign - --options runtime "$helper"
+    if [[ -f "$ENTITLEMENTS" ]]; then
+      codesign --force --sign - --options runtime --entitlements "$ENTITLEMENTS" "$helper"
+    else
+      codesign --force --sign - --options runtime "$helper"
+    fi
   fi
 done
 if [[ -f "$ENTITLEMENTS" ]]; then

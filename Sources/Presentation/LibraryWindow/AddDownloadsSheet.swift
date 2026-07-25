@@ -114,11 +114,13 @@ struct AddDownloadsSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .task {
             if let pending = library.pendingClipboardText {
-                input = pending
-                extraction = URLTextExtractor.extract(from: pending)
-                library.pendingClipboardText = nil
+                applyPendingClipboard(pending)
             }
             await loadBindingOptions()
+        }
+        .onChange(of: library.pendingClipboardText) { _, pending in
+            guard let pending else { return }
+            applyPendingClipboard(pending)
         }
         .fileImporter(
             isPresented: $isImportPresented,
@@ -824,6 +826,20 @@ struct AddDownloadsSheet: View {
     }
 
     // MARK: - Logic (unchanged behavior)
+
+    private func applyPendingClipboard(_ pending: String) {
+        let trimmed = pending.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if library.pendingClipboardText == pending {
+            library.pendingClipboardText = nil
+        }
+        let merged = LibraryModel.mergeLinkBlocks(existing: input, incoming: trimmed)
+        guard merged != input else { return }
+        input = merged
+        extraction = URLTextExtractor.extract(from: merged)
+        confirmationPhase = .none
+        confirmationCounts = []
+    }
 
     @MainActor
     private func loadBindingOptions() async {

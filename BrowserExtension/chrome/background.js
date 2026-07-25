@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-const HOST_NAME = "org.downloadmanager.local.ChromeNativeHost";
+const HOST_NAME = "org.downloadmanager.local.chrome_native_host";
 const TAKEOVER_KEY = "downloadTakeoverEnabled";
 const COOKIES_KEY = "includeCookiesEnabled";
 
@@ -152,26 +152,38 @@ function extractURLsFromText(text) {
   return [...new Set(matches.map((u) => u.replace(/[),.;]+$/g, "")))];
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+function ensureContextMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "dm-send-link",
-      title: "Send link to Download Manager",
+      title: "Send link to Flow DM",
       contexts: ["link"]
     });
     chrome.contextMenus.create({
       id: "dm-send-page",
-      title: "Send page URL to Download Manager",
+      title: "Send page URL to Flow DM",
       contexts: ["page"]
     });
     chrome.contextMenus.create({
       id: "dm-send-selection",
-      title: "Send links in selection to Download Manager",
+      title: "Send links in selection to Flow DM",
       contexts: ["selection"]
     });
   });
-  chrome.storage.local.set({ [TAKEOVER_KEY]: false });
+}
+
+chrome.runtime.onInstalled.addListener((details) => {
+  ensureContextMenus();
+  if (details.reason === "install") {
+    chrome.storage.local.set({ [TAKEOVER_KEY]: false });
+  }
 });
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureContextMenus();
+});
+
+ensureContextMenus();
 
 // "Handed to the app" is neither success nor failure: the download is sitting in
 // Flow's Add sheet waiting for a click, and the user has to be told.
@@ -183,7 +195,7 @@ export function statusForResponse(response) {
 }
 
 const STATUS_PRESENTATION = {
-  ok: { text: "", color: "#0a0", title: "Download Manager Companion" },
+  ok: { text: "", color: "#0a0", title: "Flow DM" },
   handoff: {
     text: "…",
     color: "#c60",

@@ -21,8 +21,8 @@ configFiles:
 
 settings:
   base:
-    MARKETING_VERSION: "0.3.0"
-    CURRENT_PROJECT_VERSION: "3"
+    MARKETING_VERSION: "0.3.1"
+    CURRENT_PROJECT_VERSION: "4"
   configs:
     Debug:
       SWIFT_COMPILATION_MODE: incremental
@@ -135,6 +135,8 @@ targets:
             --exclude '.DS_Store' \
             "${SRC}/" "${DEST}/"
           test -f "${DEST}/manifest.json"
+          cp "${SRCROOT}/Scripts/chrome-load-unpacked.py" \
+            "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/chrome-load-unpacked.py"
     dependencies:
       - package: DownloadKit
         product: Presentation
@@ -168,11 +170,13 @@ targets:
       properties:
         CFBundleDisplayName: Flow Download Manager
         CFBundleName: Flow Download Manager
-        CFBundleShortVersionString: "0.3.0"
-        CFBundleVersion: "3"
+        CFBundleShortVersionString: "0.3.1"
+        CFBundleVersion: "4"
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.utilities
+        # Menu-bar agent — no Dock tile (Neat-style). Pair with accessory policy.
+        LSUIElement: true
         NSHumanReadableCopyright: "GPL-3.0-or-later"
         NSPrincipalClass: NSApplication
         # Sparkle 2 — EdDSA public key (private key stays in maintainer Keychain).
@@ -213,6 +217,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(DM_NATIVE_HOST_BUNDLE_ID)
         PRODUCT_NAME: ChromeNativeHost
+        CODE_SIGN_ENTITLEMENTS: Configuration/DownloadManager.entitlements
+    entitlements:
+      path: Configuration/DownloadManager.entitlements
 
   # --- Tests ---
   UnitTests:

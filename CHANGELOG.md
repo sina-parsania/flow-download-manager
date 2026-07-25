@@ -2,7 +2,20 @@
 
 ## Unreleased
 
-Nothing yet — next changes land here after `0.3.0`.
+Nothing yet — next changes land here after `0.3.1`.
+
+## 0.3.1 — 2026-07-25
+
+Community patch on Apple Silicon. Still **unsigned** (ADR 0008).
+
+### Product
+- Menu-bar agent: Flow lives in the menu bar (no Dock tile), single instance, Launch at Login
+- Purple Flow mark in the menu bar status item
+- Chrome companion: one-click Open Chrome with Companion, native-host path hardening, extension icons
+- Compose / library handoff: one window — Chrome links merge into the open Compose sheet
+
+### Packaging & tooling
+- Agent skills for local build-and-fix and community release (`/.cursor/skills/`)
 
 ## 0.3.0 — 2026-07-25
 

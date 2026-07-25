@@ -26,7 +26,7 @@ xcrun safari-web-extension-converter \
 Then open the generated project, enable the extension under
 **Safari → Settings → Extensions**, and point native messaging at the same
 `ChromeNativeHost` Mach / host name used by Chrome
-(`org.downloadmanager.local.ChromeNativeHost`) if your Safari build supports
+(`org.downloadmanager.local.chrome_native_host`) if your Safari build supports
 the native-messaging bridge for that host.
 
 ## Native messaging on Safari

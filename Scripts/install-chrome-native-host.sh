@@ -16,7 +16,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HOST_NAME="org.downloadmanager.local.ChromeNativeHost"
+HOST_NAME="org.downloadmanager.local.chrome_native_host"
 APP_BUNDLE_ID="org.downloadmanager.local.DownloadManager"
 EXTENSION_DIR="${DM_CHROME_EXTENSION_DIR:-${ROOT}/BrowserExtension/chrome}"
 HOST_BIN="${DM_NATIVE_HOST_PATH:-}"

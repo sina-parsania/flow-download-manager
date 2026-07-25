@@ -1,9 +1,9 @@
 # Download Manager dependency inventory
-# generated: 2026-07-23T21:52:59Z
+# generated: 2026-07-25T01:29:31Z
 
 ## Swift packages (Package.resolved)
 {
-  "originHash" : "9af6b0d07895f840276752c0dcb8915f50064471563a281a08be96d411221131",
+  "originHash" : "bc493f68a20ad34d65ab158b5e2e01bf9e8c4cf77f5784571ca0ad1c70ce1fc9",
   "pins" : [
     {
       "identity" : "grdb.swift",
@@ -12,6 +12,15 @@
       "state" : {
         "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
         "version" : "7.11.1"
+      }
+    },
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "b6496a74a087257ef5e6da1c5b29a447a60f5bd7",
+        "version" : "2.9.4"
       }
     }
   ],

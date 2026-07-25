@@ -352,6 +352,50 @@ public struct JobTagRecord: Codable, FetchableRecord, PersistableRecord, Sendabl
 }
 
 /// User category classification rule (FR-CAT). Seeded empty; priority ascending = first match wins.
+/// Crash-recoverable finalization intent keyed by job ID.
+public struct FinalizationIntentRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "finalization_intents"
+    public var jobID: String
+    public var destinationProfileID: String
+    /// Relative final filename within the destination profile.
+    public var finalFilename: String
+    /// Relative partial filename within the destination profile.
+    public var partialFilename: String
+    public var expectedByteSize: Int64
+    public var expectedChecksum: String?
+    public var stage: String
+    public var zipAutoExtract: Bool
+    public var revision: Int
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(
+        jobID: String,
+        destinationProfileID: String,
+        finalFilename: String,
+        partialFilename: String,
+        expectedByteSize: Int64,
+        expectedChecksum: String?,
+        stage: String,
+        zipAutoExtract: Bool,
+        revision: Int,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.jobID = jobID
+        self.destinationProfileID = destinationProfileID
+        self.finalFilename = finalFilename
+        self.partialFilename = partialFilename
+        self.expectedByteSize = expectedByteSize
+        self.expectedChecksum = expectedChecksum
+        self.stage = stage
+        self.zipAutoExtract = zipAutoExtract
+        self.revision = revision
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct CategoryRuleRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "category_rules"
     public var id: String

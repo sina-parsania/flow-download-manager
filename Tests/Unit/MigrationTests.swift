@@ -25,7 +25,8 @@ final class MigrationTests: XCTestCase {
             "categories", "category_rules", "projects", "tags", "job_tags",
             "destination_profiles", "credential_profiles", "proxy_profiles",
             "cookie_profiles", "bandwidth_policies", "schedules",
-            "post_processing_pipelines", "host_observations"
+            "post_processing_pipelines", "host_observations", "host_settings",
+            "finalization_intents"
         ]
         XCTAssertTrue(expected.isSubset(of: tables), "missing: \(expected.subtracting(tables))")
         XCTAssertTrue(try db.isAtCurrentSchemaVersion())
@@ -201,6 +202,18 @@ final class MigrationTests: XCTestCase {
         let v5 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
         XCTAssertTrue(try v5.isAtCurrentSchemaVersion())
         XCTAssertTrue(try v5.tableNames().contains("host_settings"))
+    }
+
+    func testV5ToV6AddsFinalizationIntentsTable() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let v5 = try EngineDatabase(url: url, migrator: SchemaMigrator.v5Only)
+        XCTAssertFalse(try v5.tableNames().contains("finalization_intents"))
+
+        let v6 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
+        XCTAssertTrue(try v6.isAtCurrentSchemaVersion())
+        XCTAssertTrue(try v6.tableNames().contains("finalization_intents"))
     }
 
     func testInterruptedMigrationRollsBack() throws {

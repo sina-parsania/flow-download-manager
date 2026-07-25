@@ -14,6 +14,17 @@ import Network
 ///   GET /fixtures/ok             -> 200 with body, strong ETag, Accept-Ranges;
 ///                                    honors Range with 206 + Content-Range
 ///   GET /fixtures/no-range       -> 200 full body even when Range is requested
+///   GET /fixtures/no-range-truncate -> probe behaves like no-range; plain GET
+///                                    truncates mid-body (replacement failure)
+///   GET /fixtures/range-ignored-200 -> alias of no-range (Range → HTTP 200 full body)
+///   GET /fixtures/range-shifted     -> 206 with a shifted Content-Range interval
+///   GET /fixtures/range-malformed-cr -> 206 with malformed Content-Range
+///   GET /fixtures/range-wrong-total -> 206 with correct slice but wrong total
+///   GET /fixtures/range-error-body  -> 403 with a body sized like the requested range
+///   GET /fixtures/range-forbidden -> 403 when Range is present; 200 full body otherwise
+///   GET /fixtures/once           -> Range → 403 (no consume); first plain GET
+///                                    returns the body and consumes the token;
+///                                    later GETs → 403
 ///   GET /fixtures/changing-etag  -> 200 with an ETag that changes each request
 ///   GET /fixtures/truncated      -> Content-Length larger than the bytes sent
 ///   GET /fixtures/large          -> 2 MiB ranged body (real multi-segment plans)
@@ -23,6 +34,13 @@ import Network
 ///   GET /fixtures/flaky          -> ranged body, but the first `drops`
 ///                                    connections hang up mid-body;
 ///                                    `?size=&drops=` — the bad-link fixture
+///   GET /fixtures/redirect/metadata-hop      -> 302 with hop-only metadata
+///   GET /fixtures/redirect/metadata-hop2     -> second hop in a redirect chain
+///   GET /fixtures/redirect/metadata-chain    -> 302 through hop2 to terminal
+///   GET /fixtures/redirect/metadata-terminal -> 200 terminal metadata only
+///   GET /fixtures/redirect/same-origin       -> 302 to capture (same host)
+///   GET /fixtures/redirect/cross?port=<n>    -> 302 to another loopback port
+///   GET /fixtures/redirect/capture           -> records request header names
 ///   GET /status/<code>           -> responds with that status code
 ///   POST /control/reset          -> clears request log + counters
 ///   GET  /control/logs           -> newline-delimited request log
@@ -40,13 +58,20 @@ public final class FaultHTTPServer: @unchecked Sendable {
     private let lock = NSLock()
     private var listener: NWListener?
     private var requestLog: [String] = []
+    /// Header names observed per capture path (`path|Header-Name`), never values.
+    private var headerNamesLog: [String] = []
     private var etagCounter = 0
+    /// Successful body responses served by `/fixtures/once`.
+    private var onceHits = 0
+    private var rangedRequestsObserved = 0
     /// Generated throughput bodies, cached by size so a benchmark that issues
     /// many ranged requests does not rebuild the same buffer each time.
     private var throughputBodies: [Int: Data] = [:]
-    /// Counts connections served by `/fixtures/throughput`, so `slowFirst` can
-    /// deterministically pick which connections are rate-starved.
+    /// Connections served by `/fixtures/throughput`, so `slowFirst` and
+    /// `dropFirst` can deterministically pick which connections are affected.
     private var throughputConnections = 0
+    private var throughputConnectionAttempts = 0
+    private var throughputConnectionsDropped = 0
     /// Connections served by `/fixtures/flaky`, so the first N can be dropped
     /// deterministically.
     private var flakyConnections = 0
@@ -99,8 +124,13 @@ public final class FaultHTTPServer: @unchecked Sendable {
     public func reset() {
         lock.lock()
         requestLog.removeAll()
+        headerNamesLog.removeAll()
         etagCounter = 0
+        onceHits = 0
+        rangedRequestsObserved = 0
         throughputConnections = 0
+        throughputConnectionAttempts = 0
+        throughputConnectionsDropped = 0
         flakyConnections = 0
         lock.unlock()
     }
@@ -109,6 +139,38 @@ public final class FaultHTTPServer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return requestLog
+    }
+
+    /// Requests that carried a `Range` header (probe observability for tests).
+    public func rangedRequestCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return rangedRequestsObserved
+    }
+
+    /// Connections opened by `/fixtures/throughput` since the last reset.
+    public func throughputConnectionAttemptCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return throughputConnectionAttempts
+    }
+
+    /// Connections intentionally dropped mid-body by `/fixtures/throughput`.
+    public func throughputConnectionsDroppedCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return throughputConnectionsDropped
+    }
+
+    /// Canonical header names recorded for @c path on `/fixtures/redirect/capture`.
+    public func recordedHeaderNames(on path: String) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        let prefix = "\(path)|"
+        return headerNamesLog.compactMap { entry in
+            guard entry.hasPrefix(prefix) else { return nil }
+            return String(entry.dropFirst(prefix.count))
+        }
     }
 
     // MARK: connection handling
@@ -151,17 +213,47 @@ public final class FaultHTTPServer: @unchecked Sendable {
             return
         }
         let method = String(parts[0])
-        let path = String(parts[1])
+        let rawTarget = String(parts[1])
+        // Keep query values for fixtures that depend on them (throughput/flaky)
+        // while still routing on a stable path stem.
+        // Strip the query so `/fixtures/large?X-Amz-Signature=…` still hits the
+        // ranged fixture — signed-URL heuristics are tested against the full URL.
+        let path = rawTarget.split(separator: "?", maxSplits: 1).first.map(String.init) ?? rawTarget
         let rangeHeader = lines.first { $0.lowercased().hasPrefix("range:") }
+        let headerNames = lines.dropFirst().compactMap { line -> String? in
+            guard let colon = line.firstIndex(of: ":") else { return nil }
+            let name = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
+            return name.isEmpty ? nil : name
+        }
 
         lock.lock()
-        requestLog.append("\(method) \(path)")
+        requestLog.append("\(method) \(rawTarget)")
+        if rangeHeader != nil { rangedRequestsObserved += 1 }
+        if path == "/fixtures/redirect/capture" {
+            for name in headerNames {
+                headerNamesLog.append("\(path)|\(name)")
+            }
+        }
         lock.unlock()
 
-        route(method: method, path: path, rangeHeader: rangeHeader, on: connection)
+        route(
+            method: method,
+            path: path,
+            queryPath: rawTarget,
+            rangeHeader: rangeHeader,
+            headerNames: headerNames,
+            on: connection
+        )
     }
 
-    private func route(method: String, path: String, rangeHeader: String?, on connection: NWConnection) {
+    private func route(
+        method: String,
+        path: String,
+        queryPath: String,
+        rangeHeader: String?,
+        headerNames _: [String],
+        on connection: NWConnection
+    ) {
         switch path {
         case "/health":
             send(status: 200, reason: "OK", body: Data("ok".utf8), on: connection)
@@ -191,12 +283,150 @@ public final class FaultHTTPServer: @unchecked Sendable {
             // Ignores Range: always returns the full 200 body.
             serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
 
+        case "/fixtures/no-range-large":
+            // Same as no-range but 2 MiB — a capped probe must not pull the lot.
+            serveFixture(
+                body: Self.largeBody,
+                rangeHeader: nil,
+                acceptRanges: false,
+                etag: Self.strongETag,
+                on: connection
+            )
+
+        case "/fixtures/no-range-truncate":
+            // Ranged probe succeeds like no-range; a plain GET truncates so a
+            // replacement download can fail without touching the original partial.
+            if rangeHeader != nil {
+                serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+            } else {
+                let body = Self.fixtureBody.prefix(1024)
+                var headers = "HTTP/1.1 200 OK\r\n"
+                headers += "Content-Length: \(Self.fixtureBody.count)\r\n"
+                headers += "ETag: \(Self.strongETag)\r\n"
+                headers += "Connection: close\r\n\r\n"
+                var response = Data(headers.utf8)
+                response.append(body)
+                connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+            }
+
+        case "/fixtures/range-ignored-200":
+            serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+
+        case "/fixtures/range-shifted":
+            serveShiftedRange(rangeHeader: rangeHeader, on: connection)
+
+        case "/fixtures/range-malformed-cr":
+            serveMalformedContentRange(rangeHeader: rangeHeader, on: connection)
+
+        case "/fixtures/range-wrong-total":
+            serveWrongTotalContentRange(rangeHeader: rangeHeader, on: connection)
+
+        case "/fixtures/range-error-body":
+            serveRangeErrorBody(rangeHeader: rangeHeader, on: connection)
+
+        case "/fixtures/range-forbidden":
+            // Range probe rejected; plain GET still delivers the file.
+            if rangeHeader != nil {
+                send(
+                    status: 403,
+                    reason: "Forbidden",
+                    body: Data(#"{"detail":"range not allowed"}"#.utf8),
+                    on: connection
+                )
+            } else {
+                serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+            }
+
+        case "/fixtures/once":
+            // One-shot token. A ranged probe must not consume it — reject Range
+            // without burning so a plain GET can still succeed.
+            if rangeHeader != nil {
+                send(
+                    status: 403,
+                    reason: "Forbidden",
+                    body: Data(#"{"detail":"range not allowed"}"#.utf8),
+                    on: connection
+                )
+                return
+            }
+            lock.lock()
+            let alreadyConsumed = onceHits > 0
+            if !alreadyConsumed { onceHits += 1 }
+            lock.unlock()
+            if alreadyConsumed {
+                send(
+                    status: 403,
+                    reason: "Forbidden",
+                    body: Data(#"{"detail":"token consumed"}"#.utf8),
+                    on: connection
+                )
+            } else {
+                serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+            }
+
         case "/fixtures/changing-etag":
             lock.lock(); etagCounter += 1; let counter = etagCounter; lock.unlock()
             serveFixture(
                 rangeHeader: rangeHeader,
                 acceptRanges: true,
                 etag: "\"changing-\(counter)\"",
+                on: connection
+            )
+
+        case "/fixtures/redirect/metadata-hop":
+            sendRedirect(
+                to: "/fixtures/redirect/metadata-terminal",
+                extraHeaders: [
+                    "ETag": "\"hop-only-etag\"",
+                    "Content-Type": "application/x-hop",
+                    "Content-Disposition": "attachment; filename=\"hop.bin\"",
+                    "Accept-Ranges": "none"
+                ],
+                on: connection
+            )
+
+        case "/fixtures/redirect/metadata-hop2":
+            sendRedirect(
+                to: "/fixtures/redirect/metadata-terminal",
+                extraHeaders: [
+                    "ETag": "\"second-hop-etag\"",
+                    "Content-Type": "application/x-second-hop",
+                    "Last-Modified": "Mon, 01 Jan 1990 00:00:00 GMT"
+                ],
+                on: connection
+            )
+
+        case "/fixtures/redirect/metadata-chain":
+            sendRedirect(to: "/fixtures/redirect/metadata-hop2", on: connection)
+
+        case "/fixtures/redirect/metadata-terminal":
+            serveFixture(
+                rangeHeader: rangeHeader,
+                acceptRanges: true,
+                etag: "\"terminal-only\"",
+                contentType: "application/octet-stream",
+                on: connection
+            )
+
+        case "/fixtures/redirect/same-origin":
+            sendRedirect(to: "/fixtures/redirect/capture", on: connection)
+
+        case "/fixtures/redirect/cross":
+            let query = Self.queryItems(queryPath)
+            guard let port = query["port"], !port.isEmpty else {
+                send(status: 400, reason: "Bad Request", body: Data(), on: connection)
+                return
+            }
+            sendRedirect(
+                to: "http://127.0.0.1:\(port)/fixtures/redirect/capture",
+                on: connection
+            )
+
+        case "/fixtures/redirect/capture":
+            serveFixture(
+                rangeHeader: nil,
+                acceptRanges: false,
+                etag: Self.strongETag,
                 on: connection
             )
 
@@ -212,9 +442,9 @@ public final class FaultHTTPServer: @unchecked Sendable {
 
         default:
             if path.hasPrefix("/fixtures/flaky") {
-                serveFlaky(path: path, rangeHeader: rangeHeader, on: connection)
+                serveFlaky(path: queryPath, rangeHeader: rangeHeader, on: connection)
             } else if path.hasPrefix("/fixtures/throughput") {
-                serveThroughput(path: path, rangeHeader: rangeHeader, on: connection)
+                serveThroughput(path: queryPath, rangeHeader: rangeHeader, on: connection)
             } else if path.hasPrefix("/status/"), let code = Int(path.dropFirst("/status/".count)) {
                 send(status: code, reason: reason(for: code), body: Data("status \(code)".utf8), on: connection)
             } else {
@@ -225,7 +455,8 @@ public final class FaultHTTPServer: @unchecked Sendable {
 
     // MARK: throughput fixture
 
-    /// `GET /fixtures/throughput?size=<bytes>&kbps=<cap>&slowFirst=<n>&slowKbps=<cap>&rtt=<ms>&loss=<percent>`
+    /// `GET
+    /// /fixtures/throughput?size=<bytes>&kbps=<cap>&slowFirst=<n>&slowKbps=<cap>&rtt=<ms>&loss=<percent>&dropFirst=<n>`
     ///
     /// Range-capable body of `size` bytes. `kbps` caps each connection's send
     /// rate; the first `slowFirst` connections are capped at `slowKbps` instead.
@@ -234,9 +465,10 @@ public final class FaultHTTPServer: @unchecked Sendable {
     /// invisible. `slowFirst` reproduces the straggler that dominates the tail.
     ///
     /// `rtt` delays the first byte of every connection by that many milliseconds
-    /// (one-way), modelling high-latency links. `loss` is the percent chance
-    /// (0–100) that a connection hangs up after roughly one third of its payload
-    /// — independent per connection, so N connections see independent draws.
+    /// (one-way), modelling high-latency links. `dropFirst` hangs up after roughly
+    /// one third of the payload on the first N connections — the deterministic
+    /// correctness schedule. `loss` applies the same mid-stream drop using a
+    /// seeded draw per connection index for exploratory curves only.
     private func serveThroughput(path: String, rangeHeader: String?, on connection: NWConnection) {
         let query = Self.queryItems(path)
         let size = query["size"].flatMap(Int.init) ?? (8 * 1024 * 1024)
@@ -244,8 +476,9 @@ public final class FaultHTTPServer: @unchecked Sendable {
         let slowFirst = query["slowFirst"].flatMap(Int.init) ?? 0
         let slowKbps = query["slowKbps"].flatMap(Int.init) ?? 0
         let rttMs = max(0, query["rtt"].flatMap(Int.init) ?? 0)
+        let dropFirst = max(0, query["dropFirst"].flatMap(Int.init) ?? 0)
         // Fractional percents are intentional (TASK 2: 0.1% / 1%). A connection
-        // drops when a uniform draw in [0, 100) lands below `loss`.
+        // drops when a seeded draw in [0, 100) lands below `loss`.
         let lossPercent = min(100.0, max(0.0, query["loss"].flatMap(Double.init) ?? 0))
         guard size > 0, size <= 512 * 1024 * 1024 else {
             send(status: 400, reason: "Bad Request", body: Data(), on: connection)
@@ -262,10 +495,22 @@ public final class FaultHTTPServer: @unchecked Sendable {
         }
         let index = throughputConnections
         throughputConnections += 1
+        throughputConnectionAttempts += 1
         lock.unlock()
 
         let rate = index < slowFirst ? slowKbps : kbps
-        let dropMidStream = lossPercent > 0 && Double.random(in: 0 ..< 100) < lossPercent
+        let dropMidStream: Bool = if dropFirst > 0 {
+            index < dropFirst
+        } else if lossPercent > 0 {
+            Self.seededLossDraw(connectionIndex: index) < lossPercent
+        } else {
+            false
+        }
+        if dropMidStream {
+            lock.lock()
+            throughputConnectionsDropped += 1
+            lock.unlock()
+        }
 
         let range = rangeHeader.flatMap { Self.parseRange($0, total: body.count) }
         let payload = range.map { body.subdata(in: $0) } ?? body
@@ -402,11 +647,88 @@ public final class FaultHTTPServer: @unchecked Sendable {
         return items
     }
 
+    /// Deterministic pseudo-random draw in `[0, 100)` for exploratory `loss=`
+    /// curves. Correctness tests must use `dropFirst=` instead.
+    static func seededLossDraw(connectionIndex: Int) -> Double {
+        let mixed = UInt64(bitPattern: Int64(connectionIndex &+ 0x9E37_79B9))
+        let scaled = (mixed &* 0xBF58_476D_1CE4_E5B9) >> 32
+        return Double(scaled % 10000) / 100.0
+    }
+
+    private func serveShiftedRange(rangeHeader: String?, on connection: NWConnection) {
+        let body = Self.fixtureBody
+        guard let rangeHeader, let requested = Self.parseRange(rangeHeader, total: body.count) else {
+            serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+            return
+        }
+        let shift = min(requested.count, max(1, body.count / 4))
+        let shiftedStart = min(requested.lowerBound + shift, body.count - requested.count)
+        let shiftedEnd = shiftedStart + requested.count
+        guard shiftedEnd <= body.count else {
+            serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+            return
+        }
+        let slice = body.subdata(in: shiftedStart ..< shiftedEnd)
+        var headers = "HTTP/1.1 206 Partial Content\r\n"
+        headers += "Content-Range: bytes \(shiftedStart)-\(shiftedEnd - 1)/\(body.count)\r\n"
+        headers += "Content-Length: \(slice.count)\r\n"
+        headers += "Accept-Ranges: bytes\r\n"
+        headers += "ETag: \(Self.strongETag)\r\n"
+        headers += "Connection: close\r\n\r\n"
+        var response = Data(headers.utf8)
+        response.append(slice)
+        connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private func serveMalformedContentRange(rangeHeader: String?, on connection: NWConnection) {
+        let body = Self.fixtureBody
+        guard let rangeHeader, let range = Self.parseRange(rangeHeader, total: body.count) else {
+            serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+            return
+        }
+        let slice = body.subdata(in: range)
+        var headers = "HTTP/1.1 206 Partial Content\r\n"
+        headers += "Content-Range: not-bytes \(range.lowerBound)-\(range.upperBound - 1)/\(body.count)\r\n"
+        headers += "Content-Length: \(slice.count)\r\n"
+        headers += "Connection: close\r\n\r\n"
+        var response = Data(headers.utf8)
+        response.append(slice)
+        connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private func serveWrongTotalContentRange(rangeHeader: String?, on connection: NWConnection) {
+        let body = Self.fixtureBody
+        guard let rangeHeader, let range = Self.parseRange(rangeHeader, total: body.count) else {
+            serveFixture(rangeHeader: nil, acceptRanges: false, etag: Self.strongETag, on: connection)
+            return
+        }
+        let slice = body.subdata(in: range)
+        let wrongTotal = range.upperBound - 1
+        var headers = "HTTP/1.1 206 Partial Content\r\n"
+        headers += "Content-Range: bytes \(range.lowerBound)-\(range.upperBound - 1)/\(wrongTotal)\r\n"
+        headers += "Content-Length: \(slice.count)\r\n"
+        headers += "Connection: close\r\n\r\n"
+        var response = Data(headers.utf8)
+        response.append(slice)
+        connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private func serveRangeErrorBody(rangeHeader: String?, on connection: NWConnection) {
+        let body = Self.fixtureBody
+        guard let rangeHeader, let range = Self.parseRange(rangeHeader, total: body.count) else {
+            send(status: 403, reason: "Forbidden", body: Data("forbidden".utf8), on: connection)
+            return
+        }
+        let slice = body.subdata(in: range)
+        send(status: 403, reason: "Forbidden", body: slice, on: connection)
+    }
+
     private func serveFixture(
         body: Data? = nil,
         rangeHeader: String?,
         acceptRanges: Bool,
         etag: String,
+        contentType: String? = nil,
         on connection: NWConnection
     ) {
         let body = body ?? Self.fixtureBody
@@ -415,7 +737,8 @@ public final class FaultHTTPServer: @unchecked Sendable {
             var headers = "HTTP/1.1 206 Partial Content\r\n"
             headers += "Content-Range: bytes \(range.lowerBound)-\(range.upperBound - 1)/\(body.count)\r\n"
             headers += "Content-Length: \(slice.count)\r\n"
-            headers += "Accept-Ranges: bytes\r\n"
+            if acceptRanges { headers += "Accept-Ranges: bytes\r\n" }
+            if let contentType { headers += "Content-Type: \(contentType)\r\n" }
             headers += "ETag: \(etag)\r\n"
             headers += "Connection: close\r\n\r\n"
             var response = Data(headers.utf8)
@@ -426,11 +749,27 @@ public final class FaultHTTPServer: @unchecked Sendable {
         var headers = "HTTP/1.1 200 OK\r\n"
         headers += "Content-Length: \(body.count)\r\n"
         if acceptRanges { headers += "Accept-Ranges: bytes\r\n" }
+        if let contentType { headers += "Content-Type: \(contentType)\r\n" }
         headers += "ETag: \(etag)\r\n"
         headers += "Connection: close\r\n\r\n"
         var response = Data(headers.utf8)
         response.append(body)
         connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private func sendRedirect(
+        to location: String,
+        extraHeaders: [String: String] = [:],
+        on connection: NWConnection
+    ) {
+        var headers = "HTTP/1.1 302 Found\r\n"
+        headers += "Location: \(location)\r\n"
+        for (name, value) in extraHeaders.sorted(by: { $0.key < $1.key }) {
+            headers += "\(name): \(value)\r\n"
+        }
+        headers += "Content-Length: 0\r\n"
+        headers += "Connection: close\r\n\r\n"
+        connection.send(content: Data(headers.utf8), completion: .contentProcessed { _ in connection.cancel() })
     }
 
     private func send(status: Int, reason: String, body: Data, on connection: NWConnection) {

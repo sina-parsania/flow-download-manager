@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Application
+import Domain
 import EngineAgent
 import Foundation
 import Persistence
@@ -63,13 +64,13 @@ final class RestartFromScratchIntegrationTests: XCTestCase {
             // Fixture finished before pause; re-seed a paused job with a corrupt partial.
             try FileManager.default.removeItem(at: dest)
             try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
-            _ = try JobRepository.updateJobState(
-                database: database,
-                id: jobID,
-                state: "paused",
-                terminalReason: nil,
-                expectedRevision: nil
-            )
+            try await database.pool.write { db in
+                guard var job = try JobRecord.fetchOne(db, key: jobID) else { return }
+                job.state = JobState.paused.rawValue
+                job.terminalReason = nil
+                job.revision += 1
+                try job.update(db)
+            }
             state = "paused"
         }
         XCTAssertTrue(
@@ -98,7 +99,7 @@ final class RestartFromScratchIntegrationTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "queued",
+            state: .queued,
             terminalReason: nil,
             expectedRevision: nil
         )

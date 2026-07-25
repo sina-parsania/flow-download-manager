@@ -13,7 +13,7 @@ talk over versioned, authenticated XPC. Distribution is **GitHub community build
 by default (unsigned / ad-hoc OK; see ADR 0008). Optional Developer ID notarization
 is supported but **not required**. License: `GPL-3.0-or-later`.
 
-Current state: **v0.3.2** — community DMG path (`CHANGELOG.md`, one-line installer
+Current state: **v0.3.3** — community DMG path (`CHANGELOG.md`, one-line installer
 in `README.md`), menu-bar agent, Sparkle Check for Updates (manual by default).
 Open items: a manual VoiceOver pass and optional Developer ID notarization.
 

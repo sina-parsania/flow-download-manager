@@ -16,6 +16,25 @@
         <description>In-app updates for Flow Download Manager</description>
         <language>en</language>
         <item>
+            <title>0.3.3</title>
+            <pubDate>Sun, 26 Jul 2026 02:49:08 +0330</pubDate>
+            <link>https://github.com/sina-parsania/flow-download-manager</link>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.3.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.3
+
+- Safer range probes and ranged-byte validation before writing
+- Crash-recoverable final-file promotion
+- Typed job-state transitions and safer no-range partial restart
+- Redirect metadata / origin-scoped headers; atomic cancel
+
+Community build — not Apple notarized.
+]]></description>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.3/Flow-0.3.3.zip" length="24313971" type="application/octet-stream" sparkle:edSignature="OmTVJz7bEvBN678mmgrq3haEHQ0o6pXWjcPHhxlGH2zH5ZwiiPOFh1JlkNnxXB0SEhWXFmj4sFKDl7AJcMglBw=="/>
+        </item>
+        <item>
             <title>0.3.2</title>
             <pubDate>Sat, 25 Jul 2026 17:58:05 +0330</pubDate>
             <link>https://github.com/sina-parsania/flow-download-manager</link>

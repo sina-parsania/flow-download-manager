@@ -189,4 +189,177 @@ final class SegmentedTransferIntegrationTests: XCTestCase {
         XCTAssertEqual(outcome.bytesWritten, total)
         XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
     }
+
+    /// A structurally invalid map must not let a preallocated shell reach the
+    /// size-only completion path. The caller should surface a recoverable error
+    /// and leave both the partial and the invalid sidecar on disk.
+    func testInvalidSegmapCannotCompletePreallocatedShell() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-gap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let total = Int64(FaultHTTPServer.largeBody.count)
+        let partial = root.appendingPathComponent("gap.partial")
+        let half = total / 2
+        let gapStart = half + 1024
+
+        try Data(repeating: 0xA5, count: Int(total)).write(to: partial)
+
+        let map: [String: Any] = [
+            "total": total,
+            "baseOffset": 0,
+            "entries": [
+                ["start": 0, "end": half - 1, "written": half],
+                ["start": gapStart, "end": total - 1, "written": total - gapStart]
+            ]
+        ]
+        let segmapURL = SegmentedTransfer.segmentMapURL(for: partial)
+        try JSONSerialization.data(withJSONObject: map).write(to: segmapURL)
+        let partialBefore = try Data(contentsOf: partial)
+        let segmapBefore = try Data(contentsOf: segmapURL)
+
+        XCTAssertNil(
+            SegmentLedger.load(sidecarURL: segmapURL),
+            "gap map must not load — old code treated it as complete"
+        )
+
+        XCTAssertThrowsError(
+            try SegmentedTransfer.downloadHTTP(
+                url: "http://127.0.0.1:\(port)/fixtures/large",
+                partialURL: partial
+            )
+        ) { error in
+            guard case TransferCore.TransferError.incompleteWrite = error else {
+                XCTFail("expected incompleteWrite, got \(error)")
+                return
+            }
+        }
+
+        XCTAssertEqual(try Data(contentsOf: partial), partialBefore)
+        XCTAssertEqual(try Data(contentsOf: segmapURL), segmapBefore)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: partial.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: segmapURL.path))
+    }
+
+    /// Range probe returns 403, plain GET returns 200.
+    ///
+    /// Before the fallback, `probeRangeSupport` threw and the job never tried a
+    /// full GET — hosts that reject ranged probes looked permanently broken.
+    func testRangeForbiddenProbeFallsBackToSingleStream() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-range-forbidden-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let partial = root.appendingPathComponent("range-forbidden.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/range-forbidden",
+            partialURL: partial
+        )
+        XCTAssertEqual(outcome.segmentCount, 1)
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.fixtureBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.fixtureBody)
+    }
+
+    /// One-shot signed URL: a Cookie-bearing job must not Range-probe first.
+    ///
+    /// The probe used to download the whole body (hosts that ignore Range), burn
+    /// the token, then fail the real transfer with 403.
+    func testCookieJobSkipsProbeOnOneShotURL() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-once-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var options = TransferCore.DownloadOptions()
+        options.extraHeaders = [
+            TransferCore.HTTPHeader(name: "Cookie", value: "session=test")
+        ]
+        let partial = root.appendingPathComponent("once.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/once",
+            partialURL: partial,
+            options: options
+        )
+        XCTAssertEqual(outcome.segmentCount, 1)
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.fixtureBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.fixtureBody)
+    }
+
+    /// Fragile `sig=` query skips the probe entirely (no Range request at all).
+    func testFragileSignedQuerySkipsProbeOnOneShotURL() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-sig-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let partial = root.appendingPathComponent("sig.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/once?sig=abc123&ts=1",
+            partialURL: partial
+        )
+        XCTAssertEqual(outcome.segmentCount, 1)
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.fixtureBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.fixtureBody)
+    }
+
+    /// One-shot without Cookie/`sig`: Range probe is rejected without consuming
+    /// the token, then the plain GET succeeds.
+    func testOneShotSurvivesRejectedRangeProbe() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-once-fallback-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let partial = root.appendingPathComponent("once-fallback.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/once",
+            partialURL: partial
+        )
+        XCTAssertEqual(outcome.segmentCount, 1)
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.fixtureBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.fixtureBody)
+    }
+
+    /// AWS-shaped signed query must still multi-segment (speed path).
+    func testAWSSignedQueryStillSegments() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-aws-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let partial = root.appendingPathComponent("aws.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/large?X-Amz-Signature=test&X-Amz-Algorithm=AWS4-HMAC-SHA256",
+            partialURL: partial
+        )
+        XCTAssertEqual(outcome.segmentCount, 2)
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.largeBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
+    }
 }

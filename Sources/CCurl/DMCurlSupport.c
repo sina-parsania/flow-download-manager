@@ -2,6 +2,9 @@
 #include "DMCurlSupport.h"
 
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -10,7 +13,15 @@
 
 /* Single definition so the two easy-handle setup paths cannot drift apart.
  * Keep in step with VERSION at release time (Documentation/release-checklist.md). */
-#define DM_USER_AGENT "Flow/0.2.0"
+#define DM_USER_AGENT "Flow/0.3.2"
+
+#ifndef CURLE_RANGE_ERROR
+#define CURLE_RANGE_ERROR ((CURLcode)63)
+#endif
+
+#ifndef CURLU_ALLOW_RELATIVE
+#define CURLU_ALLOW_RELATIVE (1 << 10)
+#endif
 
 /* Process-wide share handle: every easy created here reuses one DNS cache and
  * one TLS session cache. Segmented downloads open N connections to the same
@@ -152,19 +163,61 @@ void DMCurlDownloadResultClear(DMCurlDownloadResult *result) {
     result->contentLength = -1;
 }
 
+struct DMCurlAbortFlag {
+    atomic_int aborted;
+};
+
+DMCurlAbortFlag *DMCurlAbortFlagCreate(void) {
+    DMCurlAbortFlag *flag = (DMCurlAbortFlag *)calloc(1, sizeof(DMCurlAbortFlag));
+    if (flag != NULL) {
+        atomic_init(&flag->aborted, 0);
+    }
+    return flag;
+}
+
+void DMCurlAbortFlagDestroy(DMCurlAbortFlag *flag) {
+    free(flag);
+}
+
+void DMCurlAbortFlagRequest(DMCurlAbortFlag *flag) {
+    if (flag != NULL) {
+        atomic_store_explicit(&flag->aborted, 1, memory_order_release);
+    }
+}
+
+int DMCurlAbortFlagIsSet(const DMCurlAbortFlag *flag) {
+    return flag != NULL && atomic_load_explicit(&flag->aborted, memory_order_acquire);
+}
+
+int DMCurlAbortFlagIsSetHandle(const void *flag) {
+    return DMCurlAbortFlagIsSet((const DMCurlAbortFlag *)flag);
+}
+
+void DMCurlAbortFlagReset(DMCurlAbortFlag *flag) {
+    if (flag != NULL) {
+        atomic_store_explicit(&flag->aborted, 0, memory_order_release);
+    }
+}
+
 typedef struct {
     int fd;
     curl_off_t offset;
     curl_off_t written;
+    curl_off_t expectedRangeStart;
+    curl_off_t expectedRangeEnd;
     /* Expected body size for this easy (-1 unknown). Updated from XFERINFO
      * dltotal once libcurl learns Content-Length / Content-Range length. */
     curl_off_t knownTotal;
+    curl_off_t bodyByteLimit;
     int writeError;
+    int rangedTransfer;
+    int rangeResponseInvalid;
     /* Set by DMCurlEasyDownloadRequestStop. Distinct from abortFlag: that one
      * is job-wide and means "the user cancelled"; this one means "give your
      * remaining range back so it can be re-tiled". */
     volatile int32_t stopRequested;
-    volatile int32_t *abortFlag;
+    int bodyCapReached;
+    DMCurlAbortFlag *abortFlag;
     DMCurlProgressCallback progressCallback;
     void *progressUserdata;
 } DMCurlWriteCtx;
@@ -176,7 +229,20 @@ typedef struct {
     char *acceptRanges;
     char *contentDisposition;
     char *contentRange;
+    char *location;
+    long responseStatus;
+    int hasContentRange;
+    int contentRangeMalformed;
+    curl_off_t contentRangeStart;
+    curl_off_t contentRangeEnd;
+    curl_off_t contentRangeTotal;
 } DMCurlHeaderCtx;
+
+typedef struct {
+    DMCurlWriteCtx *write;
+    DMCurlHeaderCtx *header;
+    int discardResponseBody;
+} DMCurlEasyTransferCtx;
 
 static char *DMCurlDupRange(const char *start, size_t length) {
     char *copy = (char *)malloc(length + 1);
@@ -194,6 +260,8 @@ static char *DMCurlDupCString(const char *value) {
     }
     return DMCurlDupRange(value, strlen(value));
 }
+
+static char *DMCurlDupOrNull(const char *value);
 
 /// Builds a curl_slist from newline-separated "Name: Value" lines. Skips blanks.
 static struct curl_slist *DMCurlBuildHeaderList(const char *extraHeaders) {
@@ -253,8 +321,358 @@ static int DMCurlHeaderEquals(const char *line, size_t lineLength, const char *n
     return line[nameLength] == ':';
 }
 
+static void DMCurlHeaderCtxClear(DMCurlHeaderCtx *ctx) {
+    if (ctx == NULL) {
+        return;
+    }
+    free(ctx->contentType);
+    free(ctx->etag);
+    free(ctx->lastModified);
+    free(ctx->acceptRanges);
+    free(ctx->contentDisposition);
+    free(ctx->contentRange);
+    free(ctx->location);
+    memset(ctx, 0, sizeof(*ctx));
+}
+
+static int DMCurlIsRedirectStatus(long status) {
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+static int DMCurlParseHTTP1Status(const char *line, size_t len, long *statusOut) {
+    if (len < 12 || strncmp(line, "HTTP/", 5) != 0) {
+        return 0;
+    }
+    const char *p = line + 5;
+    while (p < line + len && *p != ' ' && *p != '\r' && *p != '\n') {
+        p++;
+    }
+    if (p >= line + len || *p != ' ') {
+        return 0;
+    }
+    p++;
+    char *end = NULL;
+    long status = strtol(p, &end, 10);
+    if (end == p || status < 100 || status > 599) {
+        return 0;
+    }
+    *statusOut = status;
+    return 1;
+}
+
+static int DMCurlParseNonnegativeOffT(const char **cursor, const char *end, curl_off_t *valueOut) {
+    if (cursor == NULL || *cursor == NULL || valueOut == NULL || *cursor >= end ||
+        !isdigit((unsigned char)**cursor)) {
+        return 0;
+    }
+    curl_off_t value = 0;
+    while (*cursor < end && isdigit((unsigned char)**cursor)) {
+        int digit = **cursor - '0';
+        if (value > ((curl_off_t)LLONG_MAX - digit) / 10) {
+            return 0;
+        }
+        value = value * 10 + digit;
+        (*cursor)++;
+    }
+    *valueOut = value;
+    return 1;
+}
+
+static int DMCurlParseRequestedRange(
+    const char *rangeHeader,
+    curl_off_t *startOut,
+    curl_off_t *endOut
+) {
+    if (rangeHeader == NULL || startOut == NULL || endOut == NULL) {
+        return 0;
+    }
+    const char *cursor = rangeHeader;
+    const char *end = rangeHeader + strlen(rangeHeader);
+    curl_off_t start = 0;
+    curl_off_t rangeEnd = 0;
+    if (!DMCurlParseNonnegativeOffT(&cursor, end, &start) || cursor >= end || *cursor++ != '-' ||
+        !DMCurlParseNonnegativeOffT(&cursor, end, &rangeEnd) || cursor != end || start > rangeEnd) {
+        return 0;
+    }
+    *startOut = start;
+    *endOut = rangeEnd;
+    return 1;
+}
+
+static int DMCurlParseContentRange(
+    const char *value,
+    size_t length,
+    curl_off_t *startOut,
+    curl_off_t *endOut,
+    curl_off_t *totalOut
+) {
+    const char *cursor = value;
+    const char *end = value + length;
+    if (length < 8 || strncmp(cursor, "bytes ", 6) != 0) {
+        return 0;
+    }
+    cursor += 6;
+    curl_off_t start = 0;
+    curl_off_t rangeEnd = 0;
+    curl_off_t total = 0;
+    if (!DMCurlParseNonnegativeOffT(&cursor, end, &start) || cursor >= end || *cursor++ != '-' ||
+        !DMCurlParseNonnegativeOffT(&cursor, end, &rangeEnd) || cursor >= end || *cursor++ != '/' ||
+        !DMCurlParseNonnegativeOffT(&cursor, end, &total) || cursor != end || start > rangeEnd ||
+        total <= rangeEnd) {
+        return 0;
+    }
+    *startOut = start;
+    *endOut = rangeEnd;
+    *totalOut = total;
+    return 1;
+}
+
+static int DMCurlRangeResponseIsValid(const DMCurlWriteCtx *writeCtx, const DMCurlHeaderCtx *headerCtx) {
+    return writeCtx != NULL && headerCtx != NULL && writeCtx->rangedTransfer &&
+           headerCtx->responseStatus == 206 && headerCtx->hasContentRange &&
+           !headerCtx->contentRangeMalformed &&
+           headerCtx->contentRangeStart == writeCtx->expectedRangeStart &&
+           headerCtx->contentRangeEnd == writeCtx->expectedRangeEnd &&
+           headerCtx->contentRangeTotal > headerCtx->contentRangeEnd;
+}
+
+typedef struct {
+    char *scheme;
+    char *host;
+    int port;
+} DMCurlOrigin;
+
+static void DMCurlOriginClear(DMCurlOrigin *origin) {
+    if (origin == NULL) {
+        return;
+    }
+    free(origin->scheme);
+    free(origin->host);
+    memset(origin, 0, sizeof(*origin));
+    origin->port = -1;
+}
+
+static char *DMCurlLowerDup(const char *value) {
+    if (value == NULL) {
+        return NULL;
+    }
+    size_t len = strlen(value);
+    char *copy = (char *)malloc(len + 1);
+    if (copy == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < len; i++) {
+        copy[i] = (char)tolower((unsigned char)value[i]);
+    }
+    copy[len] = '\0';
+    return copy;
+}
+
+static int DMCurlOriginFromURL(const char *url, DMCurlOrigin *out) {
+    if (url == NULL || out == NULL) {
+        return 0;
+    }
+    CURLU *parts = curl_url();
+    if (parts == NULL) {
+        return 0;
+    }
+    if (curl_url_set(parts, CURLUPART_URL, url, CURLU_DEFAULT_SCHEME) != CURLUE_OK) {
+        curl_url_cleanup(parts);
+        return 0;
+    }
+    char *scheme = NULL;
+    char *host = NULL;
+    char *portText = NULL;
+    if (curl_url_get(parts, CURLUPART_SCHEME, &scheme, 0) != CURLUE_OK ||
+        curl_url_get(parts, CURLUPART_HOST, &host, 0) != CURLUE_OK) {
+        curl_free(scheme);
+        curl_free(host);
+        curl_url_cleanup(parts);
+        return 0;
+    }
+    (void)curl_url_get(parts, CURLUPART_PORT, &portText, CURLU_DEFAULT_PORT);
+    out->scheme = DMCurlLowerDup(scheme);
+    out->host = DMCurlLowerDup(host);
+    if (portText != NULL && portText[0] != '\0') {
+        out->port = atoi(portText);
+    } else {
+        out->port = (out->scheme != NULL && strcmp(out->scheme, "https") == 0) ? 443 : 80;
+    }
+    curl_free(scheme);
+    curl_free(host);
+    curl_free(portText);
+    curl_url_cleanup(parts);
+    return out->scheme != NULL && out->host != NULL;
+}
+
+static int DMCurlOriginsEqual(const DMCurlOrigin *lhs, const DMCurlOrigin *rhs) {
+    return lhs != NULL && rhs != NULL && lhs->scheme != NULL && rhs->scheme != NULL &&
+           lhs->host != NULL && rhs->host != NULL && lhs->port == rhs->port &&
+           strcmp(lhs->scheme, rhs->scheme) == 0 && strcmp(lhs->host, rhs->host) == 0;
+}
+
+static int DMCurlHeaderNameMatches(const char *name, const char *canonical) {
+    if (name == NULL || canonical == NULL) {
+        return 0;
+    }
+    while (*name != '\0' && *canonical != '\0') {
+        if (tolower((unsigned char)*name) != tolower((unsigned char)*canonical)) {
+            return 0;
+        }
+        name++;
+        canonical++;
+    }
+    return *name == '\0' && *canonical == '\0';
+}
+
+static int DMCurlIsSensitiveHeaderName(const char *name) {
+    static const char *kSensitive[] = {"Cookie", "Authorization", "Referer"};
+    for (size_t i = 0; i < sizeof(kSensitive) / sizeof(kSensitive[0]); i++) {
+        if (DMCurlHeaderNameMatches(name, kSensitive[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int DMCurlIsSafeHeaderName(const char *name) {
+    static const char *kSafe[] = {"User-Agent", "Accept", "Accept-Language"};
+    for (size_t i = 0; i < sizeof(kSafe) / sizeof(kSafe[0]); i++) {
+        if (DMCurlHeaderNameMatches(name, kSafe[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static char *DMCurlFilterHeadersForRedirect(
+    const char *payload,
+    const DMCurlOrigin *source,
+    const DMCurlOrigin *destination,
+    CURLcode *errorOut
+) {
+    if (errorOut != NULL) {
+        *errorOut = CURLE_OK;
+    }
+    if (payload == NULL || payload[0] == '\0') {
+        return NULL;
+    }
+    if (source != NULL && destination != NULL && source->scheme != NULL &&
+        destination->scheme != NULL && strcmp(source->scheme, "https") == 0 &&
+        strcmp(destination->scheme, "http") == 0) {
+        if (errorOut != NULL) {
+            *errorOut = CURLE_UNSUPPORTED_PROTOCOL;
+        }
+        return NULL;
+    }
+    if (source != NULL && destination != NULL && DMCurlOriginsEqual(source, destination)) {
+        return DMCurlDupCString(payload);
+    }
+    size_t capacity = strlen(payload) + 1;
+    char *filtered = (char *)malloc(capacity);
+    if (filtered == NULL) {
+        return NULL;
+    }
+    filtered[0] = '\0';
+    size_t used = 0;
+    const char *cursor = payload;
+    while (*cursor != '\0') {
+        const char *lineStart = cursor;
+        while (*cursor != '\0' && *cursor != '\n' && *cursor != '\r') {
+            cursor++;
+        }
+        size_t lineLen = (size_t)(cursor - lineStart);
+        while (lineLen > 0 && (lineStart[lineLen - 1] == ' ' || lineStart[lineLen - 1] == '\t')) {
+            lineLen--;
+        }
+        const char *colon = NULL;
+        for (size_t i = 0; i < lineLen; i++) {
+            if (lineStart[i] == ':') {
+                colon = lineStart + i;
+                break;
+            }
+        }
+        if (colon != NULL && colon > lineStart) {
+            char nameBuf[128];
+            size_t nameLen = (size_t)(colon - lineStart);
+            if (nameLen < sizeof(nameBuf)) {
+                memcpy(nameBuf, lineStart, nameLen);
+                nameBuf[nameLen] = '\0';
+                const char *value = colon + 1;
+                while (*value == ' ' || *value == '\t') {
+                    value++;
+                }
+                int keep = !DMCurlIsSensitiveHeaderName(nameBuf) && DMCurlIsSafeHeaderName(nameBuf) &&
+                           value[0] != '\0';
+                if (keep) {
+                    size_t need = lineLen + 2;
+                    if (used + need + 1 > capacity) {
+                        capacity = (used + need + 1) * 2;
+                        char *grown = (char *)realloc(filtered, capacity);
+                        if (grown == NULL) {
+                            free(filtered);
+                            return NULL;
+                        }
+                        filtered = grown;
+                    }
+                    if (used > 0) {
+                        filtered[used++] = '\n';
+                    }
+                    memcpy(filtered + used, lineStart, lineLen);
+                    used += lineLen;
+                    filtered[used] = '\0';
+                }
+            }
+        }
+        while (*cursor == '\n' || *cursor == '\r') {
+            cursor++;
+        }
+    }
+    if (used == 0) {
+        free(filtered);
+        return NULL;
+    }
+    return filtered;
+}
+
+static char *DMCurlResolveRedirectURL(const char *currentURL, const char *location) {
+    if (currentURL == NULL || location == NULL || location[0] == '\0') {
+        return NULL;
+    }
+    CURLU *parts = curl_url();
+    if (parts == NULL) {
+        return NULL;
+    }
+    if (curl_url_set(parts, CURLUPART_URL, currentURL, CURLU_DEFAULT_SCHEME) != CURLUE_OK) {
+        curl_url_cleanup(parts);
+        return NULL;
+    }
+    if (curl_url_set(parts, CURLUPART_URL, location, CURLU_DEFAULT_SCHEME | CURLU_ALLOW_RELATIVE) != CURLUE_OK) {
+        curl_url_cleanup(parts);
+        return NULL;
+    }
+    char *resolved = NULL;
+    if (curl_url_get(parts, CURLUPART_URL, &resolved, 0) != CURLUE_OK) {
+        curl_url_cleanup(parts);
+        return NULL;
+    }
+    char *copy = DMCurlDupCString(resolved);
+    curl_free(resolved);
+    curl_url_cleanup(parts);
+    return copy;
+}
+
+static void DMCurlNoteResponseStatus(DMCurlEasyTransferCtx *tctx, long status) {
+    if (tctx == NULL || tctx->header == NULL) {
+        return;
+    }
+    DMCurlHeaderCtxClear(tctx->header);
+    tctx->header->responseStatus = status;
+    tctx->discardResponseBody = DMCurlIsRedirectStatus(status);
+}
+
 static int DMCurlShouldAbort(const DMCurlWriteCtx *ctx) {
-    return ctx != NULL && ctx->abortFlag != NULL && *(ctx->abortFlag) != 0;
+    return ctx != NULL && DMCurlAbortFlagIsSet(ctx->abortFlag);
 }
 
 static int DMCurlShouldStop(const DMCurlWriteCtx *ctx) {
@@ -263,8 +681,15 @@ static int DMCurlShouldStop(const DMCurlWriteCtx *ctx) {
 
 static size_t DMCurlHeaderCallback(char *buffer, size_t size, size_t nitems, void *userdata) {
     size_t total = size * nitems;
-    DMCurlHeaderCtx *ctx = (DMCurlHeaderCtx *)userdata;
+    DMCurlEasyTransferCtx *tctx = (DMCurlEasyTransferCtx *)userdata;
+    DMCurlHeaderCtx *ctx = tctx != NULL ? tctx->header : NULL;
     if (ctx == NULL || total < 2) {
+        return total;
+    }
+
+    long status = 0;
+    if (DMCurlParseHTTP1Status(buffer, total, &status)) {
+        DMCurlNoteResponseStatus(tctx, status);
         return total;
     }
 
@@ -289,6 +714,19 @@ static size_t DMCurlHeaderCallback(char *buffer, size_t size, size_t nitems, voi
         return total;
     }
 
+    if (DMCurlHeaderEquals(buffer, total, ":status")) {
+        char tmp[32];
+        if (valueLength < sizeof(tmp)) {
+            memcpy(tmp, value, valueLength);
+            tmp[valueLength] = '\0';
+            status = strtol(tmp, NULL, 10);
+            if (status >= 100 && status <= 599) {
+                DMCurlNoteResponseStatus(tctx, status);
+            }
+        }
+        return total;
+    }
+
     if (DMCurlHeaderEquals(buffer, total, "content-type")) {
         DMCurlAssignHeader(&ctx->contentType, value, valueLength);
     } else if (DMCurlHeaderEquals(buffer, total, "etag")) {
@@ -301,12 +739,36 @@ static size_t DMCurlHeaderCallback(char *buffer, size_t size, size_t nitems, voi
         DMCurlAssignHeader(&ctx->contentDisposition, value, valueLength);
     } else if (DMCurlHeaderEquals(buffer, total, "content-range")) {
         DMCurlAssignHeader(&ctx->contentRange, value, valueLength);
+        curl_off_t rangeStart = 0;
+        curl_off_t rangeEnd = 0;
+        curl_off_t rangeTotal = 0;
+        if (!DMCurlParseContentRange(value, valueLength, &rangeStart, &rangeEnd, &rangeTotal)) {
+            ctx->contentRangeMalformed = 1;
+        } else if (ctx->hasContentRange &&
+                   (ctx->contentRangeStart != rangeStart || ctx->contentRangeEnd != rangeEnd ||
+                    ctx->contentRangeTotal != rangeTotal)) {
+            ctx->contentRangeMalformed = 1;
+        } else {
+            ctx->hasContentRange = 1;
+            ctx->contentRangeStart = rangeStart;
+            ctx->contentRangeEnd = rangeEnd;
+            ctx->contentRangeTotal = rangeTotal;
+        }
+    } else if (DMCurlHeaderEquals(buffer, total, "location")) {
+        DMCurlAssignHeader(&ctx->location, value, valueLength);
     }
     return total;
 }
 
 static size_t DMCurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *userdata) {
-    DMCurlWriteCtx *ctx = (DMCurlWriteCtx *)userdata;
+    DMCurlEasyTransferCtx *tctx = (DMCurlEasyTransferCtx *)userdata;
+    if (tctx == NULL || tctx->write == NULL) {
+        return size * nmemb;
+    }
+    if (tctx->discardResponseBody) {
+        return size * nmemb;
+    }
+    DMCurlWriteCtx *ctx = tctx->write;
     size_t total = size * nmemb;
     if (ctx == NULL || total == 0) {
         return total;
@@ -314,7 +776,21 @@ static size_t DMCurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *us
     if (DMCurlShouldAbort(ctx) || DMCurlShouldStop(ctx)) {
         return 0;
     }
+    if (ctx->rangedTransfer && !DMCurlRangeResponseIsValid(ctx, tctx->header)) {
+        ctx->rangeResponseInvalid = 1;
+        return 0;
+    }
     size_t remaining = total;
+    if (ctx->bodyByteLimit > 0) {
+        curl_off_t room = ctx->bodyByteLimit - ctx->written;
+        if (room <= 0) {
+            ctx->bodyCapReached = 1;
+            return 0;
+        }
+        if ((curl_off_t)remaining > room) {
+            remaining = (size_t)room;
+        }
+    }
     const char *cursor = ptr;
     while (remaining > 0) {
         if (DMCurlShouldAbort(ctx) || DMCurlShouldStop(ctx)) {
@@ -330,12 +806,14 @@ static size_t DMCurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *us
         remaining -= (size_t)wrote;
         if (ctx->progressCallback != NULL) {
             if (ctx->progressCallback(ctx->written, ctx->knownTotal, ctx->progressUserdata) != 0) {
-                if (ctx->abortFlag != NULL) {
-                    *(ctx->abortFlag) = 1;
-                }
+                DMCurlAbortFlagRequest(ctx->abortFlag);
                 return 0;
             }
         }
+    }
+    if (ctx->bodyByteLimit > 0 && ctx->written >= ctx->bodyByteLimit) {
+        ctx->bodyCapReached = 1;
+        return 0;
     }
     return total;
 }
@@ -368,13 +846,14 @@ CURLcode DMCurlEasyDownloadToFD(
     long connectTimeoutMS,
     long transferTimeoutMS,
     long maxRedirects,
-    volatile int32_t *abortFlag,
+    DMCurlAbortFlag *abortFlag,
     DMCurlProgressCallback progressCallback,
     void *progressUserdata,
     const char *userpwd,
     const char *proxyURL,
     const char *cookieJarPath,
     const char *extraHeaders,
+    curl_off_t bodyByteLimit,
     DMCurlDownloadResult *out
 ) {
     if (url == NULL || fd < 0 || out == NULL) {
@@ -394,18 +873,38 @@ CURLcode DMCurlEasyDownloadToFD(
         .fd = fd,
         .offset = fileOffset,
         .written = 0,
+        .expectedRangeStart = 0,
+        .expectedRangeEnd = 0,
         .knownTotal = -1,
+        .bodyByteLimit = bodyByteLimit > 0 ? bodyByteLimit : 0,
         .writeError = 0,
+        .rangedTransfer = rangeHeader != NULL && rangeHeader[0] != '\0',
+        .rangeResponseInvalid = 0,
+        .stopRequested = 0,
+        .bodyCapReached = 0,
         .abortFlag = abortFlag,
         .progressCallback = progressCallback,
         .progressUserdata = progressUserdata
     };
+    if (writeCtx.rangedTransfer &&
+        !DMCurlParseRequestedRange(rangeHeader, &writeCtx.expectedRangeStart, &writeCtx.expectedRangeEnd)) {
+        out->code = CURLE_RANGE_ERROR;
+        out->rangeResponseInvalid = 1;
+        return out->code;
+    }
     DMCurlHeaderCtx headerCtx = {0};
+    DMCurlEasyTransferCtx transferCtx = {
+        .write = &writeCtx,
+        .header = &headerCtx,
+        .discardResponseBody = 0,
+    };
+    char *urlCopy = DMCurlDupCString(url);
+    char *extraHeadersCopy = DMCurlDupOrNull(extraHeaders);
     struct curl_slist *headerList = DMCurlBuildHeaderList(extraHeaders);
+    int redirectHopCount = 0;
 
-    curl_easy_setopt(easy, CURLOPT_URL, url);
-    curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(easy, CURLOPT_MAXREDIRS, maxRedirects);
+    curl_easy_setopt(easy, CURLOPT_URL, urlCopy != NULL ? urlCopy : url);
+    curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(easy, CURLOPT_PROTOCOLS_STR, "http,https,ftp,ftps,sftp");
     curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_STR, "http,https,ftp,ftps,sftp");
     curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
@@ -414,9 +913,9 @@ CURLcode DMCurlEasyDownloadToFD(
         curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, transferTimeoutMS);
     }
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, DMCurlWriteCallback);
-    curl_easy_setopt(easy, CURLOPT_WRITEDATA, &writeCtx);
+    curl_easy_setopt(easy, CURLOPT_WRITEDATA, &transferCtx);
     curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, DMCurlHeaderCallback);
-    curl_easy_setopt(easy, CURLOPT_HEADERDATA, &headerCtx);
+    curl_easy_setopt(easy, CURLOPT_HEADERDATA, &transferCtx);
     curl_easy_setopt(easy, CURLOPT_XFERINFOFUNCTION, DMCurlXferInfoCallback);
     curl_easy_setopt(easy, CURLOPT_XFERINFODATA, &writeCtx);
     curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L);
@@ -440,31 +939,102 @@ CURLcode DMCurlEasyDownloadToFD(
         curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headerList);
     }
 
-    CURLcode code = curl_easy_perform(easy);
+    CURLcode code = CURLE_OK;
+    for (;;) {
+        code = curl_easy_perform(easy);
+        if (code != CURLE_OK) {
+            break;
+        }
+        long status = headerCtx.responseStatus;
+        if (status == 0) {
+            curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
+        }
+        if (!DMCurlIsRedirectStatus(status) || headerCtx.location == NULL || headerCtx.location[0] == '\0') {
+            break;
+        }
+        if (redirectHopCount >= maxRedirects) {
+            break;
+        }
+        DMCurlOrigin source = {0};
+        DMCurlOrigin destination = {0};
+        const char *currentURL = urlCopy != NULL ? urlCopy : url;
+        if (!DMCurlOriginFromURL(currentURL, &source)) {
+            code = CURLE_URL_MALFORMAT;
+            break;
+        }
+        char *nextURL = DMCurlResolveRedirectURL(currentURL, headerCtx.location);
+        if (nextURL == NULL) {
+            DMCurlOriginClear(&source);
+            code = CURLE_URL_MALFORMAT;
+            break;
+        }
+        if (!DMCurlOriginFromURL(nextURL, &destination)) {
+            free(nextURL);
+            DMCurlOriginClear(&source);
+            code = CURLE_URL_MALFORMAT;
+            break;
+        }
+        CURLcode policyError = CURLE_OK;
+        char *filtered = DMCurlFilterHeadersForRedirect(extraHeadersCopy, &source, &destination, &policyError);
+        DMCurlOriginClear(&source);
+        DMCurlOriginClear(&destination);
+        if (policyError != CURLE_OK) {
+            free(filtered);
+            free(nextURL);
+            code = policyError;
+            break;
+        }
+        free(extraHeadersCopy);
+        extraHeadersCopy = filtered;
+        curl_slist_free_all(headerList);
+        headerList = DMCurlBuildHeaderList(extraHeadersCopy);
+        free(urlCopy);
+        urlCopy = nextURL;
+        curl_easy_setopt(easy, CURLOPT_URL, urlCopy);
+        if (headerList != NULL) {
+            curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headerList);
+        } else {
+            curl_easy_setopt(easy, CURLOPT_HTTPHEADER, NULL);
+        }
+        DMCurlHeaderCtxClear(&headerCtx);
+        transferCtx.discardResponseBody = 0;
+        redirectHopCount++;
+    }
     out->code = code;
     out->bytesWritten = writeCtx.written;
+    out->rangeResponseInvalid = writeCtx.rangeResponseInvalid;
     // Durability is owned by the Swift transfer layer (one fsync after the
     // map loop / single-stream finish). Per-easy fsync here serializes N
     // redundant full-file syncs when many segments share one fd.
 
-    if (writeCtx.writeError != 0) {
+    if (writeCtx.rangeResponseInvalid) {
+        out->code = CURLE_RANGE_ERROR;
+        code = CURLE_RANGE_ERROR;
+    } else if (writeCtx.writeError != 0) {
         code = CURLE_WRITE_ERROR;
         out->code = code;
+    } else if (writeCtx.bodyCapReached) {
+        out->stoppedByBodyCap = 1;
+        out->code = CURLE_OK;
+        code = CURLE_OK;
     } else if (DMCurlShouldAbort(&writeCtx) && code != CURLE_OK) {
         code = CURLE_ABORTED_BY_CALLBACK;
         out->code = code;
     }
 
+    long responseCode = headerCtx.responseStatus;
+    if (responseCode == 0) {
+        curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &responseCode);
+    }
+    out->httpStatus = responseCode;
     if (code == CURLE_OK) {
-        curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &out->httpStatus);
         curl_off_t contentLength = -1;
         if (curl_easy_getinfo(easy, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &contentLength) == CURLE_OK) {
             out->contentLength = contentLength;
         }
-        char *effective = NULL;
-        if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &effective) == CURLE_OK) {
-            out->finalURL = DMCurlDupCString(effective);
-        }
+        free(out->finalURL);
+        out->finalURL = urlCopy;
+        urlCopy = NULL;
     }
 
     out->contentType = headerCtx.contentType;
@@ -474,6 +1044,8 @@ CURLcode DMCurlEasyDownloadToFD(
     out->contentDisposition = headerCtx.contentDisposition;
     out->contentRange = headerCtx.contentRange;
 
+    free(urlCopy);
+    free(extraHeadersCopy);
     curl_slist_free_all(headerList);
     curl_easy_cleanup(easy);
     return out->code;
@@ -485,11 +1057,16 @@ struct DMCurlEasyDownload {
     CURL *easy;
     DMCurlWriteCtx writeCtx;
     DMCurlHeaderCtx headerCtx;
+    DMCurlEasyTransferCtx transferCtx;
+    char *urlCopy;
+    char *extraHeadersCopy;
     char *rangeHeaderCopy;
     char *userpwdCopy;
     char *proxyURLCopy;
     char *cookieJarPathCopy;
     struct curl_slist *headerList;
+    long maxRedirects;
+    int redirectHopCount;
 };
 
 static char *DMCurlDupOrNull(const char *value) {
@@ -502,20 +1079,21 @@ static char *DMCurlDupOrNull(const char *value) {
 static void DMCurlApplyEasyDownloadOptions(
     CURL *easy,
     const char *url,
-    DMCurlWriteCtx *writeCtx,
-    DMCurlHeaderCtx *headerCtx,
+    DMCurlEasyTransferCtx *transferCtx,
     const char *rangeHeader,
     long connectTimeoutMS,
     long transferTimeoutMS,
-    long maxRedirects,
     const char *userpwd,
     const char *proxyURL,
     const char *cookieJarPath,
     struct curl_slist *headerList
 ) {
+    if (transferCtx == NULL || transferCtx->write == NULL || transferCtx->header == NULL) {
+        return;
+    }
+    DMCurlWriteCtx *writeCtx = transferCtx->write;
     curl_easy_setopt(easy, CURLOPT_URL, url);
-    curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(easy, CURLOPT_MAXREDIRS, maxRedirects);
+    curl_easy_setopt(easy, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(easy, CURLOPT_PROTOCOLS_STR, "http,https,ftp,ftps,sftp");
     curl_easy_setopt(easy, CURLOPT_REDIR_PROTOCOLS_STR, "http,https,ftp,ftps,sftp");
     curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
@@ -524,9 +1102,9 @@ static void DMCurlApplyEasyDownloadOptions(
         curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS, transferTimeoutMS);
     }
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, DMCurlWriteCallback);
-    curl_easy_setopt(easy, CURLOPT_WRITEDATA, writeCtx);
+    curl_easy_setopt(easy, CURLOPT_WRITEDATA, transferCtx);
     curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, DMCurlHeaderCallback);
-    curl_easy_setopt(easy, CURLOPT_HEADERDATA, headerCtx);
+    curl_easy_setopt(easy, CURLOPT_HEADERDATA, transferCtx);
     curl_easy_setopt(easy, CURLOPT_XFERINFOFUNCTION, DMCurlXferInfoCallback);
     curl_easy_setopt(easy, CURLOPT_XFERINFODATA, writeCtx);
     curl_easy_setopt(easy, CURLOPT_NOPROGRESS, 0L);
@@ -562,9 +1140,15 @@ static void DMCurlFillDownloadResult(
     out->contentLength = -1;
     out->code = code;
     out->bytesWritten = writeCtx->written;
+    out->rangeResponseInvalid = writeCtx->rangeResponseInvalid;
     // See DMCurlEasyDownloadToFD: Swift owns the single post-pass fsync.
-    if (writeCtx->writeError != 0) {
+    if (writeCtx->rangeResponseInvalid) {
+        out->code = CURLE_RANGE_ERROR;
+    } else if (writeCtx->writeError != 0) {
         out->code = CURLE_WRITE_ERROR;
+    } else if (writeCtx->bodyCapReached) {
+        out->stoppedByBodyCap = 1;
+        out->code = CURLE_OK;
     } else if (DMCurlShouldAbort(writeCtx) && code != CURLE_OK) {
         out->code = CURLE_ABORTED_BY_CALLBACK;
     } else if (DMCurlShouldStop(writeCtx)) {
@@ -574,15 +1158,15 @@ static void DMCurlFillDownloadResult(
         out->stoppedByRequest = 1;
         out->code = CURLE_OK;
     }
+    long responseCode = headerCtx->responseStatus;
+    if (responseCode == 0) {
+        curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &responseCode);
+    }
+    out->httpStatus = responseCode;
     if (out->code == CURLE_OK) {
-        curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &out->httpStatus);
         curl_off_t contentLength = -1;
         if (curl_easy_getinfo(easy, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &contentLength) == CURLE_OK) {
             out->contentLength = contentLength;
-        }
-        char *effective = NULL;
-        if (curl_easy_getinfo(easy, CURLINFO_EFFECTIVE_URL, &effective) == CURLE_OK) {
-            out->finalURL = DMCurlDupCString(effective);
         }
     }
     out->contentType = headerCtx->contentType;
@@ -602,7 +1186,7 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
     long connectTimeoutMS,
     long transferTimeoutMS,
     long maxRedirects,
-    volatile int32_t *abortFlag,
+    DMCurlAbortFlag *abortFlag,
     DMCurlProgressCallback progressCallback,
     void *progressUserdata,
     const char *userpwd,
@@ -622,37 +1206,145 @@ DMCurlEasyDownload *DMCurlEasyDownloadCreate(
         free(download);
         return NULL;
     }
+    download->urlCopy = DMCurlDupCString(url);
+    download->extraHeadersCopy = DMCurlDupOrNull(extraHeaders);
     download->rangeHeaderCopy = DMCurlDupOrNull(rangeHeader);
     download->userpwdCopy = DMCurlDupOrNull(userpwd);
     download->proxyURLCopy = DMCurlDupOrNull(proxyURL);
     download->cookieJarPathCopy = DMCurlDupOrNull(cookieJarPath);
     download->headerList = DMCurlBuildHeaderList(extraHeaders);
+    download->maxRedirects = maxRedirects;
+    download->redirectHopCount = 0;
 
     download->writeCtx.fd = fd;
     download->writeCtx.offset = fileOffset;
     download->writeCtx.written = 0;
+    download->writeCtx.expectedRangeStart = 0;
+    download->writeCtx.expectedRangeEnd = 0;
     download->writeCtx.knownTotal = -1;
+    download->writeCtx.bodyByteLimit = 0;
     download->writeCtx.writeError = 0;
+    download->writeCtx.rangedTransfer = rangeHeader != NULL && rangeHeader[0] != '\0';
+    download->writeCtx.rangeResponseInvalid = 0;
+    download->writeCtx.bodyCapReached = 0;
     download->writeCtx.stopRequested = 0;
     download->writeCtx.abortFlag = abortFlag;
     download->writeCtx.progressCallback = progressCallback;
     download->writeCtx.progressUserdata = progressUserdata;
+    if (download->writeCtx.rangedTransfer &&
+        !DMCurlParseRequestedRange(
+            rangeHeader,
+            &download->writeCtx.expectedRangeStart,
+            &download->writeCtx.expectedRangeEnd
+        )) {
+        curl_easy_cleanup(download->easy);
+        free(download->urlCopy);
+        free(download->extraHeadersCopy);
+        free(download->rangeHeaderCopy);
+        free(download->userpwdCopy);
+        free(download->proxyURLCopy);
+        free(download->cookieJarPathCopy);
+        curl_slist_free_all(download->headerList);
+        free(download);
+        return NULL;
+    }
+    download->transferCtx.write = &download->writeCtx;
+    download->transferCtx.header = &download->headerCtx;
+    download->transferCtx.discardResponseBody = 0;
 
     DMCurlApplyEasyDownloadOptions(
         download->easy,
-        url,
-        &download->writeCtx,
-        &download->headerCtx,
+        download->urlCopy,
+        &download->transferCtx,
         download->rangeHeaderCopy,
         connectTimeoutMS,
         transferTimeoutMS,
-        maxRedirects,
         download->userpwdCopy,
         download->proxyURLCopy,
         download->cookieJarPathCopy,
         download->headerList
     );
     return download;
+}
+
+int DMCurlEasyDownloadFollowRedirectIfNeeded(DMCurlEasyDownload *download, CURLcode *errorOut) {
+    if (errorOut != NULL) {
+        *errorOut = CURLE_OK;
+    }
+    if (download == NULL || download->easy == NULL) {
+        if (errorOut != NULL) {
+            *errorOut = CURLE_FAILED_INIT;
+        }
+        return -1;
+    }
+    long status = download->headerCtx.responseStatus;
+    if (status == 0) {
+        curl_easy_getinfo(download->easy, CURLINFO_RESPONSE_CODE, &status);
+    }
+    if (!DMCurlIsRedirectStatus(status) || download->headerCtx.location == NULL ||
+        download->headerCtx.location[0] == '\0') {
+        return 0;
+    }
+    if (download->redirectHopCount >= download->maxRedirects) {
+        return 0;
+    }
+    DMCurlOrigin source = {0};
+    DMCurlOrigin destination = {0};
+    if (!DMCurlOriginFromURL(download->urlCopy, &source)) {
+        if (errorOut != NULL) {
+            *errorOut = CURLE_URL_MALFORMAT;
+        }
+        return -1;
+    }
+    char *nextURL = DMCurlResolveRedirectURL(download->urlCopy, download->headerCtx.location);
+    if (nextURL == NULL) {
+        DMCurlOriginClear(&source);
+        if (errorOut != NULL) {
+            *errorOut = CURLE_URL_MALFORMAT;
+        }
+        return -1;
+    }
+    if (!DMCurlOriginFromURL(nextURL, &destination)) {
+        free(nextURL);
+        DMCurlOriginClear(&source);
+        if (errorOut != NULL) {
+            *errorOut = CURLE_URL_MALFORMAT;
+        }
+        return -1;
+    }
+    CURLcode policyError = CURLE_OK;
+    char *filtered = DMCurlFilterHeadersForRedirect(
+        download->extraHeadersCopy,
+        &source,
+        &destination,
+        &policyError
+    );
+    DMCurlOriginClear(&source);
+    DMCurlOriginClear(&destination);
+    if (policyError != CURLE_OK) {
+        free(filtered);
+        free(nextURL);
+        if (errorOut != NULL) {
+            *errorOut = policyError;
+        }
+        return -1;
+    }
+    free(download->extraHeadersCopy);
+    download->extraHeadersCopy = filtered;
+    curl_slist_free_all(download->headerList);
+    download->headerList = DMCurlBuildHeaderList(download->extraHeadersCopy);
+    free(download->urlCopy);
+    download->urlCopy = nextURL;
+    curl_easy_setopt(download->easy, CURLOPT_URL, download->urlCopy);
+    if (download->headerList != NULL) {
+        curl_easy_setopt(download->easy, CURLOPT_HTTPHEADER, download->headerList);
+    } else {
+        curl_easy_setopt(download->easy, CURLOPT_HTTPHEADER, NULL);
+    }
+    DMCurlHeaderCtxClear(&download->headerCtx);
+    download->transferCtx.discardResponseBody = 0;
+    download->redirectHopCount++;
+    return 1;
 }
 
 void DMCurlEasyDownloadRequestStop(DMCurlEasyDownload *download) {
@@ -684,17 +1376,18 @@ void DMCurlEasyDownloadFinish(
             performCode,
             out
         );
+        if (out->code == CURLE_OK && download->urlCopy != NULL) {
+            free(out->finalURL);
+            out->finalURL = DMCurlDupCString(download->urlCopy);
+        }
     } else {
-        free(download->headerCtx.contentType);
-        free(download->headerCtx.etag);
-        free(download->headerCtx.lastModified);
-        free(download->headerCtx.acceptRanges);
-        free(download->headerCtx.contentDisposition);
-        free(download->headerCtx.contentRange);
+        DMCurlHeaderCtxClear(&download->headerCtx);
     }
     if (download->easy != NULL) {
         curl_easy_cleanup(download->easy);
     }
+    free(download->urlCopy);
+    free(download->extraHeadersCopy);
     free(download->rangeHeaderCopy);
     free(download->userpwdCopy);
     free(download->proxyURLCopy);

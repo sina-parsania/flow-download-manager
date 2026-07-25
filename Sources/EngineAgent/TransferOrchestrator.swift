@@ -102,9 +102,18 @@ public actor TransferOrchestrator {
         }
     }
 
-    /// Crash / relaunch recovery: active transfer states become `queued`.
+    /// Crash / relaunch recovery: reconcile interrupted finalization, then requeue
+    /// ordinary in-flight transfer states.
     private func recoverInterruptedTransfers() async {
         do {
+            let outcomes = try FinalizationIntentRepository.reconcileInterruptedFinalizations(
+                database: database
+            )
+            for outcome in outcomes {
+                log.info(
+                    "recovery finalization id=\(outcome.jobID, privacy: .public) action=\(String(describing: outcome.action), privacy: .public)"
+                )
+            }
             let ids = try JobRepository.requeueInterruptedTransfers(database: database)
             if !ids.isEmpty {
                 log.info("recovery requeued count=\(ids.count, privacy: .public)")
@@ -163,6 +172,11 @@ public actor TransferOrchestrator {
         runningJobIDs.remove(jobID)
     }
 
+    private func resumeFinalizationThenRelease(_ jobID: String) async {
+        await resumeFinalization(jobID)
+        runningJobIDs.remove(jobID)
+    }
+
     private func pump() async {
         while isRunning {
             do {
@@ -185,11 +199,25 @@ public actor TransferOrchestrator {
                 let maxJobs = await budget.maxActiveJobsLimit()
                 let want = max(0, maxJobs - runningJobIDs.count)
                 if want > 0 {
-                    let ids = try JobRepository.fetchQueuedJobIDs(database: database, limit: want)
-                    for jobID in ids where !runningJobIDs.contains(jobID) {
+                    let finalizationIDs = try FinalizationIntentRepository
+                        .fetchJobsNeedingFinalizationResume(database: database, limit: want)
+                    for jobID in finalizationIDs where !runningJobIDs.contains(jobID) {
                         runningJobIDs.insert(jobID)
                         Task {
-                            await self.runJobThenRelease(jobID)
+                            await self.resumeFinalizationThenRelease(jobID)
+                        }
+                    }
+                    let remaining = max(0, want - finalizationIDs.count)
+                    if remaining > 0 {
+                        let ids = try JobRepository.fetchQueuedJobIDs(
+                            database: database,
+                            limit: remaining
+                        )
+                        for jobID in ids where !runningJobIDs.contains(jobID) {
+                            runningJobIDs.insert(jobID)
+                            Task {
+                                await self.runJobThenRelease(jobID)
+                            }
                         }
                     }
                 }
@@ -222,7 +250,7 @@ public actor TransferOrchestrator {
             guard details.state == "queued" else { return }
             if cancelledJobIDs.contains(jobID) {
                 _ = try JobRepository.updateJobState(
-                    database: database, id: jobID, state: "cancelled",
+                    database: database, id: jobID, state: .cancelled,
                     terminalReason: "userCancelled", expectedRevision: nil
                 )
                 cancelledJobIDs.remove(jobID)
@@ -231,7 +259,7 @@ public actor TransferOrchestrator {
             }
             if pausedJobIDs.contains(jobID) {
                 _ = try JobRepository.updateJobState(
-                    database: database, id: jobID, state: "paused",
+                    database: database, id: jobID, state: .paused,
                     terminalReason: nil, expectedRevision: nil
                 )
                 pausedJobIDs.remove(jobID)
@@ -274,7 +302,7 @@ public actor TransferOrchestrator {
             }
 
             _ = try JobRepository.updateJobState(
-                database: database, id: jobID, state: "connecting",
+                database: database, id: jobID, state: .connecting,
                 terminalReason: nil, expectedRevision: nil
             )
             beginSleepAssertion(for: jobID)
@@ -288,13 +316,20 @@ public actor TransferOrchestrator {
             // CDN links often expose the real title only via Content-Disposition /
             // Content-Type on the first probe — apply that *before* choosing the
             // on-disk name so we never land "binary.partial" for a named .mp4.
-            let earlyIdentity = try? await Self.probeOffActor(
+            let earlyIdentity: TransferCore.ResourceIdentity? = if RangeProbePolicy.shouldSkipProbe(
                 url: details.canonicalURL,
                 options: options
-            )
+            ) {
+                nil
+            } else {
+                try? await Self.probeOffActor(
+                    url: details.canonicalURL,
+                    options: options
+                )
+            }
             if cancelledJobIDs.contains(jobID) || abort.isSet && cancelledJobIDs.contains(jobID) {
                 _ = try JobRepository.updateJobState(
-                    database: database, id: jobID, state: "cancelled",
+                    database: database, id: jobID, state: .cancelled,
                     terminalReason: "userCancelled", expectedRevision: nil
                 )
                 cancelledJobIDs.remove(jobID)
@@ -344,7 +379,7 @@ public actor TransferOrchestrator {
                 final = uniquifiedURL(preferredFinal)
             case .fail:
                 _ = try JobRepository.updateJobState(
-                    database: database, id: jobID, state: "failed",
+                    database: database, id: jobID, state: .failed,
                     terminalReason: "destinationExists", expectedRevision: nil
                 )
                 progressLedger.remove(jobID)
@@ -353,7 +388,7 @@ public actor TransferOrchestrator {
             }
 
             _ = try JobRepository.updateJobState(
-                database: database, id: jobID, state: "downloading",
+                database: database, id: jobID, state: .downloading,
                 terminalReason: nil, expectedRevision: nil
             )
 
@@ -394,7 +429,7 @@ public actor TransferOrchestrator {
 
             if cancelledJobIDs.contains(jobID) || abort.isSet && cancelledJobIDs.contains(jobID) {
                 _ = try JobRepository.updateJobState(
-                    database: database, id: jobID, state: "cancelled",
+                    database: database, id: jobID, state: .cancelled,
                     terminalReason: "userCancelled", expectedRevision: nil
                 )
                 cancelledJobIDs.remove(jobID)
@@ -403,7 +438,7 @@ public actor TransferOrchestrator {
             }
             if pausedJobIDs.contains(jobID) {
                 _ = try JobRepository.updateJobState(
-                    database: database, id: jobID, state: "paused",
+                    database: database, id: jobID, state: .paused,
                     terminalReason: nil, expectedRevision: nil
                 )
                 pausedJobIDs.remove(jobID)
@@ -468,66 +503,21 @@ public actor TransferOrchestrator {
                 conflictPolicy: conflictPolicy
             )
 
-            _ = try JobRepository.updateJobState(
-                database: database, id: jobID, state: "verifying",
-                terminalReason: nil, expectedRevision: nil
+            try Self.finalizeDownloadedJob(
+                database: database,
+                jobID: jobID,
+                details: details,
+                promotePaths: promotePaths,
+                bytesWritten: outcome.bytesWritten,
+                mimeEvidence: outcome.identity.contentType,
+                progressLedger: progressLedger,
+                attemptByJob: &attemptByJob
             )
-            if let checksum = details.expectedChecksum, !checksum.isEmpty {
-                try IntegrityVerifier.verifySHA256(ofFile: promotePaths.partial, expectedHex: checksum)
-            }
-            try TransferFinalizer.promote(
-                partialURL: promotePaths.partial,
-                finalURL: promotePaths.final,
-                expectedSize: outcome.bytesWritten
-            )
-            _ = try JobRepository.updateJobState(
-                database: database, id: jobID, state: "postProcessing",
-                terminalReason: nil, expectedRevision: nil
-            )
-            if Self.shouldExtractZip(
-                filename: promotePaths.final.lastPathComponent,
-                mimeEvidence: outcome.identity.contentType
-            ), AgentBoolSettings.bool(forKey: AgentBoolSettings.zipAutoExtractEnabledKey) {
-                do {
-                    let basename = promotePaths.final.deletingPathExtension().lastPathComponent
-                    let extractDir = promotePaths.final.deletingLastPathComponent()
-                        .appendingPathComponent("\(basename)-extracted", isDirectory: true)
-                    try SafeZipExtractor.extract(
-                        archiveURL: promotePaths.final,
-                        destinationDirectory: extractDir
-                    )
-                } catch {
-                    _ = try JobRepository.updateJobState(
-                        database: database, id: jobID, state: "failed",
-                        terminalReason: "postProcessingFailed", expectedRevision: nil
-                    )
-                    progressLedger.remove(jobID)
-                    attemptByJob[jobID] = nil
-                    log.error(
-                        "zip post-process failed id=\(jobID, privacy: .public) err=\(EngineLog.redacted(error), privacy: .public)"
-                    )
-                    return
-                }
-            }
-            _ = try JobRepository.updateJobState(
-                database: database, id: jobID, state: "completed",
-                terminalReason: nil, expectedRevision: nil
-            )
-            progressLedger.set(
-                JobProgressSnapshot(
-                    bytesTransferred: outcome.bytesWritten,
-                    totalBytes: outcome.bytesWritten,
-                    speedBytesPerSecond: 0
-                ),
-                for: jobID
-            )
-            attemptByJob[jobID] = nil
-            log.info("job completed id=\(jobID, privacy: .public)")
         } catch TransferCore.TransferError.aborted {
             await handleAbort(jobID: jobID)
         } catch is HeaderValidator.ParseError {
             _ = try? JobRepository.updateJobState(
-                database: database, id: jobID, state: "failed",
+                database: database, id: jobID, state: .failed,
                 terminalReason: "dependencyProtocolMismatch", expectedRevision: nil
             )
             progressLedger.remove(jobID)
@@ -678,7 +668,7 @@ public actor TransferOrchestrator {
     private func handleAbort(jobID: String) async {
         if cancelledJobIDs.contains(jobID) {
             _ = try? JobRepository.updateJobState(
-                database: database, id: jobID, state: "cancelled",
+                database: database, id: jobID, state: .cancelled,
                 terminalReason: "userCancelled", expectedRevision: nil
             )
             cancelledJobIDs.remove(jobID)
@@ -690,16 +680,13 @@ public actor TransferOrchestrator {
         if resumeAfterAbort.contains(jobID) {
             resumeAfterAbort.remove(jobID)
             pausedJobIDs.remove(jobID)
-            _ = try? JobRepository.updateJobState(
-                database: database, id: jobID, state: "queued",
-                terminalReason: nil, expectedRevision: nil
-            )
+            _ = try? JobRepository.requeueActiveTransferJob(database: database, id: jobID)
             zeroSpeed(jobID: jobID)
             log.info("job requeued after abort id=\(jobID, privacy: .public)")
             return
         }
         _ = try? JobRepository.updateJobState(
-            database: database, id: jobID, state: "paused",
+            database: database, id: jobID, state: .paused,
             terminalReason: nil, expectedRevision: nil
         )
         pausedJobIDs.remove(jobID)
@@ -730,6 +717,161 @@ public actor TransferOrchestrator {
     }
 
     /// Tiny ranged probe so Content-Disposition / MIME can name the job before bytes land.
+    private func resumeFinalization(_ jobID: String) async {
+        guard await budget.tryBeginJob() else { return }
+        defer {
+            let budget = self.budget
+            Task.detached { await budget.endJob() }
+            abortFlags[jobID] = nil
+            endSleepAssertion(for: jobID)
+        }
+
+        do {
+            let details = try JobRepository.loadJobForTransfer(database: database, id: jobID)
+            guard let state = JobState(rawValue: details.state),
+                  state == .verifying || state == .postProcessing
+            else {
+                return
+            }
+            guard let intent = try FinalizationIntentRepository.fetchIntent(
+                database: database,
+                jobID: jobID
+            ) else {
+                return
+            }
+
+            let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
+            defer {
+                if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
+            }
+
+            let partial = details.destinationDirectory
+                .appendingPathComponent(intent.partialFilename)
+            let final = details.destinationDirectory
+                .appendingPathComponent(intent.finalFilename)
+
+            try Self.runFinalizationPipeline(
+                database: database,
+                jobID: jobID,
+                state: state,
+                intentStage: FinalizationIntentStage(rawValue: intent.stage) ?? .prepared,
+                partialURL: partial,
+                finalURL: final,
+                expectedByteSize: intent.expectedByteSize,
+                expectedChecksum: intent.expectedChecksum,
+                zipAutoExtract: intent.zipAutoExtract,
+                progressLedger: progressLedger,
+                attemptByJob: &attemptByJob
+            )
+        } catch {
+            await handleFailure(jobID: jobID, error: error)
+        }
+    }
+
+    private nonisolated static func finalizeDownloadedJob(
+        database: EngineDatabase,
+        jobID: String,
+        details: TransferJobDetails,
+        promotePaths: (partial: URL, final: URL),
+        bytesWritten: Int64,
+        mimeEvidence: String?,
+        progressLedger: JobProgressLedger,
+        attemptByJob: inout [String: Int]
+    ) throws {
+        let zipAutoExtract = shouldExtractZip(
+            filename: promotePaths.final.lastPathComponent,
+            mimeEvidence: mimeEvidence
+        ) && AgentBoolSettings.bool(forKey: AgentBoolSettings.zipAutoExtractEnabledKey)
+
+        _ = try FinalizationIntentRepository.beginVerification(
+            database: database,
+            jobID: jobID,
+            finalFilename: promotePaths.final.lastPathComponent,
+            partialFilename: promotePaths.partial.lastPathComponent,
+            expectedByteSize: bytesWritten,
+            expectedChecksum: details.expectedChecksum,
+            zipAutoExtract: zipAutoExtract
+        )
+
+        try runFinalizationPipeline(
+            database: database,
+            jobID: jobID,
+            state: .verifying,
+            intentStage: .prepared,
+            partialURL: promotePaths.partial,
+            finalURL: promotePaths.final,
+            expectedByteSize: bytesWritten,
+            expectedChecksum: details.expectedChecksum,
+            zipAutoExtract: zipAutoExtract,
+            progressLedger: progressLedger,
+            attemptByJob: &attemptByJob
+        )
+    }
+
+    private nonisolated static func runFinalizationPipeline(
+        database: EngineDatabase,
+        jobID: String,
+        state: JobState,
+        intentStage: FinalizationIntentStage,
+        partialURL: URL,
+        finalURL: URL,
+        expectedByteSize: Int64,
+        expectedChecksum: String?,
+        zipAutoExtract: Bool,
+        progressLedger: JobProgressLedger,
+        attemptByJob: inout [String: Int]
+    ) throws {
+        if state == .verifying, intentStage == .prepared {
+            if let expectedChecksum, !expectedChecksum.isEmpty {
+                try IntegrityVerifier.verifySHA256(ofFile: partialURL, expectedHex: expectedChecksum)
+            }
+            try TransferFinalizer.promote(
+                partialURL: partialURL,
+                finalURL: finalURL,
+                expectedSize: expectedByteSize
+            )
+            _ = try FinalizationIntentRepository.markPromoted(database: database, jobID: jobID)
+        }
+
+        if zipAutoExtract {
+            do {
+                let basename = finalURL.deletingPathExtension().lastPathComponent
+                let extractDir = finalURL.deletingLastPathComponent()
+                    .appendingPathComponent("\(basename)-extracted", isDirectory: true)
+                try SafeZipExtractor.extract(
+                    archiveURL: finalURL,
+                    destinationDirectory: extractDir
+                )
+            } catch {
+                _ = try JobRepository.updateJobState(
+                    database: database, id: jobID, state: .failed,
+                    terminalReason: "postProcessingFailed", expectedRevision: nil
+                )
+                _ = try? database.pool.write { db in
+                    try FinalizationIntentRecord.deleteOne(db, key: jobID)
+                }
+                progressLedger.remove(jobID)
+                attemptByJob[jobID] = nil
+                EngineLog.agent.error(
+                    "zip post-process failed id=\(jobID, privacy: .public) err=\(EngineLog.redacted(error), privacy: .public)"
+                )
+                return
+            }
+        }
+
+        _ = try FinalizationIntentRepository.completeFinalization(database: database, jobID: jobID)
+        progressLedger.set(
+            JobProgressSnapshot(
+                bytesTransferred: expectedByteSize,
+                totalBytes: expectedByteSize,
+                speedBytesPerSecond: 0
+            ),
+            for: jobID
+        )
+        attemptByJob[jobID] = nil
+        EngineLog.agent.info("job completed id=\(jobID, privacy: .public)")
+    }
+
     private nonisolated static func probeOffActor(
         url: String,
         options: TransferCore.DownloadOptions
@@ -856,13 +998,13 @@ public actor TransferOrchestrator {
         if Self.isRetryable(error), retryPolicy.shouldRetry(attempt: attempt, httpStatus: httpStatus) {
             let delay = retryPolicy.delayNanoseconds(attempt: attempt - 1, retryAfterSeconds: nil)
             _ = try? JobRepository.updateJobState(
-                database: database, id: jobID, state: "retryWaiting",
+                database: database, id: jobID, state: .retryWaiting,
                 terminalReason: nil, expectedRevision: nil
             )
             try? await Task.sleep(nanoseconds: delay)
             if cancelledJobIDs.contains(jobID) {
                 _ = try? JobRepository.updateJobState(
-                    database: database, id: jobID, state: "cancelled",
+                    database: database, id: jobID, state: .cancelled,
                     terminalReason: "userCancelled", expectedRevision: nil
                 )
                 cancelledJobIDs.remove(jobID)
@@ -870,16 +1012,13 @@ public actor TransferOrchestrator {
             }
             if pausedJobIDs.contains(jobID) {
                 _ = try? JobRepository.updateJobState(
-                    database: database, id: jobID, state: "paused",
+                    database: database, id: jobID, state: .paused,
                     terminalReason: nil, expectedRevision: nil
                 )
                 pausedJobIDs.remove(jobID)
                 return
             }
-            _ = try? JobRepository.updateJobState(
-                database: database, id: jobID, state: "queued",
-                terminalReason: nil, expectedRevision: nil
-            )
+            _ = try? JobRepository.requeueActiveTransferJob(database: database, id: jobID)
             return
         }
 
@@ -903,7 +1042,7 @@ public actor TransferOrchestrator {
             "networkUnavailable"
         }
         _ = try? JobRepository.updateJobState(
-            database: database, id: jobID, state: "failed",
+            database: database, id: jobID, state: .failed,
             terminalReason: reason, expectedRevision: nil
         )
         attemptByJob[jobID] = nil

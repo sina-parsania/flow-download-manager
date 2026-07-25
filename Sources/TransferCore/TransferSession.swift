@@ -88,6 +88,7 @@ public enum TransferCore {
     public enum TransferError: Error, Equatable, Sendable {
         case curl(CURLcode)
         case httpStatus(Int)
+        case invalidRangeResponse(httpStatus: Int)
         case emptyURL
         case fileOpenFailed
         case incompleteWrite(expected: Int64?, wrote: Int64)
@@ -107,6 +108,28 @@ public enum TransferCore {
         abortFlag: TransferAbortFlag? = nil,
         onProgress: ProgressHandler? = nil
     ) throws -> TransferOutcome {
+        try downloadSingleStream(
+            url: url,
+            partialURL: partialURL,
+            rangeHeader: rangeHeader,
+            fileOffset: fileOffset,
+            options: options,
+            abortFlag: abortFlag,
+            onProgress: onProgress,
+            bodyByteLimit: 0
+        )
+    }
+
+    private static func downloadSingleStream(
+        url: String,
+        partialURL: URL,
+        rangeHeader: String? = nil,
+        fileOffset: Int64 = 0,
+        options: DownloadOptions = DownloadOptions(),
+        abortFlag: TransferAbortFlag? = nil,
+        onProgress: ProgressHandler? = nil,
+        bodyByteLimit: Int64 = 0
+    ) throws -> TransferOutcome {
         try CurlBridge.initialize()
 
         let parsed = try CurlURLParser.parse(url)
@@ -117,8 +140,9 @@ public enum TransferCore {
         let directory = partialURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
+        let openFlags = rangeHeader == nil ? O_CREAT | O_RDWR | O_TRUNC : O_CREAT | O_RDWR
         let fd = partialURL.path.withCString { path in
-            open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
+            open(path, openFlags, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)
         }
         guard fd >= 0 else { throw TransferError.fileOpenFailed }
         defer { close(fd) }
@@ -135,9 +159,13 @@ public enum TransferCore {
             options: options,
             abortFlag: abortFlag,
             onProgress: onProgress,
+            bodyByteLimit: bodyByteLimit,
             result: &result
         )
 
+        if result.rangeResponseInvalid != 0 {
+            throw TransferError.invalidRangeResponse(httpStatus: Int(result.httpStatus))
+        }
         if code == CURLE_ABORTED_BY_CALLBACK || abortFlag?.isSet == true {
             throw TransferError.aborted
         }
@@ -147,7 +175,7 @@ public enum TransferCore {
 
         let status = Int(result.httpStatus)
         if parsed.isHTTPFamily {
-            let successStatuses: Set<Int> = rangeHeader == nil ? [200] : [200, 206]
+            let successStatuses: Set<Int> = rangeHeader == nil ? [200] : [206]
             guard successStatuses.contains(status) else {
                 throw TransferError.httpStatus(status)
             }
@@ -162,7 +190,7 @@ public enum TransferCore {
         }
 
         let contentLength: Int64? = result.contentLength >= 0 ? Int64(result.contentLength) : nil
-        if rangeHeader == nil, let contentLength, result.bytesWritten != contentLength {
+        if rangeHeader == nil, bodyByteLimit == 0, let contentLength, result.bytesWritten != contentLength {
             throw TransferError.incompleteWrite(expected: contentLength, wrote: Int64(result.bytesWritten))
         }
 
@@ -185,7 +213,8 @@ public enum TransferCore {
         )
     }
 
-    /// Resume an existing partial when the server supports ranges; otherwise restart.
+    /// Resume an existing partial when the server supports ranges; otherwise
+    /// restart via a sibling replacement partial so the original survives failure.
     public static func resumeOrDownload(
         url: String,
         partialURL: URL,
@@ -193,14 +222,7 @@ public enum TransferCore {
         abortFlag: TransferAbortFlag? = nil,
         onProgress: ProgressHandler? = nil
     ) throws -> TransferOutcome {
-        // Uncached on purpose — see SegmentedTransfer.fileSize(at:). A cached
-        // NSURL size read after a wipe reports the pre-wipe bytes.
-        let existing: Int64 = {
-            guard let attributes = try? FileManager.default.attributesOfItem(atPath: partialURL.path),
-                  let size = attributes[.size] as? NSNumber
-            else { return 0 }
-            return size.int64Value
-        }()
+        let existing = partialFileSize(at: partialURL)
         guard existing > 0 else {
             return try downloadSingleStream(
                 url: url,
@@ -211,21 +233,9 @@ public enum TransferCore {
             )
         }
 
-        let probe = try probeRangeSupport(url: url, options: options)
-        guard probe.httpStatus == 206,
-              let total = totalLength(from: probe),
-              existing < total
-        else {
-            // Do not wipe a partial that is already at/above the remote size —
-            // that path is how preallocated segmented shells get destroyed on
-            // relaunch. Leave the bytes for a higher layer (segmap / Restart).
-            if existing > 0 {
-                throw TransferError.incompleteWrite(
-                    expected: totalLength(from: probe) ?? existing,
-                    wrote: existing
-                )
-            }
-            try? FileManager.default.removeItem(at: partialURL)
+        let probe = try probeForPartialRestart(url: url, options: options)
+        switch PartialRestartPolicy.classify(existingBytes: existing, probe: probe) {
+        case .freshDownload:
             return try downloadSingleStream(
                 url: url,
                 partialURL: partialURL,
@@ -233,8 +243,52 @@ public enum TransferCore {
                 abortFlag: abortFlag,
                 onProgress: onProgress
             )
+        case let .resumeFromOffset(existing, total):
+            return try resumeFromOffset(
+                url: url,
+                partialURL: partialURL,
+                existing: existing,
+                total: total,
+                probe: probe,
+                options: options,
+                abortFlag: abortFlag,
+                onProgress: onProgress
+            )
+        case let .restartViaReplacement(_, total):
+            return try restartViaReplacement(
+                url: url,
+                partialURL: partialURL,
+                total: total,
+                options: options,
+                abortFlag: abortFlag,
+                onProgress: onProgress
+            )
+        case let .ambiguousPreallocatedShell(total):
+            throw TransferError.incompleteWrite(expected: total, wrote: existing)
+        case let .unknownRemoteTotal(existing):
+            throw TransferError.incompleteWrite(expected: nil, wrote: existing)
         }
+    }
 
+    private static func partialFileSize(at partialURL: URL) -> Int64 {
+        // Uncached on purpose — see SegmentedTransfer.fileSize(at:). A cached
+        // NSURL size read after a wipe reports the pre-wipe bytes.
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: partialURL.path),
+              let size = attributes[.size] as? NSNumber
+        else { return 0 }
+        return size.int64Value
+    }
+
+    private static func resumeFromOffset(
+        url: String,
+        partialURL: URL,
+        existing: Int64,
+        total: Int64,
+        probe: ResourceIdentity,
+        options: DownloadOptions,
+        abortFlag: TransferAbortFlag?,
+        onProgress: ProgressHandler?
+    ) throws -> TransferOutcome {
         let progress: ProgressHandler? = if let onProgress {
             { written, reported in onProgress(existing + written, reported.map { existing + $0 } ?? total) }
         } else {
@@ -249,8 +303,7 @@ public enum TransferCore {
             abortFlag: abortFlag,
             onProgress: progress
         )
-        let attrs = try FileManager.default.attributesOfItem(atPath: partialURL.path)
-        let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        let size = partialFileSize(at: partialURL)
         let expectedAppend = total - existing
         guard size == total, resumed.bytesWritten == expectedAppend else {
             throw TransferError.incompleteWrite(expected: total, wrote: size)
@@ -272,11 +325,101 @@ public enum TransferCore {
         )
     }
 
+    /// Downloads the full object into a unique sibling partial, then atomically
+    /// replaces the original only after length verification and fsync succeed.
+    private static func restartViaReplacement(
+        url: String,
+        partialURL: URL,
+        total: Int64,
+        options: DownloadOptions,
+        abortFlag: TransferAbortFlag?,
+        onProgress: ProgressHandler?
+    ) throws -> TransferOutcome {
+        let replacementURL = partialURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(".repl-\(UUID().uuidString)-\(partialURL.lastPathComponent)")
+
+        do {
+            let downloaded = try downloadSingleStream(
+                url: url,
+                partialURL: replacementURL,
+                options: options,
+                abortFlag: abortFlag,
+                onProgress: onProgress
+            )
+            guard downloaded.bytesWritten == total else {
+                throw TransferError.incompleteWrite(expected: total, wrote: downloaded.bytesWritten)
+            }
+            try synchronizePartial(at: replacementURL)
+            _ = try FileManager.default.replaceItem(
+                at: partialURL,
+                withItemAt: replacementURL,
+                backupItemName: nil,
+                options: [],
+                resultingItemURL: nil
+            )
+            return TransferOutcome(
+                identity: downloaded.identity,
+                bytesWritten: total,
+                partialURL: partialURL
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: replacementURL)
+            throw error
+        }
+    }
+
+    private static func synchronizePartial(at url: URL) throws {
+        let fd = url.path.withCString { path in
+            open(path, O_WRONLY)
+        }
+        guard fd >= 0 else { throw TransferError.fileOpenFailed }
+        defer { close(fd) }
+        guard fsync(fd) == 0 else {
+            throw TransferError.fileOpenFailed
+        }
+    }
+
+    /// Probe used only when classifying an existing partial for resume vs restart.
+    /// A host that ignores `Range: 0-0` with HTTP 200 is treated as no-range here
+    /// without weakening ranged-byte validation on real segment downloads.
+    static func probeForPartialRestart(
+        url: String,
+        options: DownloadOptions = DownloadOptions()
+    ) throws -> ResourceIdentity {
+        do {
+            return try probeRangeSupport(url: url, options: options)
+        } catch let TransferError.invalidRangeResponse(status) where status == 200 {
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("dm-restart-probe-\(UUID().uuidString).partial")
+            defer { try? FileManager.default.removeItem(at: temp) }
+            let outcome = try downloadSingleStream(
+                url: url,
+                partialURL: temp,
+                options: options,
+                bodyByteLimit: 1
+            )
+            return outcome.identity
+        }
+    }
+
     /// Probe range support with a tiny ranged GET (`bytes=0-0`). HEAD is advisory-only.
     public static func probeRangeSupport(
         url: String,
         options: DownloadOptions = DownloadOptions()
     ) throws -> ResourceIdentity {
+        try observeRangeProbe(url: url, options: options).identity
+    }
+
+    struct RangeProbeOutcome: Sendable, Equatable {
+        let identity: ResourceIdentity
+        let bytesWritten: Int64
+    }
+
+    static func observeRangeProbe(
+        url: String,
+        options: DownloadOptions = DownloadOptions()
+    ) throws -> RangeProbeOutcome {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("dm-range-probe-\(UUID().uuidString).partial")
         defer { try? FileManager.default.removeItem(at: temp) }
@@ -286,9 +429,10 @@ public enum TransferCore {
             partialURL: temp,
             rangeHeader: "0-0",
             fileOffset: 0,
-            options: options
+            options: options,
+            bodyByteLimit: 1
         )
-        return outcome.identity
+        return RangeProbeOutcome(identity: outcome.identity, bytesWritten: outcome.bytesWritten)
     }
 
     public static func totalLength(from identity: ResourceIdentity) -> Int64? {
@@ -309,12 +453,13 @@ public enum TransferCore {
         options: DownloadOptions,
         abortFlag: TransferAbortFlag?,
         onProgress: ProgressHandler?,
+        bodyByteLimit: Int64,
         result: inout DMCurlDownloadResult
     ) -> CURLcode {
         let connect = Int(options.connectTimeoutMilliseconds)
         let transfer = Int(options.transferTimeoutMilliseconds)
         let redirects = Int(options.maxRedirects)
-        let abortPtr: UnsafeMutablePointer<Int32>? = abortFlag.map(\.pointer)
+        let abortToken = abortFlag?.cToken
         let governor: SyncBandwidthGovernor? = options.maxBytesPerSecond > 0
             ? SyncBandwidthGovernor(bytesPerSecond: options.maxBytesPerSecond)
             : nil
@@ -341,13 +486,14 @@ public enum TransferCore {
                                             connect,
                                             transfer,
                                             redirects,
-                                            abortPtr,
+                                            abortToken,
                                             progressCtx.callback,
                                             progressCtx.userdata,
                                             userpwdC,
                                             proxyC,
                                             cookieC,
                                             headersC,
+                                            curl_off_t(max(bodyByteLimit, 0)),
                                             &result
                                         )
                                     }
@@ -360,13 +506,14 @@ public enum TransferCore {
                                     connect,
                                     transfer,
                                     redirects,
-                                    abortPtr,
+                                    abortToken,
                                     progressCtx.callback,
                                     progressCtx.userdata,
                                     userpwdC,
                                     proxyC,
                                     cookieC,
                                     headersC,
+                                    curl_off_t(max(bodyByteLimit, 0)),
                                     &result
                                 )
                             }

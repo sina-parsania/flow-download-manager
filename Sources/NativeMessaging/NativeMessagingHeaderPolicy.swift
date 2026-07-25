@@ -16,7 +16,9 @@ public enum NativeMessagingHeaderPolicy {
     /// Forwardable header names in descending order of usefulness for an
     /// authenticated download. The order is also the eviction order when the
     /// encoded set has to be trimmed: the last entry goes first.
-    public static let allowedNames = ["Cookie", "Referer", "User-Agent", "Accept", "Accept-Language"]
+    public static let allowedNames = [
+        "Cookie", "Authorization", "Referer", "User-Agent", "Accept", "Accept-Language"
+    ]
 
     /// `EnqueueBatchRequest.init?(coder:)` rejects a longer `customHeadersJSON`
     /// (measured in UTF-16 units, as `NSString.length` is), which would surface as
@@ -49,11 +51,11 @@ public enum NativeMessagingHeaderPolicy {
 
     /// Sanitizes `headers` for a batch of `urlCount` URLs.
     ///
-    /// A `Cookie` is only forwarded for a single-URL batch. The engine applies
-    /// `customHeadersJSON` to every job in the batch, so a multi-URL batch would
-    /// otherwise replay one site's session cookie against every other host in the
-    /// list. Names outside ``allowedNames`` are dropped without being echoed back.
-    /// A repeated name keeps its first occurrence.
+    /// `Cookie` and `Authorization` are only forwarded for a single-URL batch. The
+    /// engine applies `customHeadersJSON` to every job in the batch, so a multi-URL
+    /// batch would otherwise replay one site's credentials against every other host in
+    /// the list. Names outside ``allowedNames`` are dropped without being echoed
+    /// back. A repeated name keeps its first occurrence.
     public static func sanitize(
         _ headers: [NativeMessagingProtocol.Header]?,
         urlCount: Int
@@ -78,7 +80,7 @@ public enum NativeMessagingHeaderPolicy {
                 drop(canonical)
                 continue
             }
-            if canonical == "Cookie", urlCount != 1 {
+            if canonical == "Cookie" || canonical == "Authorization", urlCount != 1 {
                 drop(canonical)
                 continue
             }

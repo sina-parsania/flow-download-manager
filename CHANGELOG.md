@@ -2,7 +2,27 @@
 
 ## Unreleased
 
-Nothing yet — next changes land here after `0.3.2`.
+Nothing yet — next changes land here after `0.3.3`.
+
+## 0.3.3 — 2026-07-26
+
+Community transfer/recovery hardening. Still **unsigned** (ADR 0008).
+
+### Transfer & curl
+- Cap ranged probes at one body byte; skip probe when Cookie / Authorization / cookie jar / fragile signed query would burn a one-shot download (cloud signed URLs still segment)
+- Validate `Content-Range` before writing ranged bytes; reject ranged HTTP 200 and shifted/malformed intervals
+- Reject structurally invalid `.segmap` coverage; restart no-range partials via sibling replacement without wiping recovery bytes
+- Reset response metadata at redirect boundaries; origin-scope Cookie / Authorization / Referer; reject HTTPS→HTTP
+- Cooperative cancel via opaque C11 atomic abort flag
+- Deterministic fault-service `dropFirst=` loss schedule for recovery tests
+
+### Persistence & recovery
+- Typed `JobState` transitions at the sole-writer repository
+- Crash-recoverable finalization intent (schema `v6`) so promotion after agent crash does not blindly re-download
+
+### Tooling
+- CI / Makefile always vendor pinned libcurl before DownloadKit-linked builds
+- Incomplete-work scan covers `BrowserExtension`
 
 ## 0.3.2 — 2026-07-25
 

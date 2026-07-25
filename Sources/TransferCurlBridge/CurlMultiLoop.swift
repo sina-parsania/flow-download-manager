@@ -56,6 +56,7 @@ public enum CurlMultiLoop {
         case multiAddFailed
         case curl(CURLcode)
         case httpStatus(Int)
+        case invalidRangeResponse(httpStatus: Int)
         case incompleteWrite(expected: Int64, wrote: Int64)
         case aborted
         case emptyRequests
@@ -77,7 +78,7 @@ public enum CurlMultiLoop {
         connectTimeoutMilliseconds: Int = 15000,
         transferTimeoutMilliseconds: Int = 0,
         maxRedirects: Int = 10,
-        abortFlag: UnsafeMutablePointer<Int32>? = nil,
+        abortFlag: OpaquePointer? = nil,
         userpwd: String? = nil,
         proxyURL: String? = nil,
         cookieJarPath: String? = nil,
@@ -245,7 +246,13 @@ public enum CurlMultiLoop {
                                 boxesByIndex.removeValue(forKey: index)
                                 defer { DMCurlDownloadResultClear(&result) }
 
-                                if result.code == CURLE_ABORTED_BY_CALLBACK || (abortFlag?.pointee ?? 0) != 0 {
+                                if result.rangeResponseInvalid != 0 {
+                                    throw MultiError.invalidRangeResponse(httpStatus: Int(result.httpStatus))
+                                }
+                                if result.code == CURLE_ABORTED_BY_CALLBACK
+                                    ||
+                                    (abortFlag
+                                        .map { DMCurlAbortFlagIsSetHandle(UnsafeRawPointer($0)) != 0 } ?? false) {
                                     throw MultiError.aborted
                                 }
                                 guard result.code == CURLE_OK else {
@@ -270,7 +277,7 @@ public enum CurlMultiLoop {
                                 }
 
                                 let status = Int(result.httpStatus)
-                                guard status == 206 || status == 200 else {
+                                guard status == 206 else {
                                     throw MultiError.httpStatus(status)
                                 }
                                 if let expected = ranges[index].expectedBytes, wrote != expected {
@@ -321,6 +328,27 @@ public enum CurlMultiLoop {
 
                                 for item in completed {
                                     do {
+                                        if item.code == CURLE_OK,
+                                           let download = liveByIndex[item.index],
+                                           let easy = DMCurlEasyDownloadGetHandle(download) {
+                                            var redirectError = CURLE_OK
+                                            let follow = DMCurlEasyDownloadFollowRedirectIfNeeded(
+                                                download,
+                                                &redirectError
+                                            )
+                                            if follow == 1 {
+                                                _ = DMCurlMultiRemoveEasy(multi, easy)
+                                                let addCode = DMCurlMultiAddEasy(multi, easy)
+                                                guard addCode == CURLM_OK else {
+                                                    throw MultiError.multiAddFailed
+                                                }
+                                                continue
+                                            }
+                                            if follow == -1 {
+                                                try finishEasy(index: item.index, performCode: redirectError)
+                                                continue
+                                            }
+                                        }
                                         try finishEasy(index: item.index, performCode: item.code)
                                     } catch {
                                         if firstError == nil { firstError = error }
@@ -352,7 +380,8 @@ public enum CurlMultiLoop {
                             try drainCompletions()
 
                             while !liveByIndex.isEmpty || !pending.isEmpty {
-                                if let abortFlag, abortFlag.pointee != 0 {
+                                if let abortFlag,
+                                   DMCurlAbortFlagIsSetHandle(UnsafeRawPointer(abortFlag)) != 0 {
                                     throw MultiError.aborted
                                 }
                                 var numfds: Int32 = 0

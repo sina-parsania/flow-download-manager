@@ -157,6 +157,12 @@ public enum SegmentedTransfer {
                 abortFlag: abortFlag, onProgress: onProgress
             )
         }
+        if RangeProbePolicy.shouldSkipProbe(url: url, options: options) {
+            return try singleOutcome(
+                url: url, partialURL: partialURL, options: options,
+                abortFlag: abortFlag, onProgress: onProgress
+            )
+        }
 
         let sidecarURL = segmentMapURL(for: partialURL)
 
@@ -241,14 +247,6 @@ public enum SegmentedTransfer {
             ) {
                 return multi
             }
-            // Preallocated segmented shells have fileSize == Content-Length even
-            // when most ranges are empty. Without a segmap, size is not a safe
-            // contiguous-prefix signal — never wipe and restart from 0 here.
-            if let probe = try? TransferCore.probeRangeSupport(url: url, options: options),
-               let total = TransferCore.totalLength(from: probe),
-               existing >= total {
-                throw TransferCore.TransferError.incompleteWrite(expected: total, wrote: 0)
-            }
             let resumed = try TransferCore.resumeOrDownload(
                 url: url,
                 partialURL: partialURL,
@@ -264,7 +262,20 @@ public enum SegmentedTransfer {
             )
         }
 
-        let probe = try TransferCore.probeRangeSupport(url: url, options: options)
+        let probe: TransferCore.ResourceIdentity
+        do {
+            probe = try TransferCore.probeRangeSupport(url: url, options: options)
+        } catch let error as TransferCore.TransferError {
+            switch error {
+            case .httpStatus, .invalidRangeResponse:
+                return try singleOutcome(
+                    url: url, partialURL: partialURL, options: options,
+                    abortFlag: abortFlag, onProgress: onProgress
+                )
+            default:
+                throw error
+            }
+        }
         guard probe.httpStatus == 206, let total = TransferCore.totalLength(from: probe) else {
             // Even without ranges, Content-Length from the probe lets Size/ETA
             // update before the first write callback learns dltotal.
@@ -715,12 +726,12 @@ final class SegmentLedger: @unchecked Sendable {
         guard let data = try? Data(contentsOf: sidecarURL),
               let file = try? JSONDecoder().decode(MapFile.self, from: data),
               file.total > 0,
-              file.baseOffset >= 0,
               !file.entries.isEmpty,
               file.entries.allSatisfy({ entry in
                   entry.start >= 0 && entry.end < file.total && entry.start <= entry.end
                       && entry.written >= 0 && entry.written <= entry.end - entry.start + 1
-              })
+              }),
+              isStructurallyValid(file)
         else { return nil }
         return SegmentLedger(
             total: file.total,
@@ -729,6 +740,27 @@ final class SegmentLedger: @unchecked Sendable {
             sidecarURL: sidecarURL,
             validator: file.validator
         )
+    }
+
+    /// Contiguous coverage from `baseOffset` through `total - 1`, sorted, no gaps
+    /// or overlaps. Invalid maps return nil from `load` without rewriting the sidecar.
+    private static func isStructurallyValid(_ file: MapFile) -> Bool {
+        guard file.baseOffset >= 0, file.baseOffset < file.total else { return false }
+        let entries = file.entries
+        guard let first = entries.first, let last = entries.last else { return false }
+        guard first.start == file.baseOffset else { return false }
+        guard last.end == file.total - 1 else { return false }
+
+        for index in entries.indices {
+            let entry = entries[index]
+            if index > 0 {
+                let previous = entries[index - 1]
+                guard previous.start < entry.start else { return false }
+                guard previous.end < Int64.max else { return false }
+                guard entry.start == previous.end + 1 else { return false }
+            }
+        }
+        return true
     }
 
     var entryCount: Int {

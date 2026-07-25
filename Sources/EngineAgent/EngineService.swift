@@ -464,24 +464,24 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         }
 
         do {
-            let newState: String
+            let newState: JobState
             let reason: String?
             switch request.command {
             case .pause:
-                newState = "paused"
+                newState = .paused
                 reason = nil
                 Task { await services.orchestrator?.requestPause(jobID: request.jobID) }
             case .resume:
-                newState = "queued"
+                newState = .queued
                 reason = nil
                 Task { await services.orchestrator?.requestResume(jobID: request.jobID) }
                 Task { await services.orchestrator?.start() }
             case .cancel:
-                newState = "cancelled"
+                newState = .cancelled
                 reason = "userCancelled"
                 Task { await services.orchestrator?.requestCancel(jobID: request.jobID) }
             case .retry:
-                newState = "queued"
+                newState = .queued
                 reason = nil
                 Task { await services.orchestrator?.requestResume(jobID: request.jobID) }
                 Task { await services.orchestrator?.start() }
@@ -510,7 +510,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     jobID: request.jobID
                 )
                 Task { await services.orchestrator?.clearProgress(jobID: request.jobID) }
-                newState = "queued"
+                newState = .queued
                 reason = nil
                 Task { await services.orchestrator?.requestResume(jobID: request.jobID) }
                 Task { await services.orchestrator?.start() }
@@ -525,7 +525,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             let response = JobCommandResponse(
                 requestID: request.requestID,
                 jobID: request.jobID,
-                state: newState,
+                state: newState.rawValue,
                 revision: revision
             )
             services.changeLedger?.noteUpsert(request.jobID)

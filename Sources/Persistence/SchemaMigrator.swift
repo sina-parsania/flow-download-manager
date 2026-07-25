@@ -21,6 +21,19 @@ public enum SchemaMigrator {
         registerV3(&migrator)
         registerV4(&migrator)
         registerV5(&migrator)
+        registerV6(&migrator)
+        return migrator
+    }
+
+    /// Migrator that stops after v5 — used by migration round-trip tests.
+    public static var v5Only: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = false
+        registerV1(&migrator)
+        registerV2(&migrator)
+        registerV3(&migrator)
+        registerV4(&migrator)
+        registerV5(&migrator)
         return migrator
     }
 
@@ -80,6 +93,9 @@ public enum SchemaMigrator {
 
     /// Stable identifier for the v5 migration (user per-host transfer settings).
     public static let v5Identifier = "v5-host-settings"
+
+    /// Stable identifier for the v6 migration (crash-recoverable finalization intents).
+    public static let v6Identifier = "v6-finalization-intents"
 
     private static func registerV1(_ migrator: inout DatabaseMigrator) {
         // CHECK domains sourced from the Domain enums so DB and code cannot drift.
@@ -327,6 +343,27 @@ public enum SchemaMigrator {
                 t.column("userAgent", .text)
                 t.column("credentialProfileID", .text)
                     .references("credential_profiles", onDelete: .setNull)
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
+    }
+
+    private static func registerV6(_ migrator: inout DatabaseMigrator) {
+        let stages = FinalizationIntentStage.allCases.map(\.rawValue)
+        migrator.registerMigration(v6Identifier) { db in
+            try db.create(table: "finalization_intents") { t in
+                t.primaryKey("jobID", .text)
+                    .references("jobs", onDelete: .cascade)
+                t.column("destinationProfileID", .text).notNull()
+                    .references("destination_profiles", onDelete: .restrict)
+                t.column("finalFilename", .text).notNull()
+                t.column("partialFilename", .text).notNull()
+                t.column("expectedByteSize", .integer).notNull().check { $0 >= 0 }
+                t.column("expectedChecksum", .text)
+                t.column("stage", .text).notNull().check { stages.contains($0) }
+                t.column("zipAutoExtract", .boolean).notNull().defaults(to: false)
+                t.column("revision", .integer).notNull().defaults(to: 1)
+                t.column("createdAt", .datetime).notNull()
                 t.column("updatedAt", .datetime).notNull()
             }
         }

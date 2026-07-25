@@ -1,34 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import CCurl
 import Foundation
 
 /// Cooperative abort token shared with the C write/xferinfo callbacks.
-public final class TransferAbortFlag: @unchecked Sendable {
-    private let storage: UnsafeMutablePointer<Int32>
+/// `reset()` is only valid when no transfer concurrently holds `cToken`.
+public final class TransferAbortFlag: Sendable {
+    private nonisolated(unsafe) let token: OpaquePointer
 
     public init() {
-        storage = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
-        storage.initialize(to: 0)
+        guard let created = DMCurlAbortFlagCreate() else {
+            preconditionFailure("DMCurlAbortFlagCreate returned nil")
+        }
+        token = created
     }
 
     deinit {
-        storage.deinitialize(count: 1)
-        storage.deallocate()
+        DMCurlAbortFlagDestroy(token)
     }
 
-    public var pointer: UnsafeMutablePointer<Int32> {
-        storage
+    /// Read-only bridge for C download APIs. Do not reset while a transfer holds this.
+    public var cToken: OpaquePointer {
+        token
     }
 
     public func requestAbort() {
-        storage.pointee = 1
+        DMCurlAbortFlagRequest(token)
     }
 
     public var isSet: Bool {
-        storage.pointee != 0
+        DMCurlAbortFlagIsSet(token) != 0
     }
 
     public func reset() {
-        storage.pointee = 0
+        DMCurlAbortFlagReset(token)
     }
 }

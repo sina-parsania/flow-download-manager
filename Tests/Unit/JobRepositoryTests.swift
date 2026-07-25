@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Domain
 import Foundation
 import GRDB
 import Persistence
@@ -46,6 +47,172 @@ final class JobRepositoryTests: XCTestCase {
             defaultDestinationDirectory: downloads
         )
         return (database, root, downloads)
+    }
+
+    private func seedJobInState(
+        _ database: EngineDatabase,
+        state: JobState
+    ) throws -> String {
+        let result = try JobRepository.insertBatch(
+            database: database,
+            source: "paste",
+            displayName: nil,
+            items: [(url: "https://example.test/seed.bin", categoryStableKey: "other")]
+        )
+        let jobID = try XCTUnwrap(result.jobIDs.first)
+        guard state != .queued else { return jobID }
+        try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: jobID) else { return }
+            job.state = state.rawValue
+            if JobState.terminalReasonRequiring.contains(state) {
+                job.terminalReason = TerminalReason.networkUnavailable.rawValue
+            } else {
+                job.terminalReason = nil
+            }
+            try job.update(db)
+        }
+        return jobID
+    }
+
+    private func terminalReasonForTransition(to target: JobState) -> String? {
+        switch target {
+        case .failed:
+            TerminalReason.networkUnavailable.rawValue
+        case .cancelled:
+            TerminalReason.userCancelled.rawValue
+        default:
+            nil
+        }
+    }
+
+    func testEveryTransitionPairEnforcedAtPersistence() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        for from in JobState.allCases {
+            for to in JobState.allCases {
+                let jobID = try seedJobInState(database, state: from)
+                let before = try database.pool.read { db -> (String, Int, Int) in
+                    let job = try JobRecord.fetchOne(db, key: jobID)
+                    let events = try EventRecord.filter(Column("jobID") == jobID).fetchCount(db)
+                    return (job?.state ?? "", job?.revision ?? 0, events)
+                }
+                let reason = terminalReasonForTransition(to: to)
+                let shouldSucceed = from.canTransition(to: to)
+
+                if shouldSucceed {
+                    _ = try JobRepository.updateJobState(
+                        database: database,
+                        id: jobID,
+                        state: to,
+                        terminalReason: reason,
+                        expectedRevision: nil
+                    )
+                    let after = try database.pool.read { db -> (String, Int, Int) in
+                        let job = try JobRecord.fetchOne(db, key: jobID)
+                        let events = try EventRecord.filter(Column("jobID") == jobID).fetchCount(db)
+                        return (job?.state ?? "", job?.revision ?? 0, events)
+                    }
+                    XCTAssertEqual(after.0, to.rawValue, "\(from) → \(to) should persist")
+                    XCTAssertEqual(after.1, before.1 + 1, "\(from) → \(to) should bump revision")
+                    XCTAssertEqual(after.2, before.2 + 1, "\(from) → \(to) should append event")
+                } else {
+                    XCTAssertThrowsError(
+                        try JobRepository.updateJobState(
+                            database: database,
+                            id: jobID,
+                            state: to,
+                            terminalReason: reason,
+                            expectedRevision: nil
+                        )
+                    ) { error in
+                        guard case let JobRepositoryError.invalidTransition(current, target) = error else {
+                            return XCTFail("expected invalidTransition for \(from) → \(to), got \(error)")
+                        }
+                        XCTAssertEqual(current, from)
+                        XCTAssertEqual(target, to)
+                    }
+                    let after = try database.pool.read { db -> (String, Int, Int) in
+                        let job = try JobRecord.fetchOne(db, key: jobID)
+                        let events = try EventRecord.filter(Column("jobID") == jobID).fetchCount(db)
+                        return (job?.state ?? "", job?.revision ?? 0, events)
+                    }
+                    XCTAssertEqual(after.0, before.0, "\(from) → \(to) must not mutate persistence state")
+                    XCTAssertEqual(after.1, before.1, "\(from) → \(to) must not mutate persistence revision")
+                    XCTAssertEqual(after.2, before.2, "\(from) → \(to) must not mutate persistence events")
+                }
+            }
+        }
+    }
+
+    func testSchemaRejectsUnknownPersistedStateWrites() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let jobID = try seedJobInState(database, state: .queued)
+        // jobs.state CHECK matches JobState — unknown values cannot be seeded, so
+        // updateJobState's unknownPersistedState path is defense for schema drift.
+        XCTAssertNil(JobState(rawValue: "not_a_real_state"))
+        XCTAssertThrowsError(
+            try database.pool.write { db in
+                guard var job = try JobRecord.fetchOne(db, key: jobID) else {
+                    XCTFail("seeded job missing")
+                    return
+                }
+                job.state = "not_a_real_state"
+                try job.update(db)
+            }
+        )
+    }
+
+    func testCompletedStateRejectsTerminalReason() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let jobID = try seedJobInState(database, state: .postProcessing)
+        XCTAssertThrowsError(
+            try JobRepository.updateJobState(
+                database: database,
+                id: jobID,
+                state: .completed,
+                terminalReason: "networkUnavailable",
+                expectedRevision: nil
+            )
+        ) { error in
+            guard case JobRepositoryError.unexpectedTerminalReason(state: .completed) = error else {
+                XCTFail("expected unexpectedTerminalReason, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testRequeueActiveTransferJobFromRetryWaiting() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let jobID = try seedJobInState(database, state: .retryWaiting)
+        let revision = try JobRepository.requeueActiveTransferJob(database: database, id: jobID)
+        XCTAssertEqual(revision, 2)
+
+        let rows = try JobRepository.fetchJobRows(database: database)
+        XCTAssertEqual(rows.first?.job.state, JobState.queued.rawValue)
+        let events = try JobRepository.listEvents(database: database, jobID: jobID, limit: 10)
+        XCTAssertTrue(events.contains { $0.type == "transfer.requeued" })
+    }
+
+    func testRequeueActiveTransferJobRejectsQueuedSource() throws {
+        let (database, root, _) = try openTempDatabase()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let jobID = try seedJobInState(database, state: .queued)
+        XCTAssertThrowsError(
+            try JobRepository.requeueActiveTransferJob(database: database, id: jobID)
+        ) { error in
+            guard case JobRepositoryError.invalidRequeueSource(.queued) = error else {
+                XCTFail("expected invalidRequeueSource, got \(error)")
+                return
+            }
+        }
     }
 
     func testEnsureProductionSeedInsertBatchAndFetchQueuedRows() throws {
@@ -274,7 +441,7 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "connecting",
+            state: .connecting,
             terminalReason: nil,
             expectedRevision: 1
         )
@@ -378,7 +545,7 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "connecting",
+            state: .connecting,
             terminalReason: nil,
             expectedRevision: 1
         )
@@ -387,7 +554,7 @@ final class JobRepositoryTests: XCTestCase {
             try JobRepository.updateJobState(
                 database: database,
                 id: jobID,
-                state: "downloading",
+                state: .downloading,
                 terminalReason: nil,
                 expectedRevision: 1
             )
@@ -400,7 +567,7 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "downloading",
+            state: .downloading,
             terminalReason: nil,
             expectedRevision: 2
         )
@@ -431,8 +598,15 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "downloading",
-            terminalReason: "networkUnavailable",
+            state: .connecting,
+            terminalReason: nil,
+            expectedRevision: nil
+        )
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: jobID,
+            state: .downloading,
+            terminalReason: nil,
             expectedRevision: nil
         )
 
@@ -443,7 +617,7 @@ final class JobRepositoryTests: XCTestCase {
         let job = try XCTUnwrap(rows.first?.job)
         XCTAssertEqual(job.state, "queued")
         XCTAssertNil(job.terminalReason)
-        XCTAssertEqual(job.revision, 3)
+        XCTAssertEqual(job.revision, 4)
 
         let events = try database.pool.read { db in
             try EventRecord
@@ -510,13 +684,13 @@ final class JobRepositoryTests: XCTestCase {
         )
         XCTAssertEqual(queuedPrevious, "queued")
 
-        _ = try JobRepository.updateJobState(
-            database: database,
-            id: result.jobIDs[1],
-            state: "completed",
-            terminalReason: nil,
-            expectedRevision: nil
-        )
+        try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: result.jobIDs[1]) else { return }
+            job.state = JobState.completed.rawValue
+            job.terminalReason = nil
+            job.revision += 1
+            try job.update(db)
+        }
         let completedFile = downloads.appendingPathComponent("done.bin")
         try Data([0x01, 0x02]).write(to: completedFile)
 
@@ -527,7 +701,7 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: result.jobIDs[2],
-            state: "failed",
+            state: .failed,
             terminalReason: "notFound",
             expectedRevision: nil
         )
@@ -553,7 +727,7 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: result.jobIDs[1],
-            state: "failed",
+            state: .failed,
             terminalReason: "notFound",
             expectedRevision: nil
         )
@@ -661,7 +835,14 @@ final class JobRepositoryTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "downloading",
+            state: .connecting,
+            terminalReason: nil,
+            expectedRevision: nil
+        )
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: jobID,
+            state: .downloading,
             terminalReason: nil,
             expectedRevision: nil
         )

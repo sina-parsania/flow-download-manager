@@ -153,7 +153,6 @@ final class NativeMessagingTests: XCTestCase {
     func testHeaderPolicyDropsNamesOutsideTheAllowlist() {
         let result = NativeMessagingHeaderPolicy.sanitize(
             [
-                .init(name: "Authorization", value: "Bearer abc"),
                 .init(name: "Host", value: "evil.example"),
                 .init(name: "X-Forwarded-For", value: "10.0.0.1"),
                 .init(name: "Referer", value: "https://example.com/page")
@@ -161,8 +160,22 @@ final class NativeMessagingTests: XCTestCase {
             urlCount: 1
         )
         XCTAssertEqual(result.forwardedNames, ["Referer"])
-        XCTAssertFalse(result.droppedNames.contains("Authorization"))
-        XCTAssertFalse(result.customHeadersJSON?.contains("Bearer") ?? false)
+        XCTAssertTrue(result.droppedNames.isEmpty)
+        XCTAssertFalse(result.customHeadersJSON?.contains("evil.example") ?? false)
+    }
+
+    func testHeaderPolicyForwardsAuthorization() throws {
+        let result = NativeMessagingHeaderPolicy.sanitize(
+            [
+                .init(name: "Authorization", value: "Bearer abc"),
+                .init(name: "Referer", value: "https://example.com/page")
+            ],
+            urlCount: 1
+        )
+        XCTAssertEqual(result.forwardedNames, ["Authorization", "Referer"])
+        let parsed = try HeaderValidator.parseExtraHeadersJSON(result.customHeadersJSON)
+        XCTAssertEqual(parsed.first?.name, "Authorization")
+        XCTAssertEqual(parsed.first?.value, "Bearer abc")
     }
 
     func testHeaderPolicyRejectsHeaderInjection() {
@@ -185,6 +198,19 @@ final class NativeMessagingTests: XCTestCase {
         XCTAssertEqual(result.forwardedNames, ["Referer"])
         XCTAssertEqual(result.droppedNames, ["Cookie"])
         XCTAssertFalse(result.customHeadersJSON?.contains("session=abc") ?? false)
+    }
+
+    func testHeaderPolicyDropsAuthorizationForMultiURLBatch() {
+        let result = NativeMessagingHeaderPolicy.sanitize(
+            [
+                .init(name: "Authorization", value: "Bearer abc"),
+                .init(name: "Referer", value: "https://example.com/page")
+            ],
+            urlCount: 3
+        )
+        XCTAssertEqual(result.forwardedNames, ["Referer"])
+        XCTAssertEqual(result.droppedNames, ["Authorization"])
+        XCTAssertFalse(result.customHeadersJSON?.contains("Bearer abc") ?? false)
     }
 
     func testHeaderPolicyKeepsFirstOfARepeatedName() throws {
@@ -288,7 +314,8 @@ final class NativeMessagingTests: XCTestCase {
         let recorded = await engine.lastCustomHeadersJSON
         let forwarded = try XCTUnwrap(recorded)
         XCTAssertTrue(forwarded.contains("session=abc"))
-        XCTAssertFalse(forwarded.contains("Bearer"))
+        XCTAssertTrue(forwarded.contains("Bearer secret"))
+        XCTAssertTrue(forwarded.contains("Authorization"))
     }
 
     func testRouterReportsAppHandoffAndTheHeadersItCouldNotCarry() async throws {

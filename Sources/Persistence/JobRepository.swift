@@ -502,16 +502,20 @@ public enum JobRepository {
     /// Active transfer states that cannot survive an agent crash mid-flight.
     /// On relaunch these are moved back to `queued` so the pump can resume
     /// (FR-TRN recovery).
-    public static let interruptedTransferStates: Set<String> = [
-        "connecting", "downloading", "verifying", "merging", "postProcessing"
+    /// Active transfer states that cannot survive an agent crash mid-flight.
+    /// `verifying` and `postProcessing` are reconciled via
+    /// ``FinalizationIntentRepository/reconcileInterruptedFinalizations(database:)``.
+    public static let interruptedTransferStates: Set<JobState> = [
+        .connecting, .downloading, .merging
     ]
 
     /// Requeue jobs left in active transfer states after a crash/relaunch.
-    /// Clears `terminalReason`, appends `recovery.requeued`, bumps revision.
-    /// Returns the requeued job IDs (stable order by queuePosition, createdAt).
+    /// Allowed sources: ``interruptedTransferStates``. Clears `terminalReason`,
+    /// appends `recovery.requeued`, bumps revision. Returns the requeued job IDs
+    /// (stable order by queuePosition, createdAt).
     public static func requeueInterruptedTransfers(database: EngineDatabase) throws -> [String] {
         try database.pool.write { db in
-            let states = Array(interruptedTransferStates).sorted()
+            let states = interruptedTransferStates.map(\.rawValue).sorted()
             let placeholders = states.map { _ in "?" }.joined(separator: ", ")
             let interrupted = try JobRecord.fetchAll(
                 db,
@@ -528,8 +532,12 @@ public enum JobRepository {
             requeued.reserveCapacity(interrupted.count)
             let now = Date()
             for var job in interrupted {
-                let previousState = job.state
-                job.state = "queued"
+                guard let previous = JobState(rawValue: job.state),
+                      interruptedTransferStates.contains(previous)
+                else {
+                    continue
+                }
+                job.state = JobState.queued.rawValue
                 job.terminalReason = nil
                 job.updatedAt = now
                 job.revision += 1
@@ -537,14 +545,14 @@ public enum JobRepository {
 
                 let payload: String = if let data = try? JSONSerialization.data(
                     withJSONObject: [
-                        "previousState": previousState,
+                        "previousState": previous.rawValue,
                         "revision": job.revision
                     ] as [String: Any],
                     options: [.sortedKeys]
                 ), let string = String(data: data, encoding: .utf8) {
                     string
                 } else {
-                    "{\"previousState\":\"\(previousState)\",\"revision\":\(job.revision)}"
+                    "{\"previousState\":\"\(previous.rawValue)\",\"revision\":\(job.revision)}"
                 }
                 try EventRecord(
                     jobID: job.id,
@@ -558,10 +566,61 @@ public enum JobRepository {
         }
     }
 
+    /// In-flight transfer states the orchestrator may requeue for pump pickup
+    /// outside the ordinary adjacency graph (resume-after-abort, retry backoff).
+    public static let requeueableActiveTransferStates: Set<JobState> = [
+        .connecting, .downloading, .retryWaiting
+    ]
+
+    /// Requeues one in-flight transfer job so the orchestrator pump can resume it.
+    /// Allowed sources: ``requeueableActiveTransferStates``. Clears `terminalReason`,
+    /// appends `transfer.requeued`, bumps revision.
+    public static func requeueActiveTransferJob(
+        database: EngineDatabase,
+        id: String
+    ) throws -> Int {
+        try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: id) else {
+                throw JobRepositoryError.jobNotFound(id)
+            }
+            guard let current = JobState(rawValue: job.state) else {
+                throw JobRepositoryError.unknownPersistedState(job.state)
+            }
+            guard requeueableActiveTransferStates.contains(current) else {
+                throw JobRepositoryError.invalidRequeueSource(current)
+            }
+            let previousState = current.rawValue
+            job.state = JobState.queued.rawValue
+            job.terminalReason = nil
+            job.updatedAt = Date()
+            job.revision += 1
+            try job.update(db)
+
+            let payload: String = if let data = try? JSONSerialization.data(
+                withJSONObject: [
+                    "previousState": previousState,
+                    "revision": job.revision
+                ] as [String: Any],
+                options: [.sortedKeys]
+            ), let string = String(data: data, encoding: .utf8) {
+                string
+            } else {
+                "{\"previousState\":\"\(previousState)\",\"revision\":\(job.revision)}"
+            }
+            try EventRecord(
+                jobID: id,
+                occurredAt: job.updatedAt,
+                type: "transfer.requeued",
+                sanitizedPayload: payload
+            ).insert(db)
+            return job.revision
+        }
+    }
+
     public static func updateJobState(
         database: EngineDatabase,
         id: String,
-        state: String,
+        state: JobState,
         terminalReason: String?,
         expectedRevision: Int?
     ) throws -> Int {
@@ -569,17 +628,25 @@ public enum JobRepository {
             guard var job = try JobRecord.fetchOne(db, key: id) else {
                 throw JobRepositoryError.jobNotFound(id)
             }
+            guard let current = JobState(rawValue: job.state) else {
+                throw JobRepositoryError.unknownPersistedState(job.state)
+            }
             if let expectedRevision, job.revision != expectedRevision {
                 throw JobRepositoryError.revisionConflict(expected: expectedRevision, actual: job.revision)
             }
-            job.state = state
+            guard current.canTransition(to: state) else {
+                throw JobRepositoryError.invalidTransition(from: current, to: state)
+            }
+            try validateTerminalReason(state: state, terminalReason: terminalReason)
+
+            job.state = state.rawValue
             job.terminalReason = terminalReason
             job.updatedAt = Date()
             job.revision += 1
             try job.update(db)
 
             let payload = Self.sanitizedStatePayload(
-                state: state,
+                state: state.rawValue,
                 terminalReason: terminalReason,
                 revision: job.revision
             )
@@ -590,6 +657,29 @@ public enum JobRepository {
                 sanitizedPayload: payload
             ).insert(db)
             return job.revision
+        }
+    }
+
+    private static func validateTerminalReason(
+        state: JobState,
+        terminalReason: String?
+    ) throws {
+        if JobState.terminalReasonRequiring.contains(state) {
+            guard let terminalReason,
+                  let reason = TerminalReason(rawValue: terminalReason)
+            else {
+                throw JobRepositoryError.missingTerminalReason(state: state)
+            }
+            guard reason.impliedState == state else {
+                throw JobRepositoryError.terminalReasonMismatch(
+                    state: state,
+                    reason: terminalReason
+                )
+            }
+            return
+        }
+        guard terminalReason == nil else {
+            throw JobRepositoryError.unexpectedTerminalReason(state: state)
         }
     }
 
@@ -879,4 +969,10 @@ public enum JobRepositoryError: Error, Equatable, Sendable {
     case invalidFilename(String)
     case renameWhileActive(String)
     case renameTargetExists(String)
+    case unknownPersistedState(String)
+    case invalidTransition(from: JobState, to: JobState)
+    case missingTerminalReason(state: JobState)
+    case unexpectedTerminalReason(state: JobState)
+    case terminalReasonMismatch(state: JobState, reason: String)
+    case invalidRequeueSource(JobState)
 }

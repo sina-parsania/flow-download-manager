@@ -55,6 +55,9 @@ dependency-manifest: ## Regenerate the resolved dependency/license manifest
 vendor-libcurl: ## Build pinned static arm64 libcurl stack into VendorBuild/prefix
 	@VendorBuild/scripts/build-libcurl.sh
 
+.PHONY: native-dependencies
+native-dependencies: vendor-libcurl ## Pinned native stack required by DownloadKit-linked targets
+
 ## ----- Fast local gate -----
 
 .PHONY: format-check
@@ -70,17 +73,17 @@ lint: ## Lint + syntax-aware Swift safety scan
 	@Scripts/lint.sh
 
 .PHONY: build-debug
-build-debug: vendor-libcurl project ## Clean-warning Debug build of app + embedded agent
+build-debug: native-dependencies project ## Clean-warning Debug build of app + embedded agent
 	@mkdir -p $(ARTIFACTS)
 	@set -o pipefail; $(XCODEBUILD) -configuration $(CONFIG_DEBUG) build \
 		2>&1 | tee $(ARTIFACTS)/build.log
 
 .PHONY: build-release
-build-release: project ## Clean-warning Release build
+build-release: native-dependencies project ## Clean-warning Release build
 	@set -o pipefail; $(XCODEBUILD) -configuration Release build
 
 .PHONY: test-unit
-test-unit: project ## Run unit tests
+test-unit: native-dependencies project ## Run unit tests
 	@mkdir -p $(ARTIFACTS)
 	@rm -rf $(ARTIFACTS)/unit-tests.xcresult
 	@set -o pipefail; $(XCODEBUILD) \
@@ -136,23 +139,23 @@ vendor-media-helpers: ## Fetch yt-dlp/ffmpeg when manifests include URL+sha256
 ## ----- Complete stable gate -----
 
 .PHONY: test-integration
-test-integration: project ## Integration tests
+test-integration: native-dependencies project ## Integration tests
 	@set -o pipefail; $(XCODEBUILD) -only-testing:IntegrationTests test 2>&1 | tail -40
 
 .PHONY: test-recovery
-test-recovery: project ## Recovery / crash-boundary tests
+test-recovery: native-dependencies project ## Recovery / crash-boundary tests
 	@set -o pipefail; $(XCODEBUILD) -only-testing:RecoveryTests test 2>&1 | tail -40
 
 .PHONY: test-ui
-test-ui: project ## UI automation tests
+test-ui: native-dependencies project ## UI automation tests
 	@set -o pipefail; $(XCODEBUILD) -only-testing:UITests test 2>&1 | tail -40
 
 .PHONY: test-performance
-test-performance: project ## Performance measurement tests
+test-performance: native-dependencies project ## Performance measurement tests
 	@set -o pipefail; $(XCODEBUILD) -only-testing:PerformanceTests test 2>&1 | tail -40
 
 .PHONY: test-fuzz
-test-fuzz: project ## Property / enumerated / secure-coding tests
+test-fuzz: native-dependencies project ## Property / enumerated / secure-coding tests
 	@set -o pipefail; $(XCODEBUILD) \
 		-only-testing:UnitTests/JobStateTransitionTests \
 		-only-testing:UnitTests/SegmentStateTransitionTests \
@@ -160,26 +163,26 @@ test-fuzz: project ## Property / enumerated / secure-coding tests
 		-only-testing:UnitTests/XPCCodingTests test 2>&1 | tail -40
 
 .PHONY: analyze
-analyze: project ## Clang/Swift static analyzer
+analyze: native-dependencies project ## Clang/Swift static analyzer
 	@set -o pipefail; $(XCODEBUILD) -configuration $(CONFIG_DEBUG) analyze 2>&1 | tail -40
 
 # ASan and TSan run in separate passes (they are not combined — 05-quality §8).
 # Sanitizers are enabled via xcodebuild flags rather than plan-internal target IDs
 # (robust across project regeneration).
 .PHONY: test-asan
-test-asan: project ## Address Sanitizer pass (unit/integration/recovery)
+test-asan: native-dependencies project ## Address Sanitizer pass (unit/integration/recovery)
 	@set -o pipefail; $(XCODEBUILD) -enableAddressSanitizer YES \
 		-only-testing:UnitTests -only-testing:IntegrationTests -only-testing:RecoveryTests \
 		test 2>&1 | tail -40
 
 .PHONY: test-tsan
-test-tsan: project ## Thread Sanitizer pass (unit/integration/recovery)
+test-tsan: native-dependencies project ## Thread Sanitizer pass (unit/integration/recovery)
 	@set -o pipefail; $(XCODEBUILD) -enableThreadSanitizer YES \
 		-only-testing:UnitTests -only-testing:IntegrationTests -only-testing:RecoveryTests \
 		test 2>&1 | tail -40
 
 .PHONY: test-accessibility
-test-accessibility: project ## Accessibility UI audit (interactive lane)
+test-accessibility: native-dependencies project ## Accessibility UI audit (interactive lane)
 	@set -o pipefail; $(XCODEBUILD) -only-testing:UITests test 2>&1 | tail -40
 
 .PHONY: audit-dependencies
@@ -206,15 +209,15 @@ test-services-down: ## Stop fault services
 ## ----- Database / recovery -----
 
 .PHONY: db-migration-test
-db-migration-test: project ## Migration v1 round-trip tests
+db-migration-test: native-dependencies project ## Migration v1 round-trip tests
 	@set -o pipefail; $(XCODEBUILD) -only-testing:UnitTests/MigrationTests test 2>&1 | tail -40
 
 .PHONY: db-integrity-test
-db-integrity-test: project ## Database integrity tests
+db-integrity-test: native-dependencies project ## Database integrity tests
 	@set -o pipefail; $(XCODEBUILD) -only-testing:UnitTests/DatabaseIntegrityTests test 2>&1 | tail -40
 
 .PHONY: recovery-crash-matrix
-recovery-crash-matrix: project ## Crash-boundary reconciliation matrix
+recovery-crash-matrix: native-dependencies project ## Crash-boundary reconciliation matrix
 	@set -o pipefail; $(XCODEBUILD) -only-testing:RecoveryTests test 2>&1 | tail -40
 
 ## ----- Housekeeping -----

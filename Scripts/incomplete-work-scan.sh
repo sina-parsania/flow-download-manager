@@ -10,7 +10,7 @@ fail=0
 
 # First-party scan roots (skip ones that do not exist yet).
 roots=()
-for p in Sources Tests Extensions Scripts .github Makefile project.yml; do
+for p in Sources Tests BrowserExtension Scripts .github Makefile project.yml; do
     [ -e "$p" ] && roots+=("$p")
 done
 

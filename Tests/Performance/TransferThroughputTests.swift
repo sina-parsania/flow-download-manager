@@ -260,10 +260,8 @@ final class TransferThroughputTests: XCTestCase {
             }
         }
 
-        // Loss completion: mid-stream hangups must not leave a corrupt file when
-        // SegmentedTransfer retries. 1% is high enough to fire often on 8+
-        // connections; 0.1% is printed for the Mathis-style curve without a
-        // hard assert (a zero-drop run would make a "must drop" assert flake).
+        // Exploratory loss curves (seeded per connection index). Correctness is
+        // gated by DeterministicLossRecoveryIntegrationTests and `dropFirst=`.
         for loss in [0.1, 1.0] {
             server.reset()
             let root = FileManager.default.temporaryDirectory
@@ -285,7 +283,28 @@ final class TransferThroughputTests: XCTestCase {
             XCTAssertEqual(written, expected, "lossy transfer corrupted bytes at loss=\(loss)%")
             let seconds = Double(elapsed.components.seconds)
                 + Double(elapsed.components.attoseconds) / 1e18
-            print("[throughput] loss=\(loss)% complete in \(String(format: "%.2f", seconds))s")
+            let dropped = server.throughputConnectionsDroppedCount()
+            print(
+                "[throughput] loss=\(loss)% complete in \(String(format: "%.2f", seconds))s "
+                    + "(dropped=\(dropped), attempts=\(server.throughputConnectionAttemptCount()))"
+            )
         }
+
+        // Deterministic correctness gate for the same fixture.
+        server.reset()
+        let dropFirst = 3
+        let deterministicRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-loss-det-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: deterministicRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: deterministicRoot) }
+        let deterministicPartial = deterministicRoot.appendingPathComponent("loss-det.partial")
+        _ = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/throughput?size=\(size)&kbps=\(kbps)&dropFirst=\(dropFirst)",
+            partialURL: deterministicPartial,
+            hostMaxSegments: 8
+        )
+        XCTAssertGreaterThanOrEqual(server.throughputConnectionsDroppedCount(), dropFirst)
+        XCTAssertGreaterThan(server.throughputConnectionAttemptCount(), dropFirst)
+        XCTAssertEqual(try Data(contentsOf: deterministicPartial).count, size)
     }
 }

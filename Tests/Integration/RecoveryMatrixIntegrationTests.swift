@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Domain
 import EngineAgent
 import Foundation
 import Persistence
@@ -40,7 +41,14 @@ final class RecoveryMatrixIntegrationTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "downloading",
+            state: .connecting,
+            terminalReason: nil,
+            expectedRevision: nil
+        )
+        _ = try JobRepository.updateJobState(
+            database: database,
+            id: jobID,
+            state: .downloading,
             terminalReason: nil,
             expectedRevision: nil
         )
@@ -98,7 +106,7 @@ final class RecoveryMatrixIntegrationTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "failed",
+            state: .failed,
             terminalReason: "networkUnavailable",
             expectedRevision: nil
         )
@@ -107,7 +115,7 @@ final class RecoveryMatrixIntegrationTests: XCTestCase {
         _ = try JobRepository.updateJobState(
             database: database,
             id: jobID,
-            state: "queued",
+            state: .queued,
             terminalReason: nil,
             expectedRevision: nil
         )

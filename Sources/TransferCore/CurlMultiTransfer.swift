@@ -33,7 +33,7 @@ public extension TransferCore {
                 connectTimeoutMilliseconds: options.connectTimeoutMilliseconds,
                 transferTimeoutMilliseconds: options.transferTimeoutMilliseconds,
                 maxRedirects: options.maxRedirects,
-                abortFlag: abortFlag.map(\.pointer),
+                abortFlag: abortFlag?.cToken,
                 userpwd: options.userpwd,
                 proxyURL: options.proxyURL,
                 cookieJarPath: options.cookieJarPath,
@@ -51,6 +51,8 @@ public extension TransferCore {
                 throw TransferError.curl(code)
             case let .httpStatus(code):
                 throw TransferError.httpStatus(code)
+            case let .invalidRangeResponse(httpStatus):
+                throw TransferError.invalidRangeResponse(httpStatus: httpStatus)
             case let .incompleteWrite(expected, wrote):
                 throw TransferError.incompleteWrite(expected: expected, wrote: wrote)
             case .multiInitFailed, .easyCreateFailed, .multiAddFailed, .emptyRequests:

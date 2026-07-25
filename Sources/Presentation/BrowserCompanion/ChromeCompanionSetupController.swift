@@ -199,8 +199,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
             "Google Chrome",
             "--args",
             "--disable-features=DisableLoadExtensionCommandLineSwitch",
-            "--load-extension=\(extensionPath)",
-            "--restore-last-session"
+            "--load-extension=\(extensionPath)"
         ]
         try process.run()
         process.waitUntilExit()
@@ -259,11 +258,12 @@ public final class ChromeCompanionSetupController: ObservableObject {
 
     public static func preferredHostURL() -> URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        // Prefer /Applications (Launchpad / Finder Applications) over ~/Applications.
         let candidates = [
+            URL(fileURLWithPath: "/Applications/Flow Download Manager.app/Contents/MacOS/ChromeNativeHost"),
             home.appendingPathComponent(
                 "Applications/Flow Download Manager.app/Contents/MacOS/ChromeNativeHost"
             ),
-            URL(fileURLWithPath: "/Applications/Flow Download Manager.app/Contents/MacOS/ChromeNativeHost"),
             Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ChromeNativeHost")
         ]
         for url in candidates {
@@ -452,7 +452,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
         let source = """
         on run
           set extPath to "\(escapedForAppleScript)"
-          do shell script "/usr/bin/open -na " & quoted form of "/Applications/Google Chrome.app" & " --args --disable-features=DisableLoadExtensionCommandLineSwitch --load-extension=" & quoted form of extPath & " --restore-last-session"
+          do shell script "/usr/bin/open -na " & quoted form of "/Applications/Google Chrome.app" & " --args --disable-features=DisableLoadExtensionCommandLineSwitch --load-extension=" & quoted form of extPath
         end run
         """
         let temp = FileManager.default.temporaryDirectory

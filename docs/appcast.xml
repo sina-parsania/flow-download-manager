@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <!--
   Sparkle 2 appcast for Flow Download Manager (published feed).
 
@@ -9,13 +9,29 @@
 
     generate_appcast /path/to/release-dir -o docs/appcast.xml
 -->
-<rss version="2.0"
-     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
-     xmlns:dc="http://purl.org/dc/elements/1.1/">
-  <channel>
-    <title>Flow Download Manager</title>
-    <link>https://github.com/sina-parsania/flow-download-manager</link>
-    <description>In-app updates for Flow Download Manager</description>
-    <language>en</language>
-  </channel>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
+    <channel>
+        <title>Flow Download Manager</title>
+        <link>https://github.com/sina-parsania/flow-download-manager</link>
+        <description>In-app updates for Flow Download Manager</description>
+        <language>en</language>
+        <item>
+            <title>0.3.1</title>
+            <pubDate>Sat, 25 Jul 2026 05:08:02 +0330</pubDate>
+            <link>https://github.com/sina-parsania/flow-download-manager</link>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>0.3.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.1
+
+- Menu-bar agent (no Dock tile), single instance, Launch at Login
+- Purple Flow mark in the menu bar
+- Chrome companion polish and one-window handoff
+
+Community build — not Apple notarized. See the [GitHub release](https://github.com/sina-parsania/flow-download-manager/releases/tag/v0.3.1).
+]]></description>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.1/Flow-0.3.1.zip" length="24016076" type="application/octet-stream" sparkle:edSignature="lXyLyxRHw7y3FnqIeVXUlu23Q9ylYUkpvGbRc52ed50zMvbb4HwuPMcKfpDzgsFb0dbtRGTtHA+NyIYU7E5lBg=="/>
+        </item>
+    </channel>
 </rss>

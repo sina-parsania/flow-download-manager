@@ -32,7 +32,7 @@
 
 Community build — not Apple notarized.
 ]]></description>
-            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.3/Flow-0.3.3.zip" length="24313971" type="application/octet-stream" sparkle:edSignature="OmTVJz7bEvBN678mmgrq3haEHQ0o6pXWjcPHhxlGH2zH5ZwiiPOFh1JlkNnxXB0SEhWXFmj4sFKDl7AJcMglBw=="/>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.3/Flow-0.3.3.zip" length="24267287" type="application/octet-stream" sparkle:edSignature="zvH7rglNxbFvwq6Gx8ahSCaMfCkyx1ZC3Q9fgAsftz/bQTcdCnwhu8ll2HAgH0Y9ZrrnX0wPRoQ1PT6IV3hjCg=="/>
         </item>
         <item>
             <title>0.3.2</title>

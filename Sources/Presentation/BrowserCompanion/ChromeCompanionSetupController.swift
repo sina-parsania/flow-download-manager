@@ -211,17 +211,10 @@ public final class ChromeCompanionSetupController: ObservableObject {
         // Give Chrome a beat, then open the extensions page so the companion is visible.
         Task {
             try? await Task.sleep(for: .milliseconds(1500))
-            if let extensionsURL = URL(string: "chrome://extensions"),
-               let chromeApp = NSWorkspace.shared.urlForApplication(
-                   withBundleIdentifier: "com.google.Chrome"
-               ) {
-                let configuration = NSWorkspace.OpenConfiguration()
-                NSWorkspace.shared.open(
-                    [extensionsURL],
-                    withApplicationAt: chromeApp,
-                    configuration: configuration
-                )
-            }
+            let openExtensions = Process()
+            openExtensions.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            openExtensions.arguments = ["-a", "Google Chrome", "chrome://extensions"]
+            try? openExtensions.run()
         }
     }
 

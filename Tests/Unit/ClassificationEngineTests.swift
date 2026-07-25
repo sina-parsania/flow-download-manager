@@ -133,4 +133,41 @@ final class ClassificationEngineTests: XCTestCase {
         XCTAssertEqual(result.confidence, .low)
         XCTAssertEqual(result.evidence, "host-hint:videos")
     }
+
+    func testTextHTMLMapsToDocuments() {
+        let byMIME = ClassificationEngine.classify(
+            filenameEvidence: nil,
+            mimeEvidence: "text/html; charset=utf-8",
+            urlPathExtension: nil
+        )
+        XCTAssertEqual(byMIME.stableKey, "documents")
+        XCTAssertEqual(byMIME.confidence, .medium)
+
+        let byExt = ClassificationEngine.classify(
+            filenameEvidence: "about.html",
+            mimeEvidence: nil,
+            urlPathExtension: nil
+        )
+        XCTAssertEqual(byExt.stableKey, "documents")
+        XCTAssertEqual(byExt.confidence, .high)
+    }
+
+    func testMediaCDNHostHintMapsToVideos() {
+        let result = ClassificationEngine.classify(
+            filenameEvidence: "binary",
+            mimeEvidence: nil,
+            urlPath: "https://media-cdn.atlassian.com/us-west-2/v2/cdn/client/x/file/y/binary?dl=true"
+        )
+        XCTAssertEqual(result.stableKey, "videos")
+    }
+
+    func testVideoMIMEMapsExtensionlessNameToVideos() {
+        let result = ClassificationEngine.classify(
+            filenameEvidence: "media-cdn.example.com-client",
+            mimeEvidence: "video/mp4",
+            urlPathExtension: nil
+        )
+        XCTAssertEqual(result.stableKey, "videos")
+        XCTAssertEqual(result.confidence, .medium)
+    }
 }

@@ -85,4 +85,74 @@ final class FilenameSanitizerTests: XCTestCase {
         )
         XCTAssertEqual(fromToken, "bleach-ep-09.mkv")
     }
+
+    func testBinaryPathIsWeakAndMIMEAddsVideoExtension() {
+        XCTAssertTrue(FilenameSanitizer.isWeakFilename("binary"))
+        let name = FilenameSanitizer.preferredFilename(
+            contentDisposition: nil,
+            urlString: "https://media-cdn.example.com/cdn/client/abc/file/def/binary?dl=true",
+            existingEvidence: "binary",
+            contentType: "video/mp4"
+        )
+        XCTAssertTrue(name.hasSuffix(".mp4"), name)
+        XCTAssertFalse(name.lowercased().contains("true"))
+    }
+
+    func testHTMLMIMEAddsHtmlExtension() {
+        let name = FilenameSanitizer.preferredFilename(
+            contentDisposition: nil,
+            urlString: "https://example.com/article/about-us",
+            existingEvidence: nil,
+            contentType: "text/html; charset=utf-8"
+        )
+        XCTAssertTrue(name.hasSuffix(".html"), name)
+    }
+
+    func testGenericBinExtensionReplacedByMIME() {
+        let name = FilenameSanitizer.ensuringExtension(
+            "media-cdn.example.com.bin",
+            contentType: "video/webm"
+        )
+        XCTAssertEqual(name, "media-cdn.example.com.webm")
+    }
+
+    func testDownloadTrueQueryIgnored() {
+        let name = FilenameSanitizer.filename(
+            fromURLString: "https://cdn.example.com/binary?dl=true&download=true"
+        )
+        XCTAssertNotEqual(name.lowercased(), "true")
+        XCTAssertNotEqual(name.lowercased(), "binary")
+    }
+
+    func testAtlassianStyleContentDispositionTitle() {
+        let header =
+            "attachment; filename=\"Cooked count is not updated after marking a recipe as cooked from View Recipe.MP4\""
+        let parsed = FilenameSanitizer.filenameFromContentDisposition(header)
+        XCTAssertEqual(
+            parsed,
+            "Cooked count is not updated after marking a recipe as cooked from View Recipe.MP4"
+        )
+        let preferred = FilenameSanitizer.preferredFilename(
+            contentDisposition: header,
+            urlString: "https://media-cdn.example.com/cdn/client/3994a9d9-a8f2-475e-934e-3cbb90a0f872/file/554c4bda-135e-463c-92f2-ea815c24c172/binary?dl=true",
+            existingEvidence: "binary",
+            contentType: "video/mp4"
+        )
+        XCTAssertEqual(
+            preferred,
+            "Cooked count is not updated after marking a recipe as cooked from View Recipe.MP4"
+        )
+    }
+
+    func testCDNUUIDPathTokensAreWeak() {
+        XCTAssertTrue(
+            FilenameSanitizer.isWeakFilename("554c4bda-135e-463c-92f2-ea815c24c172")
+        )
+        let name = FilenameSanitizer.filename(
+            fromURLString:
+            "https://media-cdn.example.com/cdn/client/3994a9d9-a8f2-475e-934e-3cbb90a0f872/file/554c4bda-135e-463c-92f2-ea815c24c172/binary"
+        )
+        XCTAssertFalse(name.lowercased().contains("554c4bda"))
+        XCTAssertNotEqual(name.lowercased(), "binary")
+    }
 }

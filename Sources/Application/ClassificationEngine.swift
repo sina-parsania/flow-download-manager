@@ -171,7 +171,7 @@ public enum ClassificationEngine {
         case "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "tiff", "tif", "svg", "ico", "raw":
             return "images"
         case "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods", "odp",
-             "csv", "md", "epub", "pages", "numbers", "key":
+             "csv", "md", "epub", "pages", "numbers", "key", "html", "htm", "xhtml":
             return "documents"
         case "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "cab":
             return "archives"
@@ -218,7 +218,8 @@ public enum ClassificationEngine {
         let lower = raw.lowercased()
         let videoHosts = [
             "youtube.", "youtu.be", "vimeo.", "twitch.", "dailymotion.",
-            "streamable.", "nicovideo.", "bilibili.", "tiktok."
+            "streamable.", "nicovideo.", "bilibili.", "tiktok.",
+            "media-cdn.", "videocdn.", "video-cdn."
         ]
         if videoHosts.contains(where: { lower.contains($0) }) {
             return "videos"
@@ -246,6 +247,8 @@ public enum ClassificationEngine {
              "text/csv",
              "text/markdown",
              "text/xml",
+             "text/html",
+             "application/xhtml+xml",
              "application/json":
             return "documents"
         case "application/zip",

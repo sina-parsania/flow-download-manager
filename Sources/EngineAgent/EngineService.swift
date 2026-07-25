@@ -407,7 +407,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         let name = FilenameSanitizer.preferredFilename(
             contentDisposition: nil,
             urlString: downloadURL,
-            existingEvidence: resource.filenameEvidence
+            existingEvidence: resource.filenameEvidence,
+            contentType: resource.mimeEvidence
         )
         let live = progressMap[job.id]
         let total = live?.totalBytes ?? resource.expectedSize

@@ -9,7 +9,8 @@ public enum FilenameSanitizer {
         "download", "download.bin", "dl", "get", "file", "files", "index",
         "watch", "stream", "embed", "play", "api", "video", "videos",
         "media", "asset", "assets", "raw", "source", "redirect", "r",
-        "default", "untitled", "unknown"
+        "default", "untitled", "unknown", "binary", "blob", "data", "payload",
+        "content", "object", "attachment", "true", "false"
     ]
 
     public static func sanitize(_ raw: String, fallback: String = "download.bin") -> String {
@@ -62,6 +63,9 @@ public enum FilenameSanitizer {
         }
         // Base64-encoded URL blobs (common CDN path tokens) are not display names.
         if looksLikeBase64URLToken(noQuery) { return true }
+        // Opaque CDN object ids (Atlassian / S3-style UUIDs) are not titles.
+        if looksLikeUUIDToken(noQuery) { return true }
+        if looksLikeHexBlob(noQuery) { return true }
         return false
     }
 
@@ -93,26 +97,85 @@ public enum FilenameSanitizer {
         return sanitize("download.bin")
     }
 
-    /// Prefer Content-Disposition, then URL heuristics.
+    /// Prefer Content-Disposition, then URL heuristics, then MIME→extension.
     public static func preferredFilename(
         contentDisposition: String?,
         urlString: String?,
-        existingEvidence: String? = nil
+        existingEvidence: String? = nil,
+        contentType: String? = nil
     ) -> String {
-        if let disposition = contentDisposition,
-           let fromCD = filenameFromContentDisposition(disposition) {
-            return sanitize(fromCD)
+        let base: String = if let disposition = contentDisposition,
+                              let fromCD = filenameFromContentDisposition(disposition) {
+            sanitize(fromCD)
+        } else if let existing = existingEvidence, !isWeakFilename(existing) {
+            sanitize(existing)
+        } else if let urlString {
+            filename(fromURLString: urlString)
+        } else if let existing = existingEvidence {
+            sanitize(existing)
+        } else {
+            sanitize("download.bin")
         }
-        if let existing = existingEvidence, !isWeakFilename(existing) {
-            return sanitize(existing)
+        return ensuringExtension(base, contentType: contentType)
+    }
+
+    /// Append (or replace a generic placeholder like `.bin`) with a MIME-derived extension.
+    public static func ensuringExtension(_ filename: String, contentType: String?) -> String {
+        let cleaned = sanitize(filename)
+        guard let mimeExt = `extension`(forMIME: contentType) else { return cleaned }
+        let currentExt = (cleaned as NSString).pathExtension.lowercased()
+        if currentExt.isEmpty {
+            return sanitize("\(cleaned).\(mimeExt)")
         }
-        if let urlString {
-            return filename(fromURLString: urlString)
+        // Host fallbacks often invent `.bin`; swap when MIME knows better.
+        let genericExts: Set<String> = ["bin", "dat", "tmp", "download", "file"]
+        if genericExts.contains(currentExt), currentExt != mimeExt {
+            let base = (cleaned as NSString).deletingPathExtension
+            return sanitize("\(base).\(mimeExt)")
         }
-        if let existing = existingEvidence {
-            return sanitize(existing)
+        return cleaned
+    }
+
+    /// Map a Content-Type to a conventional file extension (no leading dot).
+    public static func `extension`(forMIME contentType: String?) -> String? {
+        guard let mime = normalizedMIME(contentType) else { return nil }
+        if mime == "text/html" || mime == "application/xhtml+xml" { return "html" }
+        if mime == "application/pdf" { return "pdf" }
+        if mime == "application/zip" || mime == "application/x-zip-compressed" { return "zip" }
+        if mime == "application/gzip" || mime == "application/x-gzip" { return "gz" }
+        if mime == "application/json" { return "json" }
+        if mime == "text/csv" { return "csv" }
+        if mime == "text/markdown" { return "md" }
+        if mime == "image/jpeg" { return "jpg" }
+        if mime == "image/svg+xml" { return "svg" }
+        if mime.hasPrefix("video/")
+            || mime.hasPrefix("audio/")
+            || mime.hasPrefix("image/") {
+            let subtype = String(mime.split(separator: "/", maxSplits: 1).last ?? "")
+            let cleaned = subtype
+                .split(separator: "+", maxSplits: 1).first
+                .map(String.init) ?? subtype
+            if cleaned.isEmpty || cleaned == "*" { return nil }
+            // video/quicktime → mov
+            if cleaned == "quicktime" { return "mov" }
+            if cleaned == "x-matroska" { return "mkv" }
+            if cleaned == "mpeg" { return "mpg" }
+            if cleaned.hasPrefix("x-") {
+                return String(cleaned.dropFirst(2))
+            }
+            return cleaned
         }
-        return sanitize("download.bin")
+        return nil
+    }
+
+    private static func normalizedMIME(_ value: String?) -> String? {
+        guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        let withoutParams = raw.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init) ?? raw
+        return withoutParams.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     /// RFC 6266-ish: `attachment; filename="x.mp4"` / `filename*=UTF-8''x.mp4`
@@ -183,7 +246,7 @@ public enum FilenameSanitizer {
         )
 
         for key in queryNameKeys {
-            if let value = map[key], !isWeakFilename(value) {
+            if let value = map[key], !isWeakFilename(value), !isBooleanishQueryValue(value) {
                 // Prefer values that look like filenames (have extension) when key is vague.
                 if key == "download" || key == "title" || key == "name" || key == "episode" {
                     return ensureExtensionHint(value, url: url)
@@ -245,7 +308,8 @@ public enum FilenameSanitizer {
             "mp4", "m4v", "mkv", "mov", "webm", "avi", "ts", "m3u8",
             "mp3", "m4a", "flac", "aac", "ogg",
             "jpg", "jpeg", "png", "gif", "webp",
-            "zip", "rar", "7z", "pdf", "dmg", "pkg"
+            "zip", "rar", "7z", "pdf", "dmg", "pkg",
+            "html", "htm"
         ]
         return media.contains(ext)
     }
@@ -260,6 +324,12 @@ public enum FilenameSanitizer {
         return cleaned
     }
 
+    private static func isBooleanishQueryValue(_ value: String) -> Bool {
+        let lower = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "true" || lower == "false" || lower == "1" || lower == "0"
+            || lower == "yes" || lower == "no"
+    }
+
     private static func looksLikeBase64URLToken(_ token: String) -> Bool {
         guard token.count >= 24 else { return false }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "+/=_-"))
@@ -267,6 +337,22 @@ public enum FilenameSanitizer {
         // `aHR0` / `ahr0` is base64 for `htt` — common for encoded https URLs.
         let lower = token.lowercased()
         return lower.hasPrefix("ahr0")
+    }
+
+    private static func looksLikeUUIDToken(_ token: String) -> Bool {
+        let parts = token.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 5,
+              parts[0].count == 8, parts[1].count == 4, parts[2].count == 4,
+              parts[3].count == 4, parts[4].count == 12
+        else { return false }
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        return parts.allSatisfy { part in part.unicodeScalars.allSatisfy { hex.contains($0) } }
+    }
+
+    private static func looksLikeHexBlob(_ token: String) -> Bool {
+        guard token.count >= 32, (token as NSString).pathExtension.isEmpty else { return false }
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        return token.unicodeScalars.allSatisfy { hex.contains($0) }
     }
 
     private static func decodeBase64URLString(_ token: String) -> String? {

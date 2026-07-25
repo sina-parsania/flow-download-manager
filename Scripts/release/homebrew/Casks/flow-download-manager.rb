@@ -11,8 +11,8 @@
 # "Flow Download Manager.app" and names the image
 # DownloadManager-<version>-unsigned.dmg.
 cask "flow-download-manager" do
-  version "0.3.1"
-  sha256 "3bb7598c9904cb4dd7c990102bd193d45c1d8a81379c6d77fd3f698df753f827"
+  version "0.3.2"
+  sha256 "5979d950f1fc1e58c1b050ad48c036829ec8d1f2962b8eb63582ca3b1d8d2d22"
 
   url "https://github.com/sina-parsania/flow-download-manager/releases/download/v#{version}/DownloadManager-#{version}-unsigned.dmg",
       verified: "github.com/sina-parsania/flow-download-manager/"

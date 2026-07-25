@@ -2,7 +2,18 @@
 
 ## Unreleased
 
-Nothing yet — next changes land here after `0.3.1`.
+Nothing yet — next changes land here after `0.3.2`.
+
+## 0.3.2 — 2026-07-25
+
+Community fix release. Still **unsigned** (ADR 0008).
+
+### Fixes
+- CDN / signed-link naming: use Content-Disposition + Content-Type from the first probe before choosing the on-disk name (no more `binary` / UUID filenames)
+- MIME→extension for extensionless URLs (`video/mp4` → `.mp4`, `text/html` → `.html`)
+- Classify `text/html` / `.html` as documents; `media-cdn.*` host hint → videos
+- Promote/rename partial to the real title after transfer when needed
+- Ignore weak query values (`dl=true`) and opaque CDN path tokens
 
 ## 0.3.1 — 2026-07-25
 

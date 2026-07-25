@@ -98,7 +98,7 @@ public final class UpdateCheckController: ObservableObject {
     private static func remoteFeedIsReachable() async -> Bool {
         guard let url = URL(string: remoteFeedURLString) else { return false }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
-        request.setValue("Flow/0.3.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("Flow/0.3.2", forHTTPHeaderField: "User-Agent")
         request.setValue("application/xml", forHTTPHeaderField: "Accept")
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         do {

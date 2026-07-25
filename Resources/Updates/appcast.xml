@@ -16,6 +16,24 @@
         <description>In-app updates for Flow Download Manager</description>
         <language>en</language>
         <item>
+            <title>0.3.2</title>
+            <pubDate>Sat, 25 Jul 2026 17:58:05 +0330</pubDate>
+            <link>https://github.com/sina-parsania/flow-download-manager</link>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.3.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.2
+
+- Fix CDN / signed-link filenames (Content-Disposition + MIME on first probe)
+- Correct video/HTML category and extensions for extensionless URLs
+- No more `binary` / UUID placeholder names
+
+Community build — not Apple notarized.
+]]></description>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.2/Flow-0.3.2.zip" length="24067318" type="application/octet-stream" sparkle:edSignature="isvl0jfSiC3M8Sf2JBhskLDZBXWbuuUPRhbnGXbpBBRc+Gg5TZrJvXEtfWN3ZITgJymtBqBRMF9ut8ZWzFnoCA=="/>
+        </item>
+        <item>
             <title>0.3.1</title>
             <pubDate>Sat, 25 Jul 2026 05:08:02 +0330</pubDate>
             <link>https://github.com/sina-parsania/flow-download-manager</link>

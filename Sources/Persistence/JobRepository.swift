@@ -685,7 +685,8 @@ public enum JobRepository {
             let suggested = FilenameSanitizer.preferredFilename(
                 contentDisposition: nil,
                 urlString: resource.canonicalURL,
-                existingEvidence: resource.filenameEvidence
+                existingEvidence: resource.filenameEvidence,
+                contentType: resource.mimeEvidence
             )
             return TransferJobDetails(
                 jobID: job.id,
@@ -751,7 +752,8 @@ public enum JobRepository {
             let betterName = FilenameSanitizer.preferredFilename(
                 contentDisposition: contentDisposition,
                 urlString: finalURL ?? resource.canonicalURL,
-                existingEvidence: resource.filenameEvidence
+                existingEvidence: resource.filenameEvidence,
+                contentType: mime ?? resource.mimeEvidence
             )
             resource.filenameEvidence = betterName
             resource.identityRevision += 1

@@ -27,7 +27,7 @@ Options:
 curl -fsSL https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/Scripts/install.sh | bash -s -- --system
 
 # Pin a tag
-curl -fsSL https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/Scripts/install.sh | bash -s -- --tag v0.3.1
+curl -fsSL https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/Scripts/install.sh | bash -s -- --tag v0.3.2
 
 # Install without launching
 curl -fsSL https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/Scripts/install.sh | bash -s -- --no-open
@@ -102,7 +102,7 @@ Layering is strict: `Domain` → `XPCContracts` → `Persistence` / `EngineAgent
 
 ## Status
 
-**v0.3.1** is the current documented release — menu-bar agent, Chrome companion polish, resilient transfer engine, library UX, and Sparkle in-app updates (manual check by default). See [CHANGELOG.md](CHANGELOG.md).
+**v0.3.2** is the current documented release — CDN filename/category fixes, menu-bar agent, Chrome companion, and Sparkle in-app updates (manual check by default). See [CHANGELOG.md](CHANGELOG.md).
 
 Still evolving / deferred by ADR: VoiceOver pass, libtorrent (magnets stay unsupported), bundled yt-dlp without checksummed VendorBuild manifests, signed Safari extension, optional notarization.
 

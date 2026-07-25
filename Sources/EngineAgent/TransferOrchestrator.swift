@@ -277,19 +277,6 @@ public actor TransferOrchestrator {
                 database: database, id: jobID, state: "connecting",
                 terminalReason: nil, expectedRevision: nil
             )
-            // Reclassify from URL/filename before bytes move — streaming CDNs often
-            // enqueue as `other` until extension/MIME is known.
-            Self.refineCategoryIfOther(
-                database: database,
-                jobID: jobID,
-                filenameEvidence: details.suggestedFilename,
-                mimeEvidence: nil,
-                url: details.canonicalURL
-            )
-            _ = try JobRepository.updateJobState(
-                database: database, id: jobID, state: "downloading",
-                terminalReason: nil, expectedRevision: nil
-            )
             beginSleepAssertion(for: jobID)
 
             let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
@@ -297,7 +284,50 @@ public actor TransferOrchestrator {
                 if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
             }
 
-            let filename = FilenameSanitizer.sanitize(details.suggestedFilename)
+            let options = try buildDownloadOptions(from: details, hostSetting: hostSetting)
+            // CDN links often expose the real title only via Content-Disposition /
+            // Content-Type on the first probe — apply that *before* choosing the
+            // on-disk name so we never land "binary.partial" for a named .mp4.
+            let earlyIdentity = try? await Self.probeOffActor(
+                url: details.canonicalURL,
+                options: options
+            )
+            if cancelledJobIDs.contains(jobID) || abort.isSet && cancelledJobIDs.contains(jobID) {
+                _ = try JobRepository.updateJobState(
+                    database: database, id: jobID, state: "cancelled",
+                    terminalReason: "userCancelled", expectedRevision: nil
+                )
+                cancelledJobIDs.remove(jobID)
+                progressLedger.remove(jobID)
+                return
+            }
+            if let earlyIdentity {
+                try? JobRepository.updateResourceIdentity(
+                    database: database,
+                    jobID: jobID,
+                    finalURL: earlyIdentity.finalURL,
+                    expectedSize: TransferCore.totalLength(from: earlyIdentity),
+                    etag: earlyIdentity.etag,
+                    mime: earlyIdentity.contentType,
+                    contentDisposition: earlyIdentity.contentDisposition
+                )
+            }
+            let filename = FilenameSanitizer.sanitize(
+                FilenameSanitizer.preferredFilename(
+                    contentDisposition: earlyIdentity?.contentDisposition,
+                    urlString: earlyIdentity?.finalURL ?? details.canonicalURL,
+                    existingEvidence: details.suggestedFilename,
+                    contentType: earlyIdentity?.contentType
+                )
+            )
+            Self.refineCategoryIfOther(
+                database: database,
+                jobID: jobID,
+                filenameEvidence: filename,
+                mimeEvidence: earlyIdentity?.contentType,
+                url: details.canonicalURL
+            )
+
             let partial = details.destinationDirectory.appendingPathComponent("\(filename).partial")
             let preferredFinal = details.destinationDirectory.appendingPathComponent(filename)
             let conflictPolicy = DestinationConflictPolicy.parse(details.conflictPolicy)
@@ -322,7 +352,10 @@ public actor TransferOrchestrator {
                 return
             }
 
-            let options = try buildDownloadOptions(from: details, hostSetting: hostSetting)
+            _ = try JobRepository.updateJobState(
+                database: database, id: jobID, state: "downloading",
+                terminalReason: nil, expectedRevision: nil
+            )
 
             // libcurl calls back once per write chunk from N segment threads.
             // Spawning a Task per callback flooded this actor — the same actor
@@ -413,7 +446,8 @@ public actor TransferOrchestrator {
             let betterName = FilenameSanitizer.preferredFilename(
                 contentDisposition: outcome.identity.contentDisposition,
                 urlString: outcome.identity.finalURL,
-                existingEvidence: details.suggestedFilename
+                existingEvidence: details.suggestedFilename,
+                contentType: outcome.identity.contentType
             )
             Self.refineCategoryIfOther(
                 database: database,
@@ -423,16 +457,27 @@ public actor TransferOrchestrator {
                 url: outcome.identity.finalURL
             )
 
+            // CD / MIME often arrive only after the transfer — rename the
+            // on-disk partial so promote lands on the real name (e.g. .mp4 / .html).
+            let promotePaths = try Self.resolvePromotePaths(
+                destinationDirectory: details.destinationDirectory,
+                startedFilename: filename,
+                betterFilename: betterName,
+                startedPartial: partial,
+                startedFinal: final,
+                conflictPolicy: conflictPolicy
+            )
+
             _ = try JobRepository.updateJobState(
                 database: database, id: jobID, state: "verifying",
                 terminalReason: nil, expectedRevision: nil
             )
             if let checksum = details.expectedChecksum, !checksum.isEmpty {
-                try IntegrityVerifier.verifySHA256(ofFile: partial, expectedHex: checksum)
+                try IntegrityVerifier.verifySHA256(ofFile: promotePaths.partial, expectedHex: checksum)
             }
             try TransferFinalizer.promote(
-                partialURL: partial,
-                finalURL: final,
+                partialURL: promotePaths.partial,
+                finalURL: promotePaths.final,
                 expectedSize: outcome.bytesWritten
             )
             _ = try JobRepository.updateJobState(
@@ -440,15 +485,15 @@ public actor TransferOrchestrator {
                 terminalReason: nil, expectedRevision: nil
             )
             if Self.shouldExtractZip(
-                filename: filename,
+                filename: promotePaths.final.lastPathComponent,
                 mimeEvidence: outcome.identity.contentType
             ), AgentBoolSettings.bool(forKey: AgentBoolSettings.zipAutoExtractEnabledKey) {
                 do {
-                    let basename = final.deletingPathExtension().lastPathComponent
-                    let extractDir = final.deletingLastPathComponent()
+                    let basename = promotePaths.final.deletingPathExtension().lastPathComponent
+                    let extractDir = promotePaths.final.deletingLastPathComponent()
                         .appendingPathComponent("\(basename)-extracted", isDirectory: true)
                     try SafeZipExtractor.extract(
-                        archiveURL: final,
+                        archiveURL: promotePaths.final,
                         destinationDirectory: extractDir
                     )
                 } catch {
@@ -684,6 +729,80 @@ public actor TransferOrchestrator {
         }.value
     }
 
+    /// Tiny ranged probe so Content-Disposition / MIME can name the job before bytes land.
+    private nonisolated static func probeOffActor(
+        url: String,
+        options: TransferCore.DownloadOptions
+    ) async throws -> TransferCore.ResourceIdentity {
+        try await Task.detached(priority: .utility) {
+            try TransferCore.probeRangeSupport(url: url, options: options)
+        }.value
+    }
+
+    /// When Content-Disposition / MIME improves the name after bytes land,
+    /// move the `.partial` (+ `.segmap`) so promote uses the real filename.
+    private nonisolated static func resolvePromotePaths(
+        destinationDirectory: URL,
+        startedFilename: String,
+        betterFilename: String,
+        startedPartial: URL,
+        startedFinal: URL,
+        conflictPolicy: DestinationConflictPolicy
+    ) throws -> (partial: URL, final: URL) {
+        let better = FilenameSanitizer.sanitize(betterFilename)
+        guard better != startedFilename, !better.isEmpty else {
+            return (startedPartial, startedFinal)
+        }
+
+        var preferredFinal = destinationDirectory.appendingPathComponent(better)
+        let destinationExists = FileManager.default.fileExists(atPath: preferredFinal.path)
+        switch DestinationConflictResolver.action(
+            policy: conflictPolicy,
+            destinationExists: destinationExists
+        ) {
+        case .usePreferred, .overwrite:
+            break
+        case .uniquify:
+            preferredFinal = Self.uniquifiedDestinationURL(preferredFinal)
+        case .fail:
+            // Keep the name we already downloaded under rather than failing late.
+            return (startedPartial, startedFinal)
+        }
+
+        let preferredPartial = destinationDirectory
+            .appendingPathComponent("\(preferredFinal.lastPathComponent).partial")
+        let fm = FileManager.default
+        if startedPartial.path != preferredPartial.path {
+            if fm.fileExists(atPath: preferredPartial.path) {
+                try fm.removeItem(at: preferredPartial)
+            }
+            try fm.moveItem(at: startedPartial, to: preferredPartial)
+            let oldMap = URL(fileURLWithPath: startedPartial.path + ".segmap")
+            let newMap = URL(fileURLWithPath: preferredPartial.path + ".segmap")
+            if fm.fileExists(atPath: oldMap.path) {
+                try? fm.removeItem(at: newMap)
+                try fm.moveItem(at: oldMap, to: newMap)
+            }
+        }
+        return (preferredPartial, preferredFinal)
+    }
+
+    private nonisolated static func uniquifiedDestinationURL(_ url: URL) -> URL {
+        guard FileManager.default.fileExists(atPath: url.path) else { return url }
+        let ext = url.pathExtension
+        let base = url.deletingPathExtension().lastPathComponent
+        let dir = url.deletingLastPathComponent()
+        for i in 2 ..< 10000 {
+            let candidate = ext.isEmpty
+                ? dir.appendingPathComponent("\(base) (\(i))")
+                : dir.appendingPathComponent("\(base) (\(i)).\(ext)")
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return dir.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
+    }
+
     /// Auto-assign built-in categories when the job is still `other`.
     private nonisolated static func refineCategoryIfOther(
         database: EngineDatabase,
@@ -805,19 +924,7 @@ public actor TransferOrchestrator {
     }
 
     private func uniquifiedURL(_ url: URL) -> URL {
-        guard FileManager.default.fileExists(atPath: url.path) else { return url }
-        let ext = url.pathExtension
-        let base = url.deletingPathExtension().lastPathComponent
-        let dir = url.deletingLastPathComponent()
-        for i in 2 ..< 10000 {
-            let candidate = ext.isEmpty
-                ? dir.appendingPathComponent("\(base) (\(i))")
-                : dir.appendingPathComponent("\(base) (\(i)).\(ext)")
-            if !FileManager.default.fileExists(atPath: candidate.path) {
-                return candidate
-            }
-        }
-        return dir.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
+        Self.uniquifiedDestinationURL(url)
     }
 
     /// ZIP post-process when filename ends with `.zip` or MIME evidence mentions zip.

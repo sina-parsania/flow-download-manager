@@ -99,14 +99,13 @@ open .build/DerivedData/Build/Products/Debug/DownloadManager.app
 
 ## Chrome companion
 
-Chrome won’t install Flow’s companion silently for community builds (no Web Store
-listing). Inside Flow use:
+Chrome 137+ blocks `--load-extension` on branded Chrome. Flow restarts Chrome with
+`--disable-features=DisableLoadExtensionCommandLineSwitch` so the companion can
+attach for that session — no Load unpacked.
 
 **Settings → Browser companion → Open Chrome with Companion**
 
-That registers the native host and restarts Chrome with the companion already
-attached — no Load unpacked. Optional: **Install Chrome Launcher in Applications**
-for a Dock/double-click shortcut.
+Optional: **Install Chrome Launcher in Applications** for a Dock/double-click shortcut.
 
 From a source checkout you can still use the script:
 

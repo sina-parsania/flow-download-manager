@@ -46,7 +46,7 @@ pingButton.addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "ping" }, (result) => {
     if (chrome.runtime.lastError || !result?.ok) {
       statusEl.textContent =
-        "Host unavailable. Install or open Flow Download Manager, then run Scripts/install-chrome-native-host.sh.";
+          "Host unavailable. Open Flow → Settings → Open Chrome with Companion, then try again.";
       return;
     }
     statusEl.textContent = "Host OK.";

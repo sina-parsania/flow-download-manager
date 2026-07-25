@@ -59,7 +59,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
     public func refreshStatus() {
         let supportURL = Self.installedExtensionDirectory()
         extensionFolderPath = supportURL.path
-        let hostURL = Self.embeddedHostURL()
+        let hostURL = Self.preferredHostURL()
         let manifestURL = Self.chromeManifestURL()
         guard let hostURL else {
             isRegistered = false
@@ -170,7 +170,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
     private func prepareCompanionFiles() throws {
         let extensionURL = try Self.materializeExtensionDirectory()
         extensionFolderPath = extensionURL.path
-        let hostURL = try Self.requireEmbeddedHostURL()
+        let hostURL = try Self.requirePreferredHostURL()
         let ids = ChromeUnpackedExtensionID.candidates(for: extensionURL).map {
             ChromeUnpackedExtensionID.make(directoryPath: $0)
         }
@@ -190,14 +190,15 @@ public final class ChromeCompanionSetupController: ObservableObject {
             throw CompanionSetupError.chromeMissing
         }
 
-        // `open --args` is the reliable way to pass Chrome flags; NSWorkspace
-        // sometimes drops them when an instance is already registered.
+        // Chrome 137+ branded builds ignore `--load-extension` unless this
+        // temporary kill-switch feature is disabled (still required on 150).
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         process.arguments = [
             "-na",
             "Google Chrome",
             "--args",
+            "--disable-features=DisableLoadExtensionCommandLineSwitch",
             "--load-extension=\(extensionPath)",
             "--restore-last-session"
         ]
@@ -206,18 +207,34 @@ public final class ChromeCompanionSetupController: ObservableObject {
         guard process.terminationStatus == 0 else {
             throw CompanionSetupError.chromeMissing
         }
+
+        // Give Chrome a beat, then open the extensions page so the companion is visible.
+        Task {
+            try? await Task.sleep(for: .milliseconds(1500))
+            if let extensionsURL = URL(string: "chrome://extensions"),
+               let chromeApp = NSWorkspace.shared.urlForApplication(
+                   withBundleIdentifier: "com.google.Chrome"
+               ) {
+                let configuration = NSWorkspace.OpenConfiguration()
+                NSWorkspace.shared.open(
+                    [extensionsURL],
+                    withApplicationAt: chromeApp,
+                    configuration: configuration
+                )
+            }
+        }
     }
 
     private func presentOpenedResult() {
         resultTitle = "Chrome opened with Flow"
         resultMessage = """
-        The companion is attached for this Chrome session.
+        The companion should appear on chrome://extensions for this session.
 
         Pin “Flow Download Manager Companion” from the puzzle icon, then use the \
         popup or right-click → send link.
 
-        Tip: Settings → Install Chrome launcher puts a one-click app in ~/Applications \
-        so you don’t need Flow open first.
+        Chrome 137+ blocks silent extension loading; Flow re-enables the temporary \
+        developer switch for this launch only.
         """
         isResultPresented = true
         EngineLog.browserExtension.info("Chrome launched with companion load-extension")
@@ -247,10 +264,25 @@ public final class ChromeCompanionSetupController: ObservableObject {
             .appendingPathComponent("ChromeCompanion", isDirectory: true)
     }
 
+    public static func preferredHostURL() -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            home.appendingPathComponent(
+                "Applications/Flow Download Manager.app/Contents/MacOS/ChromeNativeHost"
+            ),
+            URL(fileURLWithPath: "/Applications/Flow Download Manager.app/Contents/MacOS/ChromeNativeHost"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ChromeNativeHost")
+        ]
+        for url in candidates {
+            if FileManager.default.isExecutableFile(atPath: url.path) {
+                return url
+            }
+        }
+        return nil
+    }
+
     public static func embeddedHostURL() -> URL? {
-        let url = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/MacOS/ChromeNativeHost", isDirectory: false)
-        return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
+        preferredHostURL()
     }
 
     public static func bundledExtensionSourceURL() -> URL? {
@@ -285,11 +317,15 @@ public final class ChromeCompanionSetupController: ObservableObject {
             .appendingPathComponent("\(hostName).json", isDirectory: false)
     }
 
-    static func requireEmbeddedHostURL() throws -> URL {
-        guard let url = embeddedHostURL() else {
+    static func requirePreferredHostURL() throws -> URL {
+        guard let url = preferredHostURL() else {
             throw CompanionSetupError.hostMissing
         }
         return url
+    }
+
+    static func requireEmbeddedHostURL() throws -> URL {
+        try requirePreferredHostURL()
     }
 
     static func isChromeRunning() -> Bool {
@@ -423,7 +459,7 @@ public final class ChromeCompanionSetupController: ObservableObject {
         let source = """
         on run
           set extPath to "\(escapedForAppleScript)"
-          do shell script "/usr/bin/open -na " & quoted form of "/Applications/Google Chrome.app" & " --args --load-extension=" & quoted form of extPath & " --restore-last-session"
+          do shell script "/usr/bin/open -na " & quoted form of "/Applications/Google Chrome.app" & " --args --disable-features=DisableLoadExtensionCommandLineSwitch --load-extension=" & quoted form of extPath & " --restore-last-session"
         end run
         """
         let temp = FileManager.default.temporaryDirectory

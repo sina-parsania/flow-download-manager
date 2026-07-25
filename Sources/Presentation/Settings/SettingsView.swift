@@ -310,9 +310,9 @@ public struct SettingsView: View {
 
             Section("Browser companion") {
                 Text(
-                    "Chrome won’t install Flow’s companion silently (no Web Store listing "
-                        + "for community builds). Flow attaches it automatically when Chrome "
-                        + "is opened from here — no Load unpacked."
+                    "Chrome 137+ blocks silent extension loading. Flow restarts Chrome with a "
+                        + "temporary developer switch so the companion attaches in one click — "
+                        + "no Load unpacked."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

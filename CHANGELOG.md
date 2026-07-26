@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.5 — 2026-07-27
+
+Community patch. Still **unsigned** (ADR 0008).
+
+### Updates (Sparkle)
+- Fix in-app updates: download a fresh appcast (no stale HTTP/bundled cache), then hand Sparkle a local feed file
+- Re-sign Sparkle release zips with the full ad-hoc pipeline so EdDSA validation succeeds
+
 ## 0.3.4 — 2026-07-27
 
 Community library UX release. Still **unsigned** (ADR 0008).

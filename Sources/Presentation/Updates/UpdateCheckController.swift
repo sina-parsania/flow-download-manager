@@ -9,9 +9,10 @@ import SwiftUI
 /// Sparkle-backed updater. Manual “Check for Updates…” is the default path;
 /// background checks / silent download are Settings opt-ins (off by default).
 ///
-/// The published feed lives on GitHub (`docs/appcast.xml`). Until that file is
-/// on `origin/main`, a manual check shows a local “up to date” alert instead of
-/// Sparkle’s retrieval error (Sparkle cannot use a `file://` feed reliably).
+/// The published feed is `docs/appcast.xml` on GitHub. We download it ourselves
+/// (no HTTP cache), write a copy under Application Support, and hand Sparkle a
+/// `file://` feed so it never falls back to the stale bundled `appcast.xml`
+/// shipped inside older builds.
 @MainActor
 public final class UpdateCheckController: ObservableObject {
     public static let automaticChecksDefaultsKey = "SUEnableAutomaticChecks"
@@ -27,7 +28,6 @@ public final class UpdateCheckController: ObservableObject {
     private let controller: SPUStandardUpdaterController
 
     public init() {
-        // Info.plist defaults are false; register so first launch never enables auto paths.
         UserDefaults.standard.register(defaults: [
             Self.automaticChecksDefaultsKey: false,
             Self.automaticDownloadDefaultsKey: false
@@ -39,24 +39,32 @@ public final class UpdateCheckController: ObservableObject {
             updaterDelegate: feedHost,
             userDriverDelegate: nil
         )
-        // Drop any stale feed URL Sparkle may have persisted in defaults.
         controller.updater.clearFeedURLFromUserDefaults()
         applyPreferencesFromDefaults()
-        Self.clearRemoteFeedHTTPCache()
         EngineLog.updater.info("Sparkle updater started (manual check by default)")
     }
 
     public func checkForUpdates() {
         Task {
-            Self.clearRemoteFeedHTTPCache()
-            let remoteOK = await Self.remoteFeedIsReachable()
-            if remoteOK {
-                feedHost.feedURLString = Self.remoteFeedURLString
+            do {
+                let latest = try await AppcastFetch.fetchLatest(from: Self.remoteFeedURLString)
+                let installedBuild = AppcastFetch.installedBuild()
+                EngineLog.updater.info(
+                    "appcast latest=\(latest.shortVersion, privacy: .public) build=\(latest.build, privacy: .public) installedBuild=\(installedBuild, privacy: .public)"
+                )
+                if latest.build <= installedBuild {
+                    presentUpToDate(short: AppcastFetch.installedShortVersion())
+                    return
+                }
+                let feedFile = try AppcastFetch.writeFeedForSparkle(latest.rawXML)
+                feedHost.feedURLString = feedFile.absoluteString
                 controller.checkForUpdates(nil)
-                return
+            } catch {
+                EngineLog.updater.error(
+                    "appcast fetch failed \(EngineLog.redacted(error), privacy: .public)"
+                )
+                presentFeedUnavailable()
             }
-            EngineLog.updater.info("remote appcast unavailable; showing local up-to-date alert")
-            presentLocalUpToDate()
         }
     }
 
@@ -72,12 +80,19 @@ public final class UpdateCheckController: ObservableObject {
 
     // MARK: Private
 
-    private func presentLocalUpToDate() {
-        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "this build"
+    private func presentUpToDate(short: String) {
         alertTitle = "You’re up to date"
+        alertMessage = "Flow \(short) is the newest version available from the update feed."
+        isAlertPresented = true
+    }
+
+    private func presentFeedUnavailable() {
+        let short = AppcastFetch.installedShortVersion()
+        alertTitle = "Could not check for updates"
         alertMessage =
-            "Flow \(current) is the newest build available to this copy. "
-                + "The public update feed is not online yet (push docs/appcast.xml to GitHub to enable remote checks)."
+            "Flow \(short) could not reach the public update feed. "
+                + "Install the latest build from GitHub: "
+                + "https://github.com/sina-parsania/flow-download-manager/releases/latest"
         isAlertPresented = true
     }
 
@@ -88,39 +103,9 @@ public final class UpdateCheckController: ObservableObject {
         controller.updater.automaticallyDownloadsUpdates =
             defaults.bool(forKey: Self.automaticDownloadDefaultsKey)
     }
-
-    private static func clearRemoteFeedHTTPCache() {
-        guard let url = URL(string: remoteFeedURLString) else { return }
-        URLCache.shared.removeCachedResponse(for: URLRequest(url: url))
-        HTTPCookieStorage.shared.cookies(for: url)?.forEach { HTTPCookieStorage.shared.deleteCookie($0) }
-    }
-
-    private static func remoteFeedIsReachable() async -> Bool {
-        guard let url = URL(string: remoteFeedURLString) else { return false }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
-        request.setValue("Flow/0.3.3", forHTTPHeaderField: "User-Agent")
-        request.setValue("application/xml", forHTTPHeaderField: "Accept")
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse,
-                  (200 ..< 300).contains(http.statusCode),
-                  !data.isEmpty
-            else { return false }
-            // Require a parseable RSS root so a soft-404 HTML body cannot pass.
-            let text = String(data: data, encoding: .utf8) ?? ""
-            return text.contains("<rss") && text.contains("sparkle")
-        } catch {
-            EngineLog.updater.error(
-                "remote appcast probe failed \(EngineLog.redacted(error), privacy: .public)"
-            )
-            return false
-        }
-    }
 }
 
-/// Holds the live feed URL for Sparkle; kept off ``UpdateCheckController`` so we
-/// can pass `self` as the updater delegate during initialization.
+/// Holds the live feed URL for Sparkle.
 private final class FeedHost: NSObject, SPUUpdaterDelegate {
     var feedURLString: String
 
@@ -129,7 +114,7 @@ private final class FeedHost: NSObject, SPUUpdaterDelegate {
         super.init()
     }
 
-    func feedURLString(for _: SPUUpdater) -> String? {
+    @objc func feedURLString(for _: SPUUpdater) -> String? {
         feedURLString
     }
 }

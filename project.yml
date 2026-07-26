@@ -21,8 +21,8 @@ configFiles:
 
 settings:
   base:
-    MARKETING_VERSION: "0.3.4"
-    CURRENT_PROJECT_VERSION: "7"
+    MARKETING_VERSION: "0.3.5"
+    CURRENT_PROJECT_VERSION: "8"
   configs:
     Debug:
       SWIFT_COMPILATION_MODE: incremental
@@ -170,8 +170,8 @@ targets:
       properties:
         CFBundleDisplayName: Flow Download Manager
         CFBundleName: Flow Download Manager
-        CFBundleShortVersionString: "0.3.4"
-        CFBundleVersion: "7"
+        CFBundleShortVersionString: "0.3.5"
+        CFBundleVersion: "8"
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.utilities

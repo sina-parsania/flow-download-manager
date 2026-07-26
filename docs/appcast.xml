@@ -2,12 +2,10 @@
 <!--
   Sparkle 2 appcast for Flow Download Manager (published feed).
 
-  After push to main, SUFeedURL serves this file. Until then the app falls back
-  to the bundled Resources/Updates/appcast.xml so Check for Updates does not 404.
+  SUFeedURL: docs/appcast.xml on main (also bundled under Resources/Updates/).
 
-  Regenerate when shipping a signed archive:
-
-    generate_appcast /path/to/release-dir -o docs/appcast.xml
+  Regenerate signatures with generate_appcast, then point enclosure URLs at
+  GitHub Release assets (not raw docs/ — zips are not committed to the repo).
 -->
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0">
     <channel>
@@ -15,6 +13,24 @@
         <link>https://github.com/sina-parsania/flow-download-manager</link>
         <description>In-app updates for Flow Download Manager</description>
         <language>en</language>
+        <item>
+            <title>0.3.4</title>
+            <pubDate>Mon, 27 Jul 2026 02:40:00 +0330</pubDate>
+            <link>https://github.com/sina-parsania/flow-download-manager</link>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>0.3.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.4
+
+- Per-job destination path — **Open in Finder** reveals the correct file
+- **Started** / **Finished** timestamps and **Location** column (sortable)
+- **Open File** for completed downloads
+
+Community build — not Apple notarized.
+]]></description>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.4/Flow-0.3.4.zip" length="24358588" type="application/octet-stream" sparkle:edSignature="E4fF+KmDf0eDy31Jk1uXEJUQo46bOMIjAZ9KeqQTAbw4KyyAy3WUc2/R/o9mPjRk95eB4nn2mfFV9sKtwBcKBQ=="/>
+        </item>
         <item>
             <title>0.3.3</title>
             <pubDate>Sun, 26 Jul 2026 02:49:08 +0330</pubDate>

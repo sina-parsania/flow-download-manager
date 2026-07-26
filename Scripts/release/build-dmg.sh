@@ -9,6 +9,7 @@ OUT_DIR="${OUT_DIR:-$ROOT/Artifacts/release}"
 PRODUCT_NAME="DownloadManager"
 DISPLAY_APP_NAME="Flow Download Manager"
 VERSION="${MARKETING_VERSION:-$(tr -d '[:space:]' <"$ROOT/VERSION")}"
+BUILD="${CURRENT_PROJECT_VERSION:-$(plutil -extract CFBundleVersion raw -o - "$ROOT/Configuration/DownloadManager-Info.plist")}"
 
 mkdir -p "$OUT_DIR"
 cd "$ROOT"
@@ -18,7 +19,7 @@ xcodebuild -project DownloadManager.xcodeproj -scheme DownloadManager \
   -configuration Release -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath "$DERIVED" \
   MARKETING_VERSION="$VERSION" \
-  CURRENT_PROJECT_VERSION="$VERSION" \
+  CURRENT_PROJECT_VERSION="$BUILD" \
   build
 
 APP="$(find "$DERIVED/Build/Products/Release" -name "${PRODUCT_NAME}.app" -maxdepth 2 | head -n1)"

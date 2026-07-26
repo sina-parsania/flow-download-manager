@@ -211,7 +211,7 @@ enum FlowIntentEngine {
     /// engine genuinely may not be running. Everything the connection can report is
     /// collapsed into one plain sentence here — the transport never reaches a
     /// person, only the log.
-    private static func run<T>(_ body: (EngineClient) async throws -> T) async throws -> T {
+    private static func run<T: Sendable>(_ body: (EngineClient) async throws -> T) async throws -> T {
         do {
             return try await body(client)
         } catch {

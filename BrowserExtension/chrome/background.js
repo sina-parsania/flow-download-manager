@@ -82,10 +82,24 @@ async function cookieHeaderFor(url) {
 // along only for a single URL: the engine applies one header set to the whole
 // batch, so a mixed batch would replay one site's session against every other
 // host in the list.
+function originFor(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
+
 export async function buildHeaders(urls, referer) {
   const headers = [];
   if (typeof referer === "string" && /^https?:\/\//i.test(referer)) {
     headers.push({ name: "Referer", value: referer });
+  }
+  if (urls.length === 1) {
+    const origin = originFor(urls[0]);
+    if (origin) {
+      headers.push({ name: "Origin", value: origin });
+    }
   }
   if (typeof navigator?.userAgent === "string" && navigator.userAgent.length > 0) {
     headers.push({ name: "User-Agent", value: navigator.userAgent });

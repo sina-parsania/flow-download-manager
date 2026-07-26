@@ -35,6 +35,8 @@ build/
 
 # Tooling caches
 Scripts/.tool-cache/
+# Exact-pin binaries from `make bootstrap-tools` (SwiftFormat, …)
+Tools/bin/
 
 # Vendored native build outputs (rebuilt by `make vendor-libcurl`)
 VendorBuild/.cache/

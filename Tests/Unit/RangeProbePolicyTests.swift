@@ -96,6 +96,16 @@ final class RangeProbePolicyTests: XCTestCase {
         )
     }
 
+    func testSignedAttachmentQueryWithFilenameSkipsProbe() {
+        // One-shot attachment URLs often carry `sig` + `fn` without cloud Range keys.
+        let url =
+            "https://files.example/backend/content?id=file_1&fn=article.md&cd=attachment&ts=1&sig=abc&v=0"
+        XCTAssertTrue(RangeProbePolicy.looksLikeFragileSignedURL(url))
+        XCTAssertTrue(
+            RangeProbePolicy.shouldSkipProbe(url: url, options: TransferCore.DownloadOptions())
+        )
+    }
+
     func testSignatureAndAuthKeyAreFragile() {
         XCTAssertTrue(
             RangeProbePolicy.looksLikeFragileSignedURL(

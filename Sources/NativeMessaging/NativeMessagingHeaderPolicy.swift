@@ -17,7 +17,7 @@ public enum NativeMessagingHeaderPolicy {
     /// authenticated download. The order is also the eviction order when the
     /// encoded set has to be trimmed: the last entry goes first.
     public static let allowedNames = [
-        "Cookie", "Authorization", "Referer", "User-Agent", "Accept", "Accept-Language"
+        "Cookie", "Authorization", "Referer", "Origin", "User-Agent", "Accept", "Accept-Language"
     ]
 
     /// `EnqueueBatchRequest.init?(coder:)` rejects a longer `customHeadersJSON`

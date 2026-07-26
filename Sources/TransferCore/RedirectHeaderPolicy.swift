@@ -28,7 +28,7 @@ public enum RedirectHeaderPolicy: Sendable {
 
     /// Header names dropped on cross-origin HTTP(S) redirects.
     public static let crossOriginSensitiveNames: Set<String> = [
-        "Cookie", "Authorization", "Referer"
+        "Cookie", "Authorization", "Referer", "Origin"
     ]
 
     /// Non-sensitive headers that may follow a cross-origin redirect.

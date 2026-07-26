@@ -137,14 +137,15 @@ final class NativeMessagingTests: XCTestCase {
             [
                 .init(name: "user-agent", value: "TestAgent/1.0"),
                 .init(name: "COOKIE", value: "session=abc"),
+                .init(name: "Origin", value: "https://example.com"),
                 .init(name: "Referer", value: "https://example.com/page")
             ],
             urlCount: 1
         )
-        XCTAssertEqual(result.forwardedNames, ["Cookie", "Referer", "User-Agent"])
+        XCTAssertEqual(result.forwardedNames, ["Cookie", "Referer", "Origin", "User-Agent"])
         XCTAssertTrue(result.droppedNames.isEmpty)
         let parsed = try HeaderValidator.parseExtraHeadersJSON(result.customHeadersJSON)
-        XCTAssertEqual(parsed.count, 3)
+        XCTAssertEqual(parsed.count, 4)
         XCTAssertEqual(parsed.first?.name, "Cookie")
         XCTAssertEqual(parsed.first?.value, "session=abc")
         XCTAssertEqual(parsed.last?.name, "User-Agent")

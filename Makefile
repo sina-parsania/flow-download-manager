@@ -11,6 +11,9 @@ DERIVED      := .build/DerivedData
 CONFIG_DEBUG := Debug
 ARTIFACTS    := Artifacts/validation/latest
 FIRST_PARTY  := Sources Tests BrowserExtension Scripts .github Makefile project.yml
+# Prefer repo-pinned tooling from `make bootstrap-tools` over a floating Homebrew
+# SwiftFormat that can invent new format-check failures on CI.
+export PATH := $(CURDIR)/Tools/bin:$(PATH)
 
 XCODEBUILD := xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
 	-destination '$(DESTINATION)' -derivedDataPath $(DERIVED)

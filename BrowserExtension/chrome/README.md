@@ -33,7 +33,10 @@ still accepted by the host, and this extension retries at version 1 if it meets 
 older host, so the two can be updated independently.
 
 Version 2 adds `headers`, an array of `{name, value}`. The extension sends
-`Referer` and `User-Agent` on every request. `Cookie` is sent only when
+`Referer`, `Origin` (single-URL), and `User-Agent` on every request. `Cookie` is
+sent only when the popup Cookies toggle is on and Chrome granted the optional
+`cookies` + host permission — required for session-bound attachment URLs that
+return `403` without a browser session.
 
 - the popup's **Send sign-in cookies** toggle is on, and
 - Chrome has granted the optional `cookies` + `<all_urls>` permission, and

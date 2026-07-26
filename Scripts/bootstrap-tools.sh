@@ -1,29 +1,114 @@
 #!/usr/bin/env bash
 # Install pinned developer tools. Dev-only: no production target depends on these,
-# on Homebrew, or on user PATH (02-architecture.md §15). Verifies minimum versions.
+# on Homebrew, or on user PATH (02-architecture.md §15). Verifies exact/minimum
+# versions so CI and local machines cannot silently drift onto a newer SwiftFormat
+# rule set that fails format-check without rewriting the tree.
 set -euo pipefail
 
-# Minimum tool versions this repository is validated against.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TOOLS_BIN="$ROOT/Tools/bin"
+mkdir -p "$TOOLS_BIN"
+export PATH="$TOOLS_BIN:$PATH"
+
+# Exact pins — CI must use these binaries, not "whatever Homebrew last shipped".
+PINNED_XCODEGEN="2.44.1"
+PINNED_SWIFTFORMAT="0.59.1"
+PINNED_SWIFTLINT="0.57.1"
+
+# Minimums kept for tools we still install via brew when an exact pin is awkward.
 MIN_XCODEGEN="2.44.0"
-MIN_SWIFTFORMAT="0.59.0"
 MIN_SWIFTLINT="0.57.0"
 
 version_ge() { [ "$(printf '%s\n%s' "$1" "$2" | sort -V | head -1)" = "$2" ]; }
 
-ensure() {
+tool_version() {
+    local tool="$1"
+    "$tool" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1
+}
+
+ensure_brew_min() {
     local tool="$1" min="$2"
     if command -v "$tool" >/dev/null 2>&1; then
-        local have; have="$("$tool" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)"
+        local have; have="$(tool_version "$tool")"
         if version_ge "$have" "$min"; then
             echo "ok:   $tool $have (>= $min)"
-        else
-            echo "warn: $tool $have < required $min; upgrading" >&2
-            brew upgrade "$tool" || true
+            return
         fi
+        echo "warn: $tool $have < required $min; upgrading" >&2
+        brew upgrade "$tool" || true
     else
         echo "install: $tool"
-        brew install "$tool"
+        if ! brew install "$tool"; then
+            echo "error: failed to install $tool via Homebrew" >&2
+            exit 1
+        fi
     fi
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "error: $tool missing after bootstrap" >&2
+        exit 1
+    fi
+    local have; have="$(tool_version "$tool")"
+    if ! version_ge "$have" "$min"; then
+        echo "error: $tool $have still < required $min" >&2
+        exit 1
+    fi
+    echo "ok:   $tool $have (>= $min)"
+}
+
+# Prefer a repo-local exact binary so runners with Homebrew 0.62.x do not fail
+# format-check on rules our tree was never rewritten for.
+ensure_swiftformat_exact() {
+    local want="$1"
+    local dest="$TOOLS_BIN/swiftformat"
+    if [[ -x "$dest" ]]; then
+        local have; have="$(tool_version "$dest")"
+        if [[ "$have" == "$want" ]]; then
+            echo "ok:   swiftformat $have (pinned in Tools/bin)"
+            return
+        fi
+    fi
+    if command -v swiftformat >/dev/null 2>&1; then
+        local have; have="$(tool_version swiftformat)"
+        if [[ "$have" == "$want" ]]; then
+            # Mirror onto Tools/bin so `make format-check` PATH preference is stable.
+            install -m 755 "$(command -v swiftformat)" "$dest"
+            echo "ok:   swiftformat $have (mirrored to Tools/bin)"
+            return
+        fi
+    fi
+
+    local arch
+    arch="$(uname -m)"
+    case "$arch" in
+        arm64) ;;
+        *)
+            echo "error: SwiftFormat pin requires arm64 (got $arch)" >&2
+            exit 1
+            ;;
+    esac
+
+    local tmp found
+    tmp="$(mktemp -d)"
+    echo "install: swiftformat ${want} (exact pin) → Tools/bin"
+    # 0.59.x ships a plain `swiftformat.zip` macOS binary.
+    curl -fsSL "https://github.com/nicklockwood/SwiftFormat/releases/download/${want}/swiftformat.zip" \
+        -o "$tmp/swiftformat.zip"
+    unzip -q "$tmp/swiftformat.zip" -d "$tmp/out"
+    found="$(find "$tmp/out" -type f -name swiftformat | head -1)"
+    if [[ -z "$found" ]]; then
+        echo "error: swiftformat binary missing from release zip $want" >&2
+        rm -rf "$tmp"
+        exit 1
+    fi
+    install -m 755 "$found" "$dest"
+    rm -rf "$tmp"
+
+    local have; have="$(tool_version "$dest")"
+    if [[ "$have" != "$want" ]]; then
+        echo "error: expected swiftformat $want, got $have at $dest" >&2
+        exit 1
+    fi
+    echo "ok:   swiftformat $have (pinned in Tools/bin)"
 }
 
 if ! command -v brew >/dev/null 2>&1; then
@@ -31,8 +116,15 @@ if ! command -v brew >/dev/null 2>&1; then
     exit 1
 fi
 
-ensure xcodegen "$MIN_XCODEGEN"
-ensure swiftformat "$MIN_SWIFTFORMAT"
-ensure swiftlint "$MIN_SWIFTLINT"
+ensure_brew_min xcodegen "$MIN_XCODEGEN"
+ensure_swiftformat_exact "$PINNED_SWIFTFORMAT"
+ensure_brew_min swiftlint "$MIN_SWIFTLINT"
 
-echo "bootstrap-tools: OK"
+# Record pins for doctor / humans.
+cat > "$ROOT/Tools/pins.txt" <<EOF
+xcodegen>=${MIN_XCODEGEN} (preferred ${PINNED_XCODEGEN})
+swiftformat=${PINNED_SWIFTFORMAT}
+swiftlint>=${MIN_SWIFTLINT} (preferred ${PINNED_SWIFTLINT})
+EOF
+
+echo "bootstrap-tools: OK (PATH prefers $TOOLS_BIN)"

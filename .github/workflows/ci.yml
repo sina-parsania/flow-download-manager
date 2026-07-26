@@ -18,18 +18,21 @@ concurrency:
 
 jobs:
   fast-gate:
-    name: Fast gate (${{ matrix.runner }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # Public stable OS lanes (00-master-plan.md §4). macOS 26 image name is
-        # provided by the runner owner once GitHub publishes it.
-        runner: [macos-14, macos-15]
-    runs-on: ${{ matrix.runner }}
+    name: Fast gate (macos-15)
+    # Flow requires Swift 6 / Xcode 16+. Public macos-14 images still default to
+    # Xcode 15.4, so they cannot build this tree even when format-check is green.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Select stable Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.app || echo "Xcode 26 not on this image; using default"
+      - name: Select Xcode 16
+        run: |
+          for app in /Applications/Xcode_16.4.app /Applications/Xcode_16.3.app /Applications/Xcode_16.app /Applications/Xcode.app; do
+            if [[ -d "$app" ]]; then
+              sudo xcode-select -s "$app"
+              break
+            fi
+          done
+          xcodebuild -version
       - name: Bootstrap tools
         run: make bootstrap-tools
       - name: Doctor
@@ -43,8 +46,15 @@ jobs:
     needs: fast-gate
     steps:
       - uses: actions/checkout@v4
-      - name: Select stable Xcode 26
-        run: sudo xcode-select -s /Applications/Xcode_26.app || echo "Xcode 26 not on this image; using default"
+      - name: Select Xcode 16
+        run: |
+          for app in /Applications/Xcode_16.4.app /Applications/Xcode_16.3.app /Applications/Xcode_16.app /Applications/Xcode.app; do
+            if [[ -d "$app" ]]; then
+              sudo xcode-select -s "$app"
+              break
+            fi
+          done
+          xcodebuild -version
       - name: Bootstrap tools
         run: make bootstrap-tools
       - name: Doctor

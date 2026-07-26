@@ -14,13 +14,14 @@ final class RedirectHeaderPolicyTests: XCTestCase {
         XCTAssertEqual(outcome, .forward(headers: headers))
     }
 
-    func testCrossOriginDropsCookieAuthorizationReferer() {
+    func testCrossOriginDropsCookieAuthorizationRefererOrigin() {
         let source = RedirectHeaderPolicy.Origin(scheme: "https", host: "a.example", port: 443)
         let destination = RedirectHeaderPolicy.Origin(scheme: "https", host: "b.example", port: 443)
         let headers = [
             TransferCore.HTTPHeader(name: "Cookie", value: "a=b"),
             TransferCore.HTTPHeader(name: "Authorization", value: "Bearer x"),
             TransferCore.HTTPHeader(name: "Referer", value: "https://a.example/private?token=secret"),
+            TransferCore.HTTPHeader(name: "Origin", value: "https://a.example"),
             TransferCore.HTTPHeader(name: "Accept", value: "application/octet-stream"),
             TransferCore.HTTPHeader(name: "Accept-Language", value: "en-US"),
             TransferCore.HTTPHeader(name: "X-Custom", value: "drop-me")

@@ -2,7 +2,12 @@
 
 ## Unreleased
 
-Nothing yet — next changes land here after `0.3.3`.
+### Tooling
+- Pin SwiftFormat to **0.59.1** via `Tools/bin` so CI cannot silently pick Homebrew 0.61+/0.62+ and fail `format-check`
+- CI fast gate runs on **macos-15 / Xcode 16 only** (macos-14’s Xcode 15.4 cannot build Swift 6)
+
+### Browser companion
+- Forward `Origin` with single-URL handoffs (and drop it on cross-origin redirects) so session-bound attachment downloads that require a same-origin browser context can succeed when Cookies are enabled
 
 ## 0.3.3 — 2026-07-26
 

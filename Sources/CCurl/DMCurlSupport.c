@@ -13,7 +13,7 @@
 
 /* Single definition so the two easy-handle setup paths cannot drift apart.
  * Keep in step with VERSION at release time (Documentation/release-checklist.md). */
-#define DM_USER_AGENT "Flow/0.3.2"
+#define DM_USER_AGENT "Flow/0.3.3"
 
 #ifndef CURLE_RANGE_ERROR
 #define CURLE_RANGE_ERROR ((CURLcode)63)
@@ -526,7 +526,7 @@ static int DMCurlHeaderNameMatches(const char *name, const char *canonical) {
 }
 
 static int DMCurlIsSensitiveHeaderName(const char *name) {
-    static const char *kSensitive[] = {"Cookie", "Authorization", "Referer"};
+    static const char *kSensitive[] = {"Cookie", "Authorization", "Referer", "Origin"};
     for (size_t i = 0; i < sizeof(kSensitive) / sizeof(kSensitive[0]); i++) {
         if (DMCurlHeaderNameMatches(name, kSensitive[i])) {
             return 1;

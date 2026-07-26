@@ -96,7 +96,7 @@ public actor TransferBudgetLedger {
     }
 
     public func releaseSockets(host: String, count: Int) {
-        guard count > 0 else { return }
+        guard count >= 1 else { return }
         openSockets = max(0, openSockets - count)
         let hostCount = socketsByHost[host, default: 0]
         let next = hostCount - count

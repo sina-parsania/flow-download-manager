@@ -3,7 +3,8 @@
 ## Unreleased
 
 ### Tooling
-- Pin SwiftFormat to **0.59.1** via `Tools/bin` (sha256-verified GitHub release) and invoke it only through `Scripts/run-swiftformat.sh` so CI images that preinstall Homebrew 0.62.x cannot hijack `format-check`
+- Pin SwiftFormat to **0.59.1** and SwiftLint to **0.57.1** via sha256-verified `Tools/bin` binaries (`Scripts/run-swiftformat.sh` / `Scripts/lint.sh`) so CI images that preinstall Homebrew 0.62+/0.65 cannot hijack the gate
+- SwiftLint `only_rules` limited to the safety set (force_*/empty_count/…); metric defaults like `file_length` are not part of this project's lint gate
 - CI fast gate runs on **macos-15 / Xcode 16 only** (macos-14’s Xcode 15.4 cannot build Swift 6)
 
 ### Browser companion

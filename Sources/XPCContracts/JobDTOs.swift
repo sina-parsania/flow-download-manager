@@ -158,7 +158,7 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
         guard let requestID, let source, let items,
               UUID(uuidString: requestID as String) != nil,
               source.length > 0, source.length <= EngineXPC.maxPayloadStringLength,
-              items.count > 0, items.count <= EngineXPC.maxBatchURLCount
+              !items.isEmpty, items.count <= EngineXPC.maxBatchURLCount
         else { return nil }
         if let displayName, displayName.length > EngineXPC.maxPayloadStringLength {
             return nil

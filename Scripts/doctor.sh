@@ -49,10 +49,17 @@ else
     echo "FAIL: required dev tool 'swiftformat' not found (run: make bootstrap-tools)." >&2
     fail=1
 fi
-if command -v swiftlint >/dev/null 2>&1; then
-    say "swiftlint" "$(swiftlint --version 2>/dev/null)"
+
+pinned_sl="$(pwd)/Tools/bin/swiftlint"
+if [[ -x "$pinned_sl" ]]; then
+    say "swiftlint" "$("$pinned_sl" version 2>/dev/null) (pinned: $pinned_sl)"
+elif command -v swiftlint >/dev/null 2>&1; then
+    say "swiftlint" "$(swiftlint version 2>/dev/null) ($(command -v swiftlint); WARNING: not Tools/bin pin)"
+    echo "FAIL: pinned Tools/bin/swiftlint missing (run: make bootstrap-tools)." >&2
+    fail=1
 else
-    say "swiftlint" "absent (grep backstop in use; install via make bootstrap-tools)"
+    echo "FAIL: required dev tool 'swiftlint' not found (run: make bootstrap-tools)." >&2
+    fail=1
 fi
 
 # Signing identity status only (counts), no names/hashes exported.

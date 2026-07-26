@@ -1,5 +1,10 @@
 # SwiftLint configuration — syntax-aware safety rules for first-party code
 # (05-quality-testing-release-gates.md §6). Run strict via `make lint`.
+#
+# only_rules (not the full default set): metric/style defaults like file_length,
+# type_body_length, identifier_name, and cyclomatic_complexity are not part of
+# this project's gate. Transfer hot-path types are intentionally large; width
+# and formatting belong to SwiftFormat.
 included:
   - Sources
   - Tests
@@ -9,7 +14,9 @@ excluded:
   - macos-download-manager-prompt-pack
   - Artifacts
 
-opt_in_rules:
+only_rules:
+  - force_cast
+  - force_try
   - force_unwrapping
   - empty_count
   - fatal_error_message
@@ -21,14 +28,6 @@ opt_in_rules:
   - redundant_nil_coalescing
   - toggle_bool
   - yoda_condition
-
-disabled_rules:
-  # Width/formatting is owned by SwiftFormat (.swiftformat); avoid double-reporting.
-  - line_length
-  - trailing_comma
-  - opening_brace
-  # `todo` overlaps the dedicated banned-token scan (Scripts/banned-tokens.txt).
-  - todo
 
 analyzer_rules:
   - unused_import

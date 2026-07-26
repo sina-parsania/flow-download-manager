@@ -28,7 +28,7 @@ public enum CategoryRulesRepository {
         guard !trimmedKey.isEmpty, trimmedKey.utf8.count <= 64 else {
             throw CategoryRulesRepositoryError.invalidCategory
         }
-        guard predicateJSON.utf8.count > 0, predicateJSON.utf8.count <= 4096 else {
+        guard !predicateJSON.utf8.isEmpty, predicateJSON.utf8.count <= 4096 else {
             throw CategoryRulesRepositoryError.invalidPredicate
         }
         guard try JSONSerialization.jsonObject(with: Data(predicateJSON.utf8)) is [String: Any] else {

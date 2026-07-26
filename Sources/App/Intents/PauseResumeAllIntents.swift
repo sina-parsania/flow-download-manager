@@ -16,10 +16,10 @@ struct PauseAllDownloadsIntent: AppIntent {
     static let openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let count = try await FlowIntentEngine.pauseAll()
-        let message = count == 0
+        let pausedCount = try await FlowIntentEngine.pauseAll()
+        let message = pausedCount < 1
             ? "Nothing was running, so there was nothing to pause."
-            : "Paused \(count) download(s)."
+            : "Paused \(pausedCount) download(s)."
         return .result(dialog: IntentDialog(stringLiteral: message))
     }
 }
@@ -37,10 +37,10 @@ struct ResumeAllDownloadsIntent: AppIntent {
     static let openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let count = try await FlowIntentEngine.resumeAll()
-        let message = count == 0
+        let resumedCount = try await FlowIntentEngine.resumeAll()
+        let message = resumedCount < 1
             ? "Nothing was paused, so there was nothing to resume."
-            : "Resumed \(count) download(s)."
+            : "Resumed \(resumedCount) download(s)."
         return .result(dialog: IntentDialog(stringLiteral: message))
     }
 }

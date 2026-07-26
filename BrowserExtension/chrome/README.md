@@ -34,13 +34,14 @@ older host, so the two can be updated independently.
 
 Version 2 adds `headers`, an array of `{name, value}`. The extension sends
 `Referer`, `Origin` (single-URL), and `User-Agent` on every request. `Cookie` is
-sent only when the popup Cookies toggle is on and Chrome granted the optional
-`cookies` + host permission — required for session-bound attachment URLs that
-return `403` without a browser session.
+sent only when:
 
 - the popup's **Send sign-in cookies** toggle is on, and
 - Chrome has granted the optional `cookies` + `<all_urls>` permission, and
 - the request carries exactly one URL.
+
+Session-bound attachment URLs that return `403` without a browser session need
+that Cookie path (Compose paste alone cannot invent a login).
 
 The host allowlists header names, revalidates every pair, and drops `Cookie`
 outright for a multi-URL batch — the engine applies one header set to the whole

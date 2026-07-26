@@ -18,17 +18,17 @@ public extension View {
         // Runtime `#available` is not enough — Xcode 16.4 (CI) cannot type-check
         // those symbols at all, so gate on the compiler/SDK that ships them.
         #if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            glassEffect(.regular, in: shape)
-        } else {
+            if #available(macOS 26.0, *) {
+                glassEffect(.regular, in: shape)
+            } else {
+                padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: shape)
+            }
+        #else
             padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(.regularMaterial, in: shape)
-        }
-        #else
-        padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.regularMaterial, in: shape)
         #endif
     }
 }
@@ -44,13 +44,13 @@ public struct FloatingControlGroup<Content: View>: View {
 
     public var body: some View {
         #if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            GlassEffectContainer { content }
-        } else {
-            content
-        }
+            if #available(macOS 26.0, *) {
+                GlassEffectContainer { content }
+            } else {
+                content
+            }
         #else
-        content
+            content
         #endif
     }
 }

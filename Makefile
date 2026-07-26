@@ -12,7 +12,9 @@ CONFIG_DEBUG := Debug
 ARTIFACTS    := Artifacts/validation/latest
 FIRST_PARTY  := Sources Tests BrowserExtension Scripts .github Makefile project.yml
 # Prefer repo-pinned tooling from `make bootstrap-tools` over a floating Homebrew
-# SwiftFormat that can invent new format-check failures on CI.
+# / image-preinstalled SwiftFormat (runners currently ship 0.62.x). format-check
+# and format deliberately call Scripts/run-swiftformat.sh so they never PATH-fall
+# through to the wrong binary.
 export PATH := $(CURDIR)/Tools/bin:$(PATH)
 
 XCODEBUILD := xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
@@ -65,11 +67,11 @@ native-dependencies: vendor-libcurl ## Pinned native stack required by DownloadK
 
 .PHONY: format-check
 format-check: ## Verify formatting (no changes applied)
-	@swiftformat --lint --config .swiftformat Sources Tests
+	@Scripts/run-swiftformat.sh --lint Sources Tests
 
 .PHONY: format
 format: ## Apply formatting
-	@swiftformat --config .swiftformat Sources Tests
+	@Scripts/run-swiftformat.sh Sources Tests
 
 .PHONY: lint
 lint: ## Lint + syntax-aware Swift safety scan

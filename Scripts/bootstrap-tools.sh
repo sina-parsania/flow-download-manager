@@ -56,25 +56,30 @@ ensure_brew_min() {
 }
 
 # Prefer a repo-local exact binary so runners with Homebrew 0.62.x do not fail
-# format-check on rules our tree was never rewritten for.
+# format-check on rules our tree was never rewritten for. Always fetch the
+# GitHub release asset (never mirror Homebrew bottles — same version string,
+# different bytes) and verify sha256.
+SWIFTFORMAT_SHA256_0_59_1="4736bcacfbda0e0316997855934f184fa6399e315f79a8e9d309b3ca28201920"
+
 ensure_swiftformat_exact() {
     local want="$1"
     local dest="$TOOLS_BIN/swiftformat"
-    if [[ -x "$dest" ]]; then
-        local have; have="$(tool_version "$dest")"
-        if [[ "$have" == "$want" ]]; then
-            echo "ok:   swiftformat $have (pinned in Tools/bin)"
-            return
-        fi
+    local want_sha="$SWIFTFORMAT_SHA256_0_59_1"
+
+    if [[ "$want" != "0.59.1" ]]; then
+        echo "error: no sha256 pin recorded for swiftformat $want; update bootstrap-tools.sh" >&2
+        exit 1
     fi
-    if command -v swiftformat >/dev/null 2>&1; then
-        local have; have="$(tool_version swiftformat)"
-        if [[ "$have" == "$want" ]]; then
-            # Mirror onto Tools/bin so `make format-check` PATH preference is stable.
-            install -m 755 "$(command -v swiftformat)" "$dest"
-            echo "ok:   swiftformat $have (mirrored to Tools/bin)"
+
+    if [[ -x "$dest" ]]; then
+        local have have_sha
+        have="$(tool_version "$dest")"
+        have_sha="$(shasum -a 256 "$dest" | awk '{print $1}')"
+        if [[ "$have" == "$want" && "$have_sha" == "$want_sha" ]]; then
+            echo "ok:   swiftformat $have (pinned in Tools/bin, sha256 verified)"
             return
         fi
+        echo "warn: replacing Tools/bin/swiftformat ($have / ${have_sha:0:12}…) with release $want" >&2
     fi
 
     local arch
@@ -87,7 +92,7 @@ ensure_swiftformat_exact() {
             ;;
     esac
 
-    local tmp found
+    local tmp found have have_sha
     tmp="$(mktemp -d)"
     echo "install: swiftformat ${want} (exact pin) → Tools/bin"
     # 0.59.x ships a plain `swiftformat.zip` macOS binary.
@@ -101,14 +106,24 @@ ensure_swiftformat_exact() {
         exit 1
     fi
     install -m 755 "$found" "$dest"
+    # curl-downloaded binaries often carry quarantine; clear so CI/make can exec.
+    xattr -cr "$dest" 2>/dev/null || true
     rm -rf "$tmp"
 
-    local have; have="$(tool_version "$dest")"
+    have_sha="$(shasum -a 256 "$dest" | awk '{print $1}')"
+    if [[ "$have_sha" != "$want_sha" ]]; then
+        echo "error: swiftformat $want sha256 mismatch at $dest" >&2
+        echo "error: expected $want_sha" >&2
+        echo "error: got      $have_sha" >&2
+        exit 1
+    fi
+
+    have="$(tool_version "$dest")"
     if [[ "$have" != "$want" ]]; then
         echo "error: expected swiftformat $want, got $have at $dest" >&2
         exit 1
     fi
-    echo "ok:   swiftformat $have (pinned in Tools/bin)"
+    echo "ok:   swiftformat $have (pinned in Tools/bin, sha256 verified)"
 }
 
 if ! command -v brew >/dev/null 2>&1; then
@@ -123,7 +138,7 @@ ensure_brew_min swiftlint "$MIN_SWIFTLINT"
 # Record pins for doctor / humans.
 cat > "$ROOT/Tools/pins.txt" <<EOF
 xcodegen>=${MIN_XCODEGEN} (preferred ${PINNED_XCODEGEN})
-swiftformat=${PINNED_SWIFTFORMAT}
+swiftformat=${PINNED_SWIFTFORMAT} (sha256 ${SWIFTFORMAT_SHA256_0_59_1})
 swiftlint>=${MIN_SWIFTLINT} (preferred ${PINNED_SWIFTLINT})
 EOF
 

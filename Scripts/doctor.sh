@@ -29,14 +29,26 @@ say "Swift" "$(swift --version 2>/dev/null | head -1)"
 say "Clang" "$(clang --version 2>/dev/null | head -1)"
 say "SDK" "$(xcrun --sdk macosx --show-sdk-version 2>/dev/null)"
 
-for tool in xcodegen swiftformat; do
-    if command -v "$tool" >/dev/null 2>&1; then
-        say "$tool" "$($tool --version 2>/dev/null | head -1)"
-    else
-        echo "FAIL: required dev tool '$tool' not found (run: make bootstrap-tools)." >&2
-        fail=1
-    fi
-done
+if command -v xcodegen >/dev/null 2>&1; then
+    say "xcodegen" "$(xcodegen --version 2>/dev/null | head -1)"
+else
+    echo "FAIL: required dev tool 'xcodegen' not found (run: make bootstrap-tools)." >&2
+    fail=1
+fi
+
+# Prefer the exact pin under Tools/bin — PATH alone is not enough on CI images
+# that already ship Homebrew SwiftFormat 0.62.x.
+pinned_sf="$(pwd)/Tools/bin/swiftformat"
+if [[ -x "$pinned_sf" ]]; then
+    say "swiftformat" "$("$pinned_sf" --version 2>/dev/null | head -1) (pinned: $pinned_sf)"
+elif command -v swiftformat >/dev/null 2>&1; then
+    say "swiftformat" "$(swiftformat --version 2>/dev/null | head -1) ($(command -v swiftformat); WARNING: not Tools/bin pin)"
+    echo "FAIL: pinned Tools/bin/swiftformat missing (run: make bootstrap-tools)." >&2
+    fail=1
+else
+    echo "FAIL: required dev tool 'swiftformat' not found (run: make bootstrap-tools)." >&2
+    fail=1
+fi
 if command -v swiftlint >/dev/null 2>&1; then
     say "swiftlint" "$(swiftlint --version 2>/dev/null)"
 else

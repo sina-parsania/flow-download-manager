@@ -2,7 +2,7 @@
 
 import AppKit
 import Foundation
-import UserNotifications
+@preconcurrency import UserNotifications
 import XPCContracts
 
 /// Finder reveal / Quick Look helpers (FR-FS-006).

@@ -174,6 +174,9 @@ public struct RootView: View {
                             onRevealInFinder: { id in
                                 Task { await model.revealInFinder(jobID: id) }
                             },
+                            onOpenFile: { id in
+                                Task { await model.openFile(jobID: id) }
+                            },
                             onRemoveFromLibrary: { id in
                                 Task { await model.remove(jobID: id, deleteFiles: false) }
                             },
@@ -203,6 +206,10 @@ public struct RootView: View {
                             onRevealInFinder: {
                                 guard let id = model.selectedID else { return }
                                 Task { await model.revealInFinder(jobID: id) }
+                            },
+                            onOpenFile: {
+                                guard let id = model.selectedID else { return }
+                                Task { await model.openFile(jobID: id) }
                             }
                         )
                         .padding(12)

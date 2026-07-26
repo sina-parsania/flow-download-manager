@@ -125,6 +125,14 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
     public var maxBytesPerSecond: Int64?
     /// Per-job connection preference; `nil` derives the count from file size.
     public var preferredConnectionCount: Int?
+    /// First time the job entered connecting/downloading.
+    public var startedAt: Date?
+    /// First time the job entered a terminal state.
+    public var completedAt: Date?
+    /// On-disk basename after conflict resolution.
+    public var finalFilename: String?
+    /// Absolute destination directory path last resolved for this job.
+    public var destinationPath: String?
 
     public init(
         id: String, batchID: String?, resourceID: String, state: String, priority: Int,
@@ -132,7 +140,9 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
         scheduleID: String?, createdAt: Date, updatedAt: Date, revision: Int, terminalReason: String?,
         credentialProfileID: String? = nil, proxyProfileID: String? = nil,
         cookieProfileID: String? = nil, customHeadersJSON: String? = nil,
-        maxBytesPerSecond: Int64? = nil, preferredConnectionCount: Int? = nil
+        maxBytesPerSecond: Int64? = nil, preferredConnectionCount: Int? = nil,
+        startedAt: Date? = nil, completedAt: Date? = nil,
+        finalFilename: String? = nil, destinationPath: String? = nil
     ) {
         self.id = id
         self.batchID = batchID
@@ -154,6 +164,10 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.customHeadersJSON = customHeadersJSON
         self.maxBytesPerSecond = maxBytesPerSecond
         self.preferredConnectionCount = preferredConnectionCount
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.finalFilename = finalFilename
+        self.destinationPath = destinationPath
     }
 }
 

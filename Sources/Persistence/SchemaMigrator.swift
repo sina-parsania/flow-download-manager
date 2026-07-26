@@ -22,6 +22,7 @@ public enum SchemaMigrator {
         registerV4(&migrator)
         registerV5(&migrator)
         registerV6(&migrator)
+        registerV7(&migrator)
         return migrator
     }
 
@@ -96,6 +97,22 @@ public enum SchemaMigrator {
 
     /// Stable identifier for the v6 migration (crash-recoverable finalization intents).
     public static let v6Identifier = "v6-finalization-intents"
+
+    /// Stable identifier for the v7 migration (job timeline + on-disk location).
+    public static let v7Identifier = "v7-job-location-timeline"
+
+    /// Migrator that stops after v6 — used by migration round-trip tests.
+    public static var v6Only: DatabaseMigrator {
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = false
+        registerV1(&migrator)
+        registerV2(&migrator)
+        registerV3(&migrator)
+        registerV4(&migrator)
+        registerV5(&migrator)
+        registerV6(&migrator)
+        return migrator
+    }
 
     private static func registerV1(_ migrator: inout DatabaseMigrator) {
         // CHECK domains sourced from the Domain enums so DB and code cannot drift.
@@ -365,6 +382,21 @@ public enum SchemaMigrator {
                 t.column("revision", .integer).notNull().defaults(to: 1)
                 t.column("createdAt", .datetime).notNull()
                 t.column("updatedAt", .datetime).notNull()
+            }
+        }
+    }
+
+    private static func registerV7(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration(v7Identifier) { db in
+            try db.alter(table: "jobs") { t in
+                // First connecting/downloading transition; nil until transfer starts.
+                t.add(column: "startedAt", .datetime)
+                // First terminal transition (completed / failed / cancelled).
+                t.add(column: "completedAt", .datetime)
+                // On-disk basename after conflict resolution (may differ from URL evidence).
+                t.add(column: "finalFilename", .text)
+                // Last-resolved absolute destination directory for this job's profile.
+                t.add(column: "destinationPath", .text)
             }
         }
     }

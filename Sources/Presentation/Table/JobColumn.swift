@@ -67,6 +67,39 @@ struct JobColumn {
                 color: .secondaryLabelColor,
                 accessibility: "Category: \(summary)"
             )
+        },
+        JobColumn(identifier: .init("started"), title: "Started", width: 140, minWidth: 110) { table, model in
+            let text = JobRowFormatting.dateTime(model.startedAt)
+            return textCell(
+                table,
+                id: .init("cell.started"),
+                text: text,
+                monospaced: true,
+                color: .secondaryLabelColor,
+                accessibility: "Started: \(text)"
+            )
+        },
+        JobColumn(identifier: .init("finished"), title: "Finished", width: 140, minWidth: 110) { table, model in
+            let text = JobRowFormatting.dateTime(model.completedAt)
+            return textCell(
+                table,
+                id: .init("cell.finished"),
+                text: text,
+                monospaced: true,
+                color: .secondaryLabelColor,
+                accessibility: "Finished: \(text)"
+            )
+        },
+        JobColumn(identifier: .init("location"), title: "Location", width: 180, minWidth: 100) { table, model in
+            let text = JobRowFormatting.location(model.destinationDirectoryPath)
+            return textCell(
+                table,
+                id: .init("cell.location"),
+                text: text,
+                monospaced: false,
+                color: .secondaryLabelColor,
+                accessibility: "Location: \(text)"
+            )
         }
     ]
 

@@ -404,12 +404,13 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         let host = URL(string: downloadURL)?.host
             ?? URL(string: resource.canonicalURL)?.host
             ?? ""
-        let name = FilenameSanitizer.preferredFilename(
+        let derivedName = FilenameSanitizer.preferredFilename(
             contentDisposition: nil,
             urlString: downloadURL,
             existingEvidence: resource.filenameEvidence,
             contentType: resource.mimeEvidence
         )
+        let name = job.finalFilename ?? derivedName
         let live = progressMap[job.id]
         let total = live?.totalBytes ?? resource.expectedSize
         let isLiveTransfer = job.state == "downloading"
@@ -429,6 +430,15 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         } else {
             live?.progressFraction
         }
+        let destinationDirectoryPath = job.destinationPath
+        let filePath = Self.resolvedFilePath(
+            directoryPath: destinationDirectoryPath,
+            filename: name,
+            state: job.state
+        )
+        let dateFormatter = ISO8601DateFormatter()
+        dateFormatter.formatOptions = [.withInternetDateTime]
+        dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
         return JobSnapshot(
             id: job.id,
             name: name,
@@ -444,8 +454,35 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             projectName: row.projectName,
             tagIDs: row.tagIDs,
             tagNames: row.tagNames,
-            priority: job.priority
+            priority: job.priority,
+            startedAtISO8601: job.startedAt.map { dateFormatter.string(from: $0) },
+            completedAtISO8601: job.completedAt.map { dateFormatter.string(from: $0) },
+            destinationDirectoryPath: destinationDirectoryPath,
+            filePath: filePath
         )
+    }
+
+    /// Prefer an existing final file, then `.partial`, else the expected final path
+    /// when a destination directory is known.
+    private static func resolvedFilePath(
+        directoryPath: String?,
+        filename: String,
+        state: String
+    ) -> String? {
+        guard let directoryPath, !directoryPath.isEmpty, !filename.isEmpty else { return nil }
+        let folder = URL(fileURLWithPath: directoryPath, isDirectory: true)
+        let finalURL = folder.appendingPathComponent(filename)
+        let partialURL = folder.appendingPathComponent("\(filename).partial")
+        if FileManager.default.fileExists(atPath: finalURL.path) {
+            return finalURL.path
+        }
+        if FileManager.default.fileExists(atPath: partialURL.path) {
+            return partialURL.path
+        }
+        if state == "completed" || state == "failed" || state == "cancelled" {
+            return finalURL.path
+        }
+        return partialURL.path
     }
 
     func controlJob(
@@ -520,7 +557,8 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 id: request.jobID,
                 state: newState,
                 terminalReason: reason,
-                expectedRevision: request.expectedRevision > 0 ? request.expectedRevision : nil
+                expectedRevision: request.expectedRevision > 0 ? request.expectedRevision : nil,
+                resetTimelineForRestart: request.command == .restart
             )
             let response = JobCommandResponse(
                 requestID: request.requestID,

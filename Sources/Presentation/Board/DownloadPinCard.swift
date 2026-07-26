@@ -13,6 +13,7 @@ struct DownloadPinCard: View {
     var onOpenInspector: (() -> Void)?
     var onCommand: ((JobCommandKind) -> Void)?
     var onRevealInFinder: (() -> Void)?
+    var onOpenFile: (() -> Void)?
     var onRemoveFromLibrary: (() -> Void)?
     var onDeleteFromDisk: (() -> Void)?
 
@@ -141,6 +142,8 @@ struct DownloadPinCard: View {
         Divider()
         Button("Info") { onOpenInspector?() }
             .disabled(onOpenInspector == nil)
+        Button("Open File") { onOpenFile?() }
+            .disabled(onOpenFile == nil || row.filePath == nil || row.filePath?.isEmpty == true)
         Button("Open in Finder") { onRevealInFinder?() }
         Divider()
         Button("Remove from List") { onRemoveFromLibrary?() }

@@ -5,7 +5,7 @@ import Foundation
 @preconcurrency import UserNotifications
 import XPCContracts
 
-/// Finder reveal / Quick Look helpers (FR-FS-006).
+/// Finder reveal / open helpers (FR-FS-006).
 @MainActor
 public enum FinderIntegration {
     public static func reveal(url: URL) {
@@ -29,6 +29,40 @@ public enum FinderIntegration {
         } else if FileManager.default.fileExists(atPath: folder.path) {
             reveal(url: folder)
         }
+    }
+
+    /// Reveal using the engine-provided absolute path when present.
+    public static func revealJob(filePath: String?, directoryPath: String?, name: String) {
+        if let filePath, !filePath.isEmpty {
+            let fileURL = URL(fileURLWithPath: filePath)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                reveal(url: fileURL)
+                return
+            }
+            let folder = fileURL.deletingLastPathComponent()
+            if FileManager.default.fileExists(atPath: folder.path) {
+                reveal(url: folder)
+                return
+            }
+        }
+        if let directoryPath, !directoryPath.isEmpty {
+            revealDownload(
+                named: name,
+                inFolder: URL(fileURLWithPath: directoryPath, isDirectory: true)
+            )
+        }
+    }
+
+    /// Open the downloaded file with the default app.
+    @discardableResult
+    public static func openFile(filePath: String?) -> Bool {
+        guard let filePath, !filePath.isEmpty else { return false }
+        let url = URL(fileURLWithPath: filePath)
+        guard FileManager.default.fileExists(atPath: url.path),
+              !url.pathExtension.lowercased().hasSuffix("partial"),
+              !url.lastPathComponent.hasSuffix(".partial")
+        else { return false }
+        return NSWorkspace.shared.open(url)
     }
 }
 

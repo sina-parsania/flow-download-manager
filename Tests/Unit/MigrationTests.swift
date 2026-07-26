@@ -216,6 +216,34 @@ final class MigrationTests: XCTestCase {
         XCTAssertTrue(try v6.tableNames().contains("finalization_intents"))
     }
 
+    func testV6ToV7AddsJobLocationTimelineColumns() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let v6 = try EngineDatabase(url: url, migrator: SchemaMigrator.v6Only)
+        try v6.pool.read { db in
+            let names = try Row.fetchAll(db, sql: "PRAGMA table_info(jobs)").map { row -> String in
+                row["name"]
+            }
+            XCTAssertFalse(names.contains("startedAt"))
+            XCTAssertFalse(names.contains("completedAt"))
+            XCTAssertFalse(names.contains("finalFilename"))
+            XCTAssertFalse(names.contains("destinationPath"))
+        }
+
+        let v7 = try EngineDatabase(url: url, migrator: SchemaMigrator.current)
+        XCTAssertTrue(try v7.isAtCurrentSchemaVersion())
+        try v7.pool.read { db in
+            let names = try Row.fetchAll(db, sql: "PRAGMA table_info(jobs)").map { row -> String in
+                row["name"]
+            }
+            XCTAssertTrue(names.contains("startedAt"))
+            XCTAssertTrue(names.contains("completedAt"))
+            XCTAssertTrue(names.contains("finalFilename"))
+            XCTAssertTrue(names.contains("destinationPath"))
+        }
+    }
+
     func testInterruptedMigrationRollsBack() throws {
         let url = tempURL()
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

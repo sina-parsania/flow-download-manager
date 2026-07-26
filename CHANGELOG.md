@@ -2,10 +2,21 @@
 
 ## Unreleased
 
+## 0.3.4 — 2026-07-27
+
+Community library UX release. Still **unsigned** (ADR 0008).
+
+### Library
+- Persist per-job destination path, start/finish timestamps, and final filename (schema `v7`)
+- Table columns **Started**, **Finished**, and **Location** (sortable)
+- **Open in Finder** uses each job’s stored path instead of the global default folder alone
+- **Open File** for completed downloads (context menu, board, inspector)
+
 ### Tooling
 - Pin SwiftFormat to **0.59.1** and SwiftLint to **0.57.1** via sha256-verified `Tools/bin` binaries (`Scripts/run-swiftformat.sh` / `Scripts/lint.sh`) so CI images that preinstall Homebrew 0.62+/0.65 cannot hijack the gate
 - SwiftLint `only_rules` limited to the safety set (force_*/empty_count/…); metric defaults like `file_length` are not part of this project's lint gate
 - CI fast gate runs on **macos-15 / Xcode 16 only** (macos-14’s Xcode 15.4 cannot build Swift 6)
+- `make format` passes `--format` to the pinned SwiftFormat wrapper
 
 ### Browser companion
 - Forward `Origin` with single-URL handoffs (and drop it on cross-origin redirects) so session-bound attachment downloads that require a same-origin browser context can succeed when Cookies are enabled

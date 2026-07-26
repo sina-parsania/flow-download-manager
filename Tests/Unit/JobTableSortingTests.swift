@@ -38,13 +38,48 @@ final class JobTableSortingTests: XCTestCase {
         XCTAssertEqual(ordered.map(\.state), [.completed, .paused])
     }
 
+    func testSortsByStartedAndFinishedDates() {
+        let early = Date(timeIntervalSince1970: 1_700_000_000)
+        let late = Date(timeIntervalSince1970: 1_700_010_000)
+        let a = row(name: "a", total: 1, speed: 0, fraction: 1, eta: nil, started: early, finished: late)
+        let b = row(name: "b", total: 1, speed: 0, fraction: 1, eta: nil, started: late, finished: early)
+        let missing = row(name: "c", total: 1, speed: 0, fraction: 0, eta: nil)
+
+        XCTAssertEqual(
+            JobTableSorting.sorted([b, missing, a], by: .started, ascending: true).map(\.name),
+            ["a", "b", "c"]
+        )
+        XCTAssertEqual(
+            JobTableSorting.sorted([a, missing, b], by: .finished, ascending: true).map(\.name),
+            ["b", "a", "c"]
+        )
+    }
+
+    func testSortsByLocation() {
+        let home = row(
+            name: "home", total: 1, speed: 0, fraction: 1, eta: nil,
+            location: "/Users/a/Downloads"
+        )
+        let other = row(
+            name: "other", total: 1, speed: 0, fraction: 1, eta: nil,
+            location: "/Volumes/T7/Media"
+        )
+        XCTAssertEqual(
+            JobTableSorting.sorted([other, home], by: .location, ascending: true).map(\.name),
+            ["home", "other"]
+        )
+    }
+
     private func row(
         name: String,
         state: JobState = .downloading,
         total: Int64?,
         speed: Int64,
         fraction: Double?,
-        eta: Int?
+        eta: Int?,
+        started: Date? = nil,
+        finished: Date? = nil,
+        location: String? = nil
     ) -> JobRowModel {
         JobRowModel(
             id: UUID(),
@@ -58,7 +93,10 @@ final class JobTableSortingTests: XCTestCase {
             etaSeconds: eta,
             categoryKey: "videos",
             projectName: nil,
-            tagNames: []
+            tagNames: [],
+            startedAt: started,
+            completedAt: finished,
+            destinationDirectoryPath: location
         )
     }
 }

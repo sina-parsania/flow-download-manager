@@ -196,12 +196,7 @@ public enum JobRepository {
             var isStale = false
             let destination: URL
             do {
-                destination = try URL(
-                    resolvingBookmarkData: profile.bookmarkData,
-                    options: [.withSecurityScope, .withoutUI],
-                    relativeTo: nil,
-                    bookmarkDataIsStale: &isStale
-                )
+                destination = try DestinationBookmark.resolveDirectory(bookmarkData: profile.bookmarkData)
             } catch {
                 destination = try URL(
                     resolvingBookmarkData: profile.bookmarkData,
@@ -243,6 +238,8 @@ public enum JobRepository {
             resource.filenameEvidence = sanitized
             resource.identityRevision += 1
             try resource.update(db)
+            job.finalFilename = sanitized
+            job.destinationPath = destination.path
             job.updatedAt = Date()
             job.revision += 1
             try job.update(db)
@@ -321,6 +318,9 @@ public enum JobRepository {
                 let jobID = UUID().uuidString.lowercased()
                 let protocolKind = URL(string: item.url)?.scheme?.lowercased() ?? "http"
                 let filename = FilenameSanitizer.filename(fromURLString: item.url)
+                let destinationPath = try DestinationProfileRecord
+                    .fetchOne(db, key: ProductionSeedIDs.destinationDownloads)
+                    .flatMap { DestinationBookmark.pathDisplay(bookmarkData: $0.bookmarkData) }
                 try ResourceRecord(
                     id: resourceID,
                     originalURL: item.url,
@@ -355,7 +355,9 @@ public enum JobRepository {
                     cookieProfileID: cookieProfileID,
                     customHeadersJSON: customHeadersJSON,
                     maxBytesPerSecond: storedRate,
-                    preferredConnectionCount: storedConnections
+                    preferredConnectionCount: storedConnections,
+                    finalFilename: filename,
+                    destinationPath: destinationPath
                 ).insert(db)
                 jobIDs.append(jobID)
                 position += 1
@@ -622,7 +624,8 @@ public enum JobRepository {
         id: String,
         state: JobState,
         terminalReason: String?,
-        expectedRevision: Int?
+        expectedRevision: Int?,
+        resetTimelineForRestart: Bool = false
     ) throws -> Int {
         try database.pool.write { db in
             guard var job = try JobRecord.fetchOne(db, key: id) else {
@@ -641,7 +644,15 @@ public enum JobRepository {
 
             job.state = state.rawValue
             job.terminalReason = terminalReason
-            job.updatedAt = Date()
+            let now = Date()
+            job.updatedAt = now
+            if resetTimelineForRestart {
+                JobLocationTimeline.clearForRestart(&job)
+            }
+            JobLocationTimeline.applyStateTransition(&job, from: current, to: state, at: now)
+            if let profile = try DestinationProfileRecord.fetchOne(db, key: job.destinationProfileID) {
+                JobLocationTimeline.refreshDestinationPath(&job, profile: profile)
+            }
             job.revision += 1
             try job.update(db)
 
@@ -758,12 +769,7 @@ public enum JobRepository {
             var isStale = false
             let destination: URL
             do {
-                destination = try URL(
-                    resolvingBookmarkData: profile.bookmarkData,
-                    options: [.withSecurityScope, .withoutUI],
-                    relativeTo: nil,
-                    bookmarkDataIsStale: &isStale
-                )
+                destination = try DestinationBookmark.resolveDirectory(bookmarkData: profile.bookmarkData)
             } catch {
                 destination = try URL(
                     resolvingBookmarkData: profile.bookmarkData,
@@ -784,7 +790,7 @@ public enum JobRepository {
                 state: job.state,
                 canonicalURL: resource.canonicalURL,
                 destinationDirectory: destination,
-                suggestedFilename: suggested,
+                suggestedFilename: job.finalFilename ?? suggested,
                 conflictPolicy: profile.conflictPolicy,
                 expectedChecksum: resource.checksum,
                 credentialProfileID: job.credentialProfileID,

@@ -54,6 +54,15 @@ public enum FinalizationIntentRepository {
                 in: db
             )
 
+            if let profile = try DestinationProfileRecord.fetchOne(db, key: job.destinationProfileID) {
+                job.finalFilename = finalFilename
+                JobLocationTimeline.refreshDestinationPath(&job, profile: profile)
+                try job.update(db)
+            } else {
+                job.finalFilename = finalFilename
+                try job.update(db)
+            }
+
             let now = Date()
             let intent = FinalizationIntentRecord(
                 jobID: jobID,
@@ -457,7 +466,9 @@ public enum FinalizationIntentRepository {
         try validateTerminalReason(state: target, terminalReason: terminalReason)
         job.state = target.rawValue
         job.terminalReason = terminalReason
-        job.updatedAt = Date()
+        let now = Date()
+        job.updatedAt = now
+        JobLocationTimeline.applyStateTransition(&job, from: current, to: target, at: now)
         job.revision += 1
         try job.update(db)
 
@@ -481,22 +492,7 @@ public enum FinalizationIntentRepository {
         guard let profile = try DestinationProfileRecord.fetchOne(db, key: profileID) else {
             throw FinalizationIntentRepositoryError.destinationUnavailable(profileID)
         }
-        var isStale = false
-        do {
-            return try URL(
-                resolvingBookmarkData: profile.bookmarkData,
-                options: [.withSecurityScope, .withoutUI],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-        } catch {
-            return try URL(
-                resolvingBookmarkData: profile.bookmarkData,
-                options: [.withoutUI],
-                relativeTo: nil,
-                bookmarkDataIsStale: &isStale
-            )
-        }
+        return try DestinationBookmark.resolveDirectory(bookmarkData: profile.bookmarkData)
     }
 
     private static func validateTerminalReason(

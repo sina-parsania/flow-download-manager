@@ -322,9 +322,19 @@ public final class LibraryModel: ObservableObject {
         }
     }
 
-    /// Reveal the downloaded file (or `.partial`) in Finder.
+    /// Reveal the downloaded file (or `.partial`) in Finder using the job's
+    /// stored destination path from the engine — never the global default alone.
     public func revealInFinder(jobID: JobRowModel.ID) async {
         guard let row = rows.first(where: { $0.id == jobID }) else { return }
+        if row.filePath != nil || row.destinationDirectoryPath != nil {
+            FinderIntegration.revealJob(
+                filePath: row.filePath,
+                directoryPath: row.destinationDirectoryPath,
+                name: row.name
+            )
+            return
+        }
+        // Legacy fallback for rows that predate destinationPath persistence.
         if cachedDestinationPath == nil {
             do {
                 let dest = try await engineClient.getDefaultDestination()
@@ -347,6 +357,19 @@ public final class LibraryModel: ObservableObject {
             return
         }
         FinderIntegration.revealDownload(named: row.name, inFolder: folder)
+    }
+
+    /// Open the completed file with the default application.
+    public func openFile(jobID: JobRowModel.ID) async {
+        guard let row = rows.first(where: { $0.id == jobID }) else { return }
+        guard row.state == .completed else {
+            lastErrorMessage = "Open File is available after the download finishes."
+            return
+        }
+        if FinderIntegration.openFile(filePath: row.filePath) {
+            return
+        }
+        lastErrorMessage = "Could not open the file. It may have been moved or deleted."
     }
 
     public func pauseAll() async {
@@ -583,10 +606,21 @@ public final class LibraryModel: ObservableObject {
                 projectName: job.projectName,
                 tagIDs: job.tagIDs,
                 tagNames: job.tagNames,
-                priority: job.priority
+                priority: job.priority,
+                startedAt: Self.parseISO8601(job.startedAtISO8601),
+                completedAt: Self.parseISO8601(job.completedAtISO8601),
+                destinationDirectoryPath: job.destinationDirectoryPath,
+                filePath: job.filePath
             )
         }
         return (mapped, liveIDs)
+    }
+
+    private static func parseISO8601(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
     }
 
     private func notifyTerminalTransitions(from oldRows: [JobRowModel], to newRows: [JobRowModel]) {

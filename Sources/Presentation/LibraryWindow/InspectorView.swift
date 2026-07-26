@@ -14,6 +14,7 @@ struct InspectorView: View {
     let onPriorityBump: (Int) -> Void
     let onOrganizationChanged: () -> Void
     var onRevealInFinder: (() -> Void)?
+    var onOpenFile: (() -> Void)?
     var onRemoveFromLibrary: (() -> Void)?
     var onDeleteFromDisk: (() -> Void)?
     @Environment(\.flowPalette) private var palette
@@ -57,6 +58,9 @@ struct InspectorView: View {
                 }
                 .accessibilityLabel("Download URL")
                 labeled("State", row.state.displayName)
+                labeled("Started", JobRowFormatting.dateTime(row.startedAt))
+                labeled("Finished", JobRowFormatting.dateTime(row.completedAt))
+                labeled("Location", JobRowFormatting.location(row.destinationDirectoryPath))
                 Picker("Category", selection: $selectedCategoryKey) {
                     ForEach(ClassificationEngine.builtInStableKeys, id: \.self) { key in
                         Text(categoryDisplayName(key)).tag(key)
@@ -214,6 +218,12 @@ struct InspectorView: View {
                 if row.state == .completed || row.state == .downloading
                     || row.state == .paused || row.state == .failed
                     || row.state == .cancelled || row.state == .queued {
+                    if onOpenFile != nil {
+                        Button("Open File") {
+                            onOpenFile?()
+                        }
+                        .disabled(row.filePath == nil || row.filePath?.isEmpty == true)
+                    }
                     Button("Open in Finder") {
                         onRevealInFinder?()
                     }

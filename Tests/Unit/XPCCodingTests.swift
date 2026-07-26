@@ -467,6 +467,37 @@ final class XPCCodingTests: XCTestCase {
         XCTAssertEqual(decodedSnapshot?.tagIDs, snapshot.tagIDs)
         XCTAssertEqual(decodedSnapshot?.tagNames, ["urgent"])
         XCTAssertEqual(decodedSnapshot?.sourceURL, "https://cdn.example.test/a.zip")
+        XCTAssertNil(decodedSnapshot?.startedAtISO8601)
+        XCTAssertNil(decodedSnapshot?.filePath)
+
+        let located = JobSnapshot(
+            id: UUID().uuidString,
+            name: "movie.mkv",
+            sourceHost: "cdn.example.test",
+            sourceURL: "https://cdn.example.test/movie.mkv",
+            state: "completed",
+            progressFraction: 1,
+            bytesTransferred: 100,
+            totalBytes: 100,
+            speedBytesPerSecond: 0,
+            categoryKey: "videos",
+            priority: 0,
+            startedAtISO8601: "2026-07-26T12:00:00Z",
+            completedAtISO8601: "2026-07-26T12:05:00Z",
+            destinationDirectoryPath: "/Users/test/Downloads/DownloadManager",
+            filePath: "/Users/test/Downloads/DownloadManager/movie.mkv"
+        )
+        let decodedLocated = try roundTrip(located, as: JobSnapshot.self)
+        XCTAssertEqual(decodedLocated?.startedAtISO8601, "2026-07-26T12:00:00Z")
+        XCTAssertEqual(decodedLocated?.completedAtISO8601, "2026-07-26T12:05:00Z")
+        XCTAssertEqual(
+            decodedLocated?.destinationDirectoryPath,
+            "/Users/test/Downloads/DownloadManager"
+        )
+        XCTAssertEqual(
+            decodedLocated?.filePath,
+            "/Users/test/Downloads/DownloadManager/movie.mkv"
+        )
 
         let renameRequest = SetJobFilenameRequest(
             requestID: UUID().uuidString,

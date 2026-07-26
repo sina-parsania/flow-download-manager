@@ -5,8 +5,7 @@ import Foundation
 
 /// Immutable read snapshot for one row of the download table. Presentation
 /// consumes read snapshots and submits commands; it never reads persistence
-/// directly (`02-architecture.md` §4.5). In later phases these are delivered over
-/// XPC; in Phase 0 they come from deterministic fixtures.
+/// directly (`02-architecture.md` §4.5).
 public struct JobRowModel: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let name: String
@@ -26,6 +25,14 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
     public let tagIDs: [String]
     public let tagNames: [String]
     public let priority: Int
+    /// First connecting/downloading time from the engine.
+    public let startedAt: Date?
+    /// First terminal transition time from the engine.
+    public let completedAt: Date?
+    /// Absolute destination directory for this job.
+    public let destinationDirectoryPath: String?
+    /// Absolute path to the final file or `.partial` when known.
+    public let filePath: String?
 
     public init(
         id: UUID, name: String, sourceHost: String, sourceURL: String = "",
@@ -33,7 +40,9 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
         progressFraction: Double?, bytesTransferred: Int64, totalBytes: Int64?,
         speedBytesPerSecond: Int64, etaSeconds: Int?, categoryKey: String,
         projectID: String? = nil, projectName: String?, tagIDs: [String] = [],
-        tagNames: [String], priority: Int = 0
+        tagNames: [String], priority: Int = 0,
+        startedAt: Date? = nil, completedAt: Date? = nil,
+        destinationDirectoryPath: String? = nil, filePath: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -53,6 +62,10 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
         self.tagIDs = tagIDs
         self.tagNames = tagNames
         self.priority = priority
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.destinationDirectoryPath = destinationDirectoryPath
+        self.filePath = filePath
     }
 
     /// A stable status role used to pick supplemental colour/symbol (colour is

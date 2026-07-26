@@ -21,7 +21,7 @@ configFiles:
 
 settings:
   base:
-    MARKETING_VERSION: "0.3.3"
+    MARKETING_VERSION: "0.3.4"
     CURRENT_PROJECT_VERSION: "6"
   configs:
     Debug:
@@ -170,7 +170,7 @@ targets:
       properties:
         CFBundleDisplayName: Flow Download Manager
         CFBundleName: Flow Download Manager
-        CFBundleShortVersionString: "0.3.3"
+        CFBundleShortVersionString: "0.3.4"
         CFBundleVersion: "6"
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "14.0"

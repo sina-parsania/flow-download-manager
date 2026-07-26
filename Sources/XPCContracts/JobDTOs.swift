@@ -455,6 +455,14 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
     public let tagIDs: [String]
     public let tagNames: [String]
     public let priority: Int
+    /// ISO-8601 UTC; first connecting/downloading time, else nil.
+    public let startedAtISO8601: String?
+    /// ISO-8601 UTC; first terminal transition, else nil.
+    public let completedAtISO8601: String?
+    /// Absolute destination directory for this job (bookmark-resolved).
+    public let destinationDirectoryPath: String?
+    /// Absolute path to the final file or `.partial` when present on disk.
+    public let filePath: String?
 
     public init(
         id: String,
@@ -471,7 +479,11 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         projectName: String? = nil,
         tagIDs: [String] = [],
         tagNames: [String] = [],
-        priority: Int = 0
+        priority: Int = 0,
+        startedAtISO8601: String? = nil,
+        completedAtISO8601: String? = nil,
+        destinationDirectoryPath: String? = nil,
+        filePath: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -490,6 +502,10 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         self.tagIDs = tagIDs
         self.tagNames = tagNames
         self.priority = priority
+        self.startedAtISO8601 = startedAtISO8601
+        self.completedAtISO8601 = completedAtISO8601
+        self.destinationDirectoryPath = destinationDirectoryPath
+        self.filePath = filePath
     }
 
     public required init?(coder: NSCoder) {
@@ -503,6 +519,12 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         let projectName = coder.decodeObject(of: NSString.self, forKey: "projectName")
         let tagIDs = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "tagIDs") ?? []
         let tagNames = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "tagNames") ?? []
+        let startedAtISO8601 = coder.decodeObject(of: NSString.self, forKey: "startedAtISO8601")
+        let completedAtISO8601 = coder.decodeObject(of: NSString.self, forKey: "completedAtISO8601")
+        let destinationDirectoryPath = coder.decodeObject(
+            of: NSString.self, forKey: "destinationDirectoryPath"
+        )
+        let filePath = coder.decodeObject(of: NSString.self, forKey: "filePath")
         guard let id, let name, let sourceHost, let sourceURL, let state, let categoryKey,
               UUID(uuidString: id as String) != nil,
               name.length <= EngineXPC.maxPayloadStringLength,
@@ -520,6 +542,17 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         if let projectName, projectName.length > EngineXPC.maxPayloadStringLength {
             return nil
         }
+        if let startedAtISO8601, startedAtISO8601.length > 64 { return nil }
+        if let completedAtISO8601, completedAtISO8601.length > 64 { return nil }
+        if let destinationDirectoryPath,
+           destinationDirectoryPath.length == 0
+           || destinationDirectoryPath.length > EngineXPC.maxPayloadStringLength {
+            return nil
+        }
+        if let filePath,
+           filePath.length == 0 || filePath.length > EngineXPC.maxPayloadStringLength {
+            return nil
+        }
         self.id = id as String
         self.name = name as String
         self.sourceHost = sourceHost as String
@@ -530,6 +563,10 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         self.projectName = projectName.map { $0 as String }
         self.tagIDs = tagIDs.map { $0 as String }
         self.tagNames = tagNames.map { $0 as String }
+        self.startedAtISO8601 = startedAtISO8601.map { $0 as String }
+        self.completedAtISO8601 = completedAtISO8601.map { $0 as String }
+        self.destinationDirectoryPath = destinationDirectoryPath.map { $0 as String }
+        self.filePath = filePath.map { $0 as String }
         progressFraction = coder.decodeDouble(forKey: "progressFraction")
         hasProgress = coder.decodeBool(forKey: "hasProgress")
         bytesTransferred = coder.decodeInt64(forKey: "bytesTransferred")
@@ -561,6 +598,18 @@ public final class JobSnapshot: NSObject, NSSecureCoding, @unchecked Sendable {
         coder.encode(tagIDs as NSArray, forKey: "tagIDs")
         coder.encode(tagNames as NSArray, forKey: "tagNames")
         coder.encode(priority, forKey: "priority")
+        if let startedAtISO8601 {
+            coder.encode(startedAtISO8601 as NSString, forKey: "startedAtISO8601")
+        }
+        if let completedAtISO8601 {
+            coder.encode(completedAtISO8601 as NSString, forKey: "completedAtISO8601")
+        }
+        if let destinationDirectoryPath {
+            coder.encode(destinationDirectoryPath as NSString, forKey: "destinationDirectoryPath")
+        }
+        if let filePath {
+            coder.encode(filePath as NSString, forKey: "filePath")
+        }
     }
 }
 

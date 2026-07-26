@@ -45,6 +45,7 @@ public struct JobTableView: NSViewRepresentable {
     public var onRemoveFromList: (() -> Void)?
     public var onRemoveFiles: (() -> Void)?
     public var onRevealInFinder: (() -> Void)?
+    public var onOpenFile: (() -> Void)?
 
     public init(
         rows: [JobRowModel],
@@ -54,7 +55,8 @@ public struct JobTableView: NSViewRepresentable {
         onCommand: ((JobCommandKind) -> Void)? = nil,
         onRemoveFromList: (() -> Void)? = nil,
         onRemoveFiles: (() -> Void)? = nil,
-        onRevealInFinder: (() -> Void)? = nil
+        onRevealInFinder: (() -> Void)? = nil,
+        onOpenFile: (() -> Void)? = nil
     ) {
         self.rows = rows
         _selectedID = selectedID
@@ -64,6 +66,7 @@ public struct JobTableView: NSViewRepresentable {
         self.onRemoveFromList = onRemoveFromList
         self.onRemoveFiles = onRemoveFiles
         self.onRevealInFinder = onRevealInFinder
+        self.onOpenFile = onOpenFile
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -74,7 +77,8 @@ public struct JobTableView: NSViewRepresentable {
             onCommand: onCommand,
             onRemoveFromList: onRemoveFromList,
             onRemoveFiles: onRemoveFiles,
-            onRevealInFinder: onRevealInFinder
+            onRevealInFinder: onRevealInFinder,
+            onOpenFile: onOpenFile
         )
     }
 
@@ -129,6 +133,7 @@ public struct JobTableView: NSViewRepresentable {
         context.coordinator.onRemoveFromList = onRemoveFromList
         context.coordinator.onRemoveFiles = onRemoveFiles
         context.coordinator.onRevealInFinder = onRevealInFinder
+        context.coordinator.onOpenFile = onOpenFile
         context.coordinator.replaceRows(rows, reload: true)
         context.coordinator.syncSelection(selectedIDs, primary: selectedID)
     }
@@ -143,6 +148,7 @@ public struct JobTableView: NSViewRepresentable {
         var onRemoveFromList: (() -> Void)?
         var onRemoveFiles: (() -> Void)?
         var onRevealInFinder: (() -> Void)?
+        var onOpenFile: (() -> Void)?
         private var sourceRows: [JobRowModel] = []
         private var displayedRows: [JobRowModel] = []
         private var sortKey: JobTableSortKey?
@@ -157,7 +163,8 @@ public struct JobTableView: NSViewRepresentable {
             onCommand: ((JobCommandKind) -> Void)?,
             onRemoveFromList: (() -> Void)?,
             onRemoveFiles: (() -> Void)?,
-            onRevealInFinder: (() -> Void)?
+            onRevealInFinder: (() -> Void)?,
+            onOpenFile: (() -> Void)?
         ) {
             _selectedID = selectedID
             _selectedIDs = selectedIDs
@@ -166,6 +173,7 @@ public struct JobTableView: NSViewRepresentable {
             self.onRemoveFromList = onRemoveFromList
             self.onRemoveFiles = onRemoveFiles
             self.onRevealInFinder = onRevealInFinder
+            self.onOpenFile = onOpenFile
         }
 
         @objc func doubleClicked(_ sender: Any?) {
@@ -261,6 +269,11 @@ public struct JobTableView: NSViewRepresentable {
                 enabled: hasSelection && onOpenInspector != nil
             ))
             menu.addItem(item(
+                "Open File",
+                action: #selector(contextOpenFile),
+                enabled: hasSelection && onOpenFile != nil
+            ))
+            menu.addItem(item(
                 "Open in Finder",
                 action: #selector(contextReveal),
                 enabled: hasSelection && onRevealInFinder != nil
@@ -322,6 +335,10 @@ public struct JobTableView: NSViewRepresentable {
 
         @objc private func contextReveal() {
             onRevealInFinder?()
+        }
+
+        @objc private func contextOpenFile() {
+            onOpenFile?()
         }
 
         @objc private func contextRemoveList() {

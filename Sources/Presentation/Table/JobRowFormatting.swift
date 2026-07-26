@@ -45,4 +45,21 @@ public enum JobRowFormatting {
         if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
         return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
     }
+
+    private static let dateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    public static func dateTime(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        return dateTimeFormatter.string(from: date)
+    }
+
+    public static func location(_ path: String?) -> String {
+        guard let path, !path.isEmpty else { return "—" }
+        return (path as NSString).abbreviatingWithTildeInPath
+    }
 }

@@ -12,6 +12,9 @@ public enum JobTableSortKey: String, Sendable, CaseIterable {
     case eta
     case size
     case category
+    case started
+    case finished
+    case location
 }
 
 /// Pure ordering for `JobRowModel` rows. Numeric columns compare raw values
@@ -58,12 +61,31 @@ public enum JobTableSorting {
             let left = categorySortKey(lhs)
             let right = categorySortKey(rhs)
             return left.localizedStandardCompare(right)
+        case .started:
+            return compareOptionalDate(lhs.startedAt, rhs.startedAt)
+        case .finished:
+            return compareOptionalDate(lhs.completedAt, rhs.completedAt)
+        case .location:
+            return (lhs.destinationDirectoryPath ?? "")
+                .localizedStandardCompare(rhs.destinationDirectoryPath ?? "")
         }
     }
 
     private static func categorySortKey(_ row: JobRowModel) -> String {
         ([row.categoryKey] + (row.projectName.map { [$0] } ?? []) + row.tagNames)
             .joined(separator: " · ")
+    }
+
+    private static func compareOptionalDate(_ lhs: Date?, _ rhs: Date?) -> ComparisonResult {
+        switch (lhs, rhs) {
+        case (nil, nil): return .orderedSame
+        case (nil, _): return .orderedDescending
+        case (_, nil): return .orderedAscending
+        case let (l?, r?):
+            if l < r { return .orderedAscending }
+            if l > r { return .orderedDescending }
+            return .orderedSame
+        }
     }
 
     private static func compareInt64(_ lhs: Int64, _ rhs: Int64) -> ComparisonResult {

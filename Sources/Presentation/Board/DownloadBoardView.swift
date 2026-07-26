@@ -12,6 +12,7 @@ public struct DownloadBoardView: View {
     public var onOpenInspector: ((JobRowModel.ID) -> Void)?
     public var onCommand: ((JobRowModel.ID, JobCommandKind) -> Void)?
     public var onRevealInFinder: ((JobRowModel.ID) -> Void)?
+    public var onOpenFile: ((JobRowModel.ID) -> Void)?
     public var onRemoveFromLibrary: ((JobRowModel.ID) -> Void)?
     public var onDeleteFromDisk: ((JobRowModel.ID) -> Void)?
 
@@ -22,6 +23,7 @@ public struct DownloadBoardView: View {
         onOpenInspector: ((JobRowModel.ID) -> Void)? = nil,
         onCommand: ((JobRowModel.ID, JobCommandKind) -> Void)? = nil,
         onRevealInFinder: ((JobRowModel.ID) -> Void)? = nil,
+        onOpenFile: ((JobRowModel.ID) -> Void)? = nil,
         onRemoveFromLibrary: ((JobRowModel.ID) -> Void)? = nil,
         onDeleteFromDisk: ((JobRowModel.ID) -> Void)? = nil
     ) {
@@ -31,6 +33,7 @@ public struct DownloadBoardView: View {
         self.onOpenInspector = onOpenInspector
         self.onCommand = onCommand
         self.onRevealInFinder = onRevealInFinder
+        self.onOpenFile = onOpenFile
         self.onRemoveFromLibrary = onRemoveFromLibrary
         self.onDeleteFromDisk = onDeleteFromDisk
     }
@@ -49,6 +52,7 @@ public struct DownloadBoardView: View {
                         onOpenInspector: { onOpenInspector?(row.id) },
                         onCommand: { command in onCommand?(row.id, command) },
                         onRevealInFinder: { onRevealInFinder?(row.id) },
+                        onOpenFile: { onOpenFile?(row.id) },
                         onRemoveFromLibrary: { onRemoveFromLibrary?(row.id) },
                         onDeleteFromDisk: { onDeleteFromDisk?(row.id) }
                     )

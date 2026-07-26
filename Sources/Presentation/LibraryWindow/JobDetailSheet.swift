@@ -31,6 +31,9 @@ struct JobDetailSheet: View {
                         onRevealInFinder: {
                             Task { await model.revealInFinder(jobID: row.id) }
                         },
+                        onOpenFile: {
+                            Task { await model.openFile(jobID: row.id) }
+                        },
                         onRemoveFromLibrary: {
                             Task {
                                 await model.remove(jobID: row.id, deleteFiles: false)

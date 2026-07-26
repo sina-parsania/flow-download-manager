@@ -71,7 +71,7 @@ format-check: ## Verify formatting (no changes applied)
 
 .PHONY: format
 format: ## Apply formatting
-	@Scripts/run-swiftformat.sh Sources Tests
+	@Scripts/run-swiftformat.sh --format Sources Tests
 
 .PHONY: lint
 lint: ## Lint + syntax-aware Swift safety scan

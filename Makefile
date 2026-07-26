@@ -90,10 +90,20 @@ build-release: native-dependencies project ## Clean-warning Release build
 .PHONY: test-unit
 test-unit: native-dependencies project ## Run unit tests
 	@mkdir -p $(ARTIFACTS)
-	@rm -rf $(ARTIFACTS)/unit-tests.xcresult
-	@set -o pipefail; $(XCODEBUILD) \
-		-only-testing:UnitTests \
-		-resultBundlePath $(ARTIFACTS)/unit-tests.xcresult test 2>&1 | tail -40
+	@rm -rf $(ARTIFACTS)/unit-tests.xcresult $(ARTIFACTS)/unit-tests.log
+	@set -o pipefail; \
+	  if ! $(XCODEBUILD) \
+	    -only-testing:UnitTests \
+	    -resultBundlePath $(ARTIFACTS)/unit-tests.xcresult test \
+	    >$(ARTIFACTS)/unit-tests.log 2>&1; then \
+	    echo "unit tests FAILED — failing cases:"; \
+	    grep -E "Test Case .* failed|failed \(|XCTAssert|error:" $(ARTIFACTS)/unit-tests.log \
+	      | grep -vE "Compiling |Linking |note: |warning: " | tail -120 || true; \
+	    echo "---- last 40 lines ----"; \
+	    tail -40 $(ARTIFACTS)/unit-tests.log; \
+	    exit 1; \
+	  fi; \
+	  tail -20 $(ARTIFACTS)/unit-tests.log
 
 .PHONY: incomplete-work-scan
 incomplete-work-scan: ## Fail on banned incomplete-work / unsafe patterns in first-party code

@@ -39,6 +39,14 @@ jobs:
         run: make doctor
       - name: Fast gate
         run: make verify-fast
+      - name: Upload fast-gate evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-gate-evidence-${{ github.run_id }}
+          path: |
+            Artifacts/validation/
+          if-no-files-found: ignore
 
   full-gate:
     name: Full stable gate (macos-15)

@@ -193,13 +193,13 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
             normalizedChecksum = normalized
         }
         let decodedBytesPerSecond = coder.decodeInt64(forKey: "maxBytesPerSecond")
-        let hasBytesPerSecond = coder.decodeBool(forKey: "hasMaxBytesPerSecond")
+        let hasBytesPerSecond = coder.containsValue(forKey: "maxBytesPerSecond")
         if hasBytesPerSecond,
            decodedBytesPerSecond <= 0 || decodedBytesPerSecond > EngineXPC.maxJobBytesPerSecond {
             return nil
         }
         let decodedConnectionCount = coder.decodeInteger(forKey: "preferredConnectionCount")
-        let hasConnectionCount = coder.decodeBool(forKey: "hasPreferredConnectionCount")
+        let hasConnectionCount = coder.containsValue(forKey: "preferredConnectionCount")
         if hasConnectionCount,
            decodedConnectionCount < 1 || decodedConnectionCount > EngineXPC.maxPreferredConnectionCount {
             return nil
@@ -247,10 +247,14 @@ public final class EnqueueBatchRequest: NSObject, NSSecureCoding, @unchecked Sen
         if let expectedChecksumSHA256 {
             coder.encode(expectedChecksumSHA256 as NSString, forKey: "expectedChecksumSHA256")
         }
-        coder.encode(maxBytesPerSecond ?? 0, forKey: "maxBytesPerSecond")
-        coder.encode(maxBytesPerSecond != nil, forKey: "hasMaxBytesPerSecond")
-        coder.encode(preferredConnectionCount ?? 0, forKey: "preferredConnectionCount")
-        coder.encode(preferredConnectionCount != nil, forKey: "hasPreferredConnectionCount")
+        // Presence of the key is the optional signal — separate has* Bool flags do not
+        // round-trip reliably through NSKeyedArchiver on all macOS/Xcode combos CI uses.
+        if let maxBytesPerSecond {
+            coder.encode(maxBytesPerSecond, forKey: "maxBytesPerSecond")
+        }
+        if let preferredConnectionCount {
+            coder.encode(preferredConnectionCount, forKey: "preferredConnectionCount")
+        }
     }
 }
 
@@ -352,13 +356,13 @@ public final class GetJobTransferSettingsResponse: NSObject, NSSecureCoding, @un
         self.state = state as String
         self.terminalReason = terminalReason.map { $0 as String }
         expectedChecksumSHA256 = checksum.map { $0 as String }
-        maxBytesPerSecond = coder.decodeBool(forKey: "hasMaxBytesPerSecond")
+        maxBytesPerSecond = coder.containsValue(forKey: "maxBytesPerSecond")
             ? coder.decodeInt64(forKey: "maxBytesPerSecond")
             : nil
-        preferredConnectionCount = coder.decodeBool(forKey: "hasPreferredConnectionCount")
+        preferredConnectionCount = coder.containsValue(forKey: "preferredConnectionCount")
             ? coder.decodeInteger(forKey: "preferredConnectionCount")
             : nil
-        globalMaxBytesPerSecond = coder.decodeBool(forKey: "hasGlobalMaxBytesPerSecond")
+        globalMaxBytesPerSecond = coder.containsValue(forKey: "globalMaxBytesPerSecond")
             ? coder.decodeInt64(forKey: "globalMaxBytesPerSecond")
             : nil
     }
@@ -373,12 +377,15 @@ public final class GetJobTransferSettingsResponse: NSObject, NSSecureCoding, @un
         if let expectedChecksumSHA256 {
             coder.encode(expectedChecksumSHA256 as NSString, forKey: "expectedChecksumSHA256")
         }
-        coder.encode(maxBytesPerSecond ?? 0, forKey: "maxBytesPerSecond")
-        coder.encode(maxBytesPerSecond != nil, forKey: "hasMaxBytesPerSecond")
-        coder.encode(preferredConnectionCount ?? 0, forKey: "preferredConnectionCount")
-        coder.encode(preferredConnectionCount != nil, forKey: "hasPreferredConnectionCount")
-        coder.encode(globalMaxBytesPerSecond ?? 0, forKey: "globalMaxBytesPerSecond")
-        coder.encode(globalMaxBytesPerSecond != nil, forKey: "hasGlobalMaxBytesPerSecond")
+        if let maxBytesPerSecond {
+            coder.encode(maxBytesPerSecond, forKey: "maxBytesPerSecond")
+        }
+        if let preferredConnectionCount {
+            coder.encode(preferredConnectionCount, forKey: "preferredConnectionCount")
+        }
+        if let globalMaxBytesPerSecond {
+            coder.encode(globalMaxBytesPerSecond, forKey: "globalMaxBytesPerSecond")
+        }
     }
 }
 

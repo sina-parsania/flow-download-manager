@@ -35,10 +35,10 @@ public final class HostSettingSnapshot: NSObject, NSSecureCoding, @unchecked Sen
         else { return nil }
         self.host = host as String
 
-        maxConnections = coder.decodeBool(forKey: "hasMaxConnections")
+        maxConnections = coder.containsValue(forKey: "maxConnections")
             ? coder.decodeInteger(forKey: "maxConnections")
             : nil
-        maxBytesPerSecond = coder.decodeBool(forKey: "hasMaxBytesPerSecond")
+        maxBytesPerSecond = coder.containsValue(forKey: "maxBytesPerSecond")
             ? coder.decodeInt64(forKey: "maxBytesPerSecond")
             : nil
 
@@ -55,12 +55,18 @@ public final class HostSettingSnapshot: NSObject, NSSecureCoding, @unchecked Sen
 
     public func encode(with coder: NSCoder) {
         coder.encode(host as NSString, forKey: "host")
-        coder.encode(maxConnections ?? 0, forKey: "maxConnections")
-        coder.encode(maxConnections != nil, forKey: "hasMaxConnections")
-        coder.encode(maxBytesPerSecond ?? 0, forKey: "maxBytesPerSecond")
-        coder.encode(maxBytesPerSecond != nil, forKey: "hasMaxBytesPerSecond")
-        coder.encode(userAgent as NSString?, forKey: "userAgent")
-        coder.encode(credentialProfileID as NSString?, forKey: "credentialProfileID")
+        if let maxConnections {
+            coder.encode(maxConnections, forKey: "maxConnections")
+        }
+        if let maxBytesPerSecond {
+            coder.encode(maxBytesPerSecond, forKey: "maxBytesPerSecond")
+        }
+        if let userAgent {
+            coder.encode(userAgent as NSString, forKey: "userAgent")
+        }
+        if let credentialProfileID {
+            coder.encode(credentialProfileID as NSString, forKey: "credentialProfileID")
+        }
     }
 }
 
@@ -139,10 +145,10 @@ public final class UpsertHostSettingRequest: NSObject, NSSecureCoding, @unchecke
         self.requestID = requestID as String
         self.host = host as String
 
-        maxConnections = coder.decodeBool(forKey: "hasMaxConnections")
+        maxConnections = coder.containsValue(forKey: "maxConnections")
             ? coder.decodeInteger(forKey: "maxConnections")
             : nil
-        maxBytesPerSecond = coder.decodeBool(forKey: "hasMaxBytesPerSecond")
+        maxBytesPerSecond = coder.containsValue(forKey: "maxBytesPerSecond")
             ? coder.decodeInt64(forKey: "maxBytesPerSecond")
             : nil
 
@@ -163,12 +169,18 @@ public final class UpsertHostSettingRequest: NSObject, NSSecureCoding, @unchecke
     public func encode(with coder: NSCoder) {
         coder.encode(requestID as NSString, forKey: "requestID")
         coder.encode(host as NSString, forKey: "host")
-        coder.encode(maxConnections ?? 0, forKey: "maxConnections")
-        coder.encode(maxConnections != nil, forKey: "hasMaxConnections")
-        coder.encode(maxBytesPerSecond ?? 0, forKey: "maxBytesPerSecond")
-        coder.encode(maxBytesPerSecond != nil, forKey: "hasMaxBytesPerSecond")
-        coder.encode(userAgent as NSString?, forKey: "userAgent")
-        coder.encode(credentialProfileID as NSString?, forKey: "credentialProfileID")
+        if let maxConnections {
+            coder.encode(maxConnections, forKey: "maxConnections")
+        }
+        if let maxBytesPerSecond {
+            coder.encode(maxBytesPerSecond, forKey: "maxBytesPerSecond")
+        }
+        if let userAgent {
+            coder.encode(userAgent as NSString, forKey: "userAgent")
+        }
+        if let credentialProfileID {
+            coder.encode(credentialProfileID as NSString, forKey: "credentialProfileID")
+        }
         coder.encode(clearUserAgent, forKey: "clearUserAgent")
         coder.encode(clearCredentialProfileID, forKey: "clearCredentialProfileID")
     }

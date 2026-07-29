@@ -55,6 +55,26 @@ struct AddDownloadsSheet: View {
         extraction?.validCount ?? 0
     }
 
+    @State private var expansionNote: String?
+
+    /// Expands `[001-010]` ranges, then extracts. One helper rather than four
+    /// call sites so no ingestion path can skip the pre-pass — and because
+    /// expansion happens on the raw text, every expanded link goes through the
+    /// same validation and deduplication as a hand-typed one.
+    private func expandThenExtract(_ text: String) -> URLTextExtractor.Result {
+        let expansion = URLPatternExpander.expand(text)
+        if !expansion.refusedPatterns.isEmpty {
+            let shown = expansion.refusedPatterns.prefix(3).joined(separator: ", ")
+            expansionNote = "\(shown) covers more than \(URLPatternExpander.maxExpansion) "
+                + "links, so it was left as written."
+        } else if expansion.expandedCount > 0 {
+            expansionNote = "Expanded a numbered range into \(expansion.expandedCount) links."
+        } else {
+            expansionNote = nil
+        }
+        return URLTextExtractor.extract(from: expansion.text)
+    }
+
     private var mediaCandidateURLs: [String] {
         (extraction?.items ?? [])
             .filter { $0.status == .valid }
@@ -74,6 +94,12 @@ struct AddDownloadsSheet: View {
                     pasteStage
                     if let extraction, !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         liveStats(extraction)
+                    }
+                    if let expansionNote {
+                        Text(expansionNote)
+                            .font(FlowTheme.Typeface.caption(12))
+                            .foregroundStyle(palette.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     if let torrentInspection {
                         torrentInspectionCard(torrentInspection)
@@ -167,7 +193,7 @@ struct AddDownloadsSheet: View {
                     .foregroundStyle(palette.ink)
                     .accessibilityLabel("Links to add")
                     .onChange(of: input) { _, newValue in
-                        extraction = URLTextExtractor.extract(from: newValue)
+                        extraction = expandThenExtract(newValue)
                         confirmationPhase = .none
                         confirmationCounts = []
                     }
@@ -184,6 +210,9 @@ struct AddDownloadsSheet: View {
                             .font(FlowTheme.Typeface.title(15))
                             .foregroundStyle(palette.inkSoft)
                         Text("One URL per line works best. Lists, .txt / .csv, and .torrent inspection are fine.")
+                            .font(FlowTheme.Typeface.caption(12))
+                            .foregroundStyle(palette.inkSoft.opacity(0.85))
+                        Text("A numbered range works too — img[001-010].jpg becomes ten links.")
                             .font(FlowTheme.Typeface.caption(12))
                             .foregroundStyle(palette.inkSoft.opacity(0.85))
                     }
@@ -881,7 +910,7 @@ struct AddDownloadsSheet: View {
         let merged = LibraryModel.mergeLinkBlocks(existing: input, incoming: trimmed)
         guard merged != input else { return }
         input = merged
-        extraction = URLTextExtractor.extract(from: merged)
+        extraction = expandThenExtract(merged)
         confirmationPhase = .none
         confirmationCounts = []
     }
@@ -926,7 +955,7 @@ struct AddDownloadsSheet: View {
             } else {
                 input += "\n" + text
             }
-            extraction = URLTextExtractor.extract(from: input)
+            extraction = expandThenExtract(input)
             statusMessage = "Imported \(url.lastPathComponent)."
         } catch let error as ImportTextIngest.ReadError {
             switch error {
@@ -1058,7 +1087,7 @@ struct AddDownloadsSheet: View {
                         } else {
                             input += "\n" + string
                         }
-                        extraction = URLTextExtractor.extract(from: input)
+                        extraction = expandThenExtract(input)
                     }
                 }
                 handled = true

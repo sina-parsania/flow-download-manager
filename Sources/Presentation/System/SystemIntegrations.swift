@@ -64,6 +64,38 @@ public enum FinderIntegration {
         else { return false }
         return NSWorkspace.shared.open(url)
     }
+
+    /// Previews a finished download in Quick Look without opening its app.
+    ///
+    /// Uses `qlmanage -p` rather than `QLPreviewPanel`: the panel is a shared
+    /// singleton that requires the calling window to join the responder chain
+    /// and serve the datasource, which would put file-preview state inside the
+    /// library window. The subprocess previews in its own process and needs
+    /// nothing from the window.
+    ///
+    /// Launched with an executable URL and an argument array — no shell — so a
+    /// filename containing quotes or a semicolon cannot become a command.
+    @discardableResult
+    public static func quickLook(filePath: String?) -> Bool {
+        guard let filePath, !filePath.isEmpty else { return false }
+        let url = URL(fileURLWithPath: filePath)
+        guard FileManager.default.fileExists(atPath: url.path),
+              !url.lastPathComponent.hasSuffix(".partial")
+        else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/qlmanage")
+        process.arguments = ["-p", url.path]
+        // qlmanage writes progress chatter to both streams; discard it rather
+        // than leaking a user's file path into the app's stdout.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            return true
+        } catch {
+            return false
+        }
+    }
 }
 
 /// Rate-limited user notifications for job completion/failure (FR-UX-004).

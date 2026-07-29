@@ -177,6 +177,9 @@ public struct RootView: View {
                             onOpenFile: { id in
                                 Task { await model.openFile(jobID: id) }
                             },
+                            onQuickLook: { id in
+                                Task { await model.quickLookFile(jobID: id) }
+                            },
                             onRemoveFromLibrary: { id in
                                 Task { await model.remove(jobID: id, deleteFiles: false) }
                             },
@@ -277,6 +280,13 @@ public struct RootView: View {
         case .completed: return "Finished"
         case .failed: return "Broken"
         case let .category(key): return key.capitalized
+        // The filter stores an id; the name lives on the rows. Falling back to
+        // the generic word when the last matching row is gone keeps the header
+        // honest for the instant before `pruneStaleFilter` resets the selection.
+        case let .project(id):
+            return model.projectFilters.first { $0.id == id }?.name ?? "Project"
+        case let .tag(id):
+            return model.tagFilters.first { $0.id == id }?.name ?? "Tag"
         }
     }
 

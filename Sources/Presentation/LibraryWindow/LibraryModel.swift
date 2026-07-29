@@ -15,6 +15,10 @@ public enum LibraryFilter: Hashable, Sendable {
     case completed
     case failed
     case category(String)
+    /// Identity, not name: a project renamed while its filter is selected must
+    /// keep matching the same rows.
+    case project(String)
+    case tag(String)
 
     public func matches(_ row: JobRowModel) -> Bool {
         switch self {
@@ -25,6 +29,8 @@ public enum LibraryFilter: Hashable, Sendable {
         case .completed: return row.state == .completed
         case .failed: return row.state == .failed
         case let .category(key): return row.categoryKey == key
+        case let .project(id): return row.projectID == id
+        case let .tag(id): return row.tagIDs.contains(id)
         }
     }
 }
@@ -91,9 +97,64 @@ public final class LibraryModel: ObservableObject {
         let filtered = rows.filter { filter.matches($0) }
         guard !searchQuery.isEmpty else { return filtered }
         let needle = searchQuery
+        // Project and tag names are already shown in the Category column, so a
+        // user who can read them there reasonably expects to be able to type
+        // them into the search field.
         return filtered.filter {
             $0.name.localizedCaseInsensitiveContains(needle)
                 || $0.sourceHost.localizedCaseInsensitiveContains(needle)
+                || ($0.projectName?.localizedCaseInsensitiveContains(needle) ?? false)
+                || $0.tagNames.contains { $0.localizedCaseInsensitiveContains(needle) }
+        }
+    }
+
+    /// Projects that actually have rows, id + name, sorted by name.
+    ///
+    /// Derived from the rows rather than fetched over XPC: the row model already
+    /// carries both fields, so a separate `listOrganization` call would add a
+    /// round trip to show something already in hand — and would list projects
+    /// with nothing in them, which is a dead end in a filter rail.
+    ///
+    /// Computed, not cached. It is read once per sidebar render, not per row,
+    /// and `rows` is already scanned twice on the same pass by `visibleRows`.
+    public var projectFilters: [(id: String, name: String)] {
+        var byID: [String: String] = [:]
+        for row in rows {
+            if let id = row.projectID, let name = row.projectName {
+                byID[id] = name
+            }
+        }
+        return byID.map { (id: $0.key, name: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Tags that actually have rows, id + name, sorted by name. `tagIDs` and
+    /// `tagNames` are positionally paired by the read model, so they are zipped
+    /// rather than indexed — a length mismatch drops the extra instead of
+    /// trapping.
+    public var tagFilters: [(id: String, name: String)] {
+        var byID: [String: String] = [:]
+        for row in rows {
+            for (id, name) in zip(row.tagIDs, row.tagNames) {
+                byID[id] = name
+            }
+        }
+        return byID.map { (id: $0.key, name: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Falls back to `.all` when the selected project or tag no longer has any
+    /// rows. Without this, deleting the last download in a project leaves the
+    /// rail showing a selected filter that can never match anything, and the
+    /// empty state blames the engine.
+    public func pruneStaleFilter() {
+        switch filter {
+        case let .project(id):
+            if !rows.contains(where: { $0.projectID == id }) { filter = .all }
+        case let .tag(id):
+            if !rows.contains(where: { $0.tagIDs.contains(id) }) { filter = .all }
+        default:
+            break
         }
     }
 
@@ -372,6 +433,19 @@ public final class LibraryModel: ObservableObject {
         lastErrorMessage = "Could not open the file. It may have been moved or deleted."
     }
 
+    /// Preview the completed file in Quick Look, without opening its application.
+    public func quickLookFile(jobID: JobRowModel.ID) async {
+        guard let row = rows.first(where: { $0.id == jobID }) else { return }
+        guard row.state == .completed else {
+            lastErrorMessage = "Quick Look is available after the download finishes."
+            return
+        }
+        if FinderIntegration.quickLook(filePath: row.filePath) {
+            return
+        }
+        lastErrorMessage = "Could not preview the file. It may have been moved or deleted."
+    }
+
     public func pauseAll() async {
         let targets = rows.filter { BulkJobCommandFilter.shouldReceivePause($0.state) }
         for row in targets {
@@ -510,6 +584,7 @@ public final class LibraryModel: ObservableObject {
         remainingTimeSmoothers = remainingTimeSmoothers.filter { mapped.liveIDs.contains($0.key) }
         rows = mapped.rows
         pruneStaleInspection()
+        pruneStaleFilter()
     }
 
     private func applyChangeBatch(from client: EngineClient) async throws {
@@ -542,6 +617,7 @@ public final class LibraryModel: ObservableObject {
         remainingTimeSmoothers = remainingTimeSmoothers.filter { liveIDs.contains($0.key) }
         rows = outcome.rows
         pruneStaleInspection()
+        pruneStaleFilter()
     }
 
     private func pruneStaleInspection() {

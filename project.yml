@@ -170,8 +170,14 @@ targets:
       properties:
         CFBundleDisplayName: Flow Download Manager
         CFBundleName: Flow Download Manager
-        CFBundleShortVersionString: "0.3.5"
-        CFBundleVersion: "8"
+        # Interpolated from the build settings above, never hardcoded. A literal
+        # here silently wins over the MARKETING_VERSION/CURRENT_PROJECT_VERSION
+        # that `make release-dmg-unsigned` passes on the command line, so a DMG
+        # gets NAMED with the new version while shipping an app that reports the
+        # old one — invisible until a user opens About. build-dmg.sh now fails
+        # closed on that mismatch, and this is the reason it can no longer happen.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleIconName: AppIcon
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.utilities

@@ -8,8 +8,23 @@ DERIVED="${DERIVED:-$ROOT/.build/DerivedData}"
 OUT_DIR="${OUT_DIR:-$ROOT/Artifacts/release}"
 PRODUCT_NAME="DownloadManager"
 DISPLAY_APP_NAME="Flow Download Manager"
+# Both values come from the same places the Xcode build reads them: VERSION for
+# the marketing string, project.yml for the build number. The build number used
+# to be read from Configuration/DownloadManager-Info.plist, which carried its own
+# hardcoded copy — so a version bump in project.yml was silently ignored and the
+# DMG was NAMED 0.4.0 while shipping an app that reported 0.3.5 build 8. The
+# plist now interpolates $(MARKETING_VERSION)/$(CURRENT_PROJECT_VERSION), so
+# there is exactly one source of truth for each.
 VERSION="${MARKETING_VERSION:-$(tr -d '[:space:]' <"$ROOT/VERSION")}"
-BUILD="${CURRENT_PROJECT_VERSION:-$(plutil -extract CFBundleVersion raw -o - "$ROOT/Configuration/DownloadManager-Info.plist")}"
+BUILD="${CURRENT_PROJECT_VERSION:-$(
+  sed -n 's/^[[:space:]]*CURRENT_PROJECT_VERSION:[[:space:]]*"\{0,1\}\([0-9][0-9]*\)"\{0,1\}[[:space:]]*$/\1/p' \
+    "$ROOT/project.yml" | head -n1
+)}"
+
+if [[ -z "$VERSION" || -z "$BUILD" ]]; then
+  echo "error: could not resolve VERSION ('$VERSION') or BUILD ('$BUILD')" >&2
+  exit 1
+fi
 
 mkdir -p "$OUT_DIR"
 cd "$ROOT"
@@ -27,6 +42,24 @@ if [[ -z "$APP" || ! -d "$APP" ]]; then
   echo "error: Release app not found under $DERIVED" >&2
   exit 1
 fi
+
+# Fail closed on a version mismatch. The DMG filename is built from $VERSION, so
+# without this check a stale or mis-plumbed build ships an app reporting a
+# different version than the file it arrived in — which is exactly what happened
+# once, and is invisible until a user opens About.
+BUILT_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)"
+BUILT_BUILD="$(plutil -extract CFBundleVersion raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)"
+if [[ "$BUILT_VERSION" != "$VERSION" || "$BUILT_BUILD" != "$BUILD" ]]; then
+  cat >&2 <<MSG
+error: built app does not match the requested version.
+  requested: $VERSION ($BUILD)
+  built:     ${BUILT_VERSION:-<none>} (${BUILT_BUILD:-<none>})
+Check that Configuration/DownloadManager-Info.plist interpolates
+\$(MARKETING_VERSION) and \$(CURRENT_PROJECT_VERSION) rather than hardcoding them.
+MSG
+  exit 1
+fi
+echo "verified app reports $BUILT_VERSION ($BUILT_BUILD)"
 
 STAGE="$OUT_DIR/dmg-stage"
 DMG="$OUT_DIR/${PRODUCT_NAME}-${VERSION}-unsigned.dmg"

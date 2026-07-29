@@ -52,7 +52,7 @@ Full Gatekeeper notes: [Documentation/install-from-github.md](Documentation/inst
 | **Resilient on bad links** | Stall-aware retries, jittered backoff, hedged tail (losing replica cancelled), optional per-host connection/speed/UA/credential overrides. |
 | **Background by design** | Engine stays available while Flow is open (app-scoped XPC on ad-hoc builds; LaunchAgent path for signed installs). |
 | **Board-first UI** | Pin cards, inspector, projects & tags — built for people who live in a download queue. |
-| **Browser companion** | Chrome MV3 extension + embedded native messaging host. Safari is developer-only until signed. |
+| **Browser companion** | Chrome and Firefox MV3 extensions sharing one embedded native messaging host. Safari is developer-only until signed. |
 | **Honest licensing** | GPL-3.0-or-later. Build it, fork it, ship improvements back. |
 
 ---

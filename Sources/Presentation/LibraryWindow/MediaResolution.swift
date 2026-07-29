@@ -76,10 +76,17 @@ enum MediaResolution {
             )
         }
         guard let format = probe.downloadableFormat else {
+            // Two different refusals, because the distinction is the difference
+            // between "wait for a future version" and "this will never work here".
+            let streamOnly = probe.formats.contains(where: \.isSegmentedDelivery)
+                || (probe.formats.isEmpty && probe.deliveryProtocol != nil)
             return .blocked(
                 sourceURL: sourceURL,
                 title: title,
-                reason: "This page only offers separate audio and video, "
+                reason: streamOnly
+                    ? "This page streams in pieces rather than offering a single "
+                    + "file, which Flow can't download yet."
+                    : "This page only offers separate audio and video, "
                     + "which Flow cannot join into one file."
             )
         }

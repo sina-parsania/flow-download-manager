@@ -16,6 +16,8 @@ public struct YtdlpFormat: Sendable, Equatable {
     public let audioCodec: String?
     public let filesizeBytes: Int64?
     public let httpHeaders: [String: String]
+    /// yt-dlp's `protocol` field: `https`, `m3u8_native`, `dash`, `http_dash_segments`…
+    public let deliveryProtocol: String?
 
     public init(
         formatID: String?,
@@ -24,7 +26,8 @@ public struct YtdlpFormat: Sendable, Equatable {
         videoCodec: String?,
         audioCodec: String?,
         filesizeBytes: Int64?,
-        httpHeaders: [String: String]
+        httpHeaders: [String: String],
+        deliveryProtocol: String? = nil
     ) {
         self.formatID = formatID
         self.url = url
@@ -33,16 +36,43 @@ public struct YtdlpFormat: Sendable, Equatable {
         self.audioCodec = audioCodec
         self.filesizeBytes = filesizeBytes
         self.httpHeaders = httpHeaders
+        self.deliveryProtocol = deliveryProtocol
     }
 
-    /// yt-dlp writes the string `"none"` (not JSON null) for an absent stream, so
-    /// a format is progressive only when both codecs are present and not `"none"`.
+    /// True when the URL points at a playlist or segment index rather than at a
+    /// media file — HLS, DASH, Smooth Streaming, or a fragmented delivery.
+    ///
+    /// Codec presence is not enough to tell these apart. A muxed HLS rendition
+    /// reports real `vcodec` AND `acodec` values, so it looks progressive; but
+    /// its URL is a `.m3u8` playlist, and handing that to curl downloads a few
+    /// kilobytes of text named like a video. The `protocol` field is what
+    /// actually distinguishes them, and it was not being read at all.
+    public var isSegmentedDelivery: Bool {
+        let proto = (deliveryProtocol ?? "").lowercased()
+        if !proto.isEmpty {
+            // `https`/`http`/`ftp` are the direct-file protocols; everything else
+            // yt-dlp reports here (m3u8, m3u8_native, dash, http_dash_segments,
+            // ism, rtmp, websocket_frag…) needs a client Flow does not have.
+            let direct: Set<String> = ["https", "http", "ftps", "ftp"]
+            if !direct.contains(proto) { return true }
+        }
+        // Fall back to the URL when `protocol` is absent: an extractor may omit
+        // it, and a manifest extension is unambiguous on its own.
+        let path = URL(string: url)?.path.lowercased() ?? url.lowercased()
+        return path.hasSuffix(".m3u8") || path.hasSuffix(".m3u")
+            || path.hasSuffix(".mpd") || path.hasSuffix(".ism")
+    }
+
+    /// A single file Flow can fetch and write straight to disk.
+    ///
+    /// Requires both codecs present — yt-dlp writes the string `"none"`, not JSON
+    /// null, for an absent stream — AND a non-segmented delivery.
     public var isProgressive: Bool {
         func present(_ codec: String?) -> Bool {
             guard let codec, !codec.isEmpty else { return false }
             return codec.lowercased() != "none"
         }
-        return present(videoCodec) && present(audioCodec)
+        return present(videoCodec) && present(audioCodec) && !isSegmentedDelivery
     }
 }
 
@@ -61,6 +91,8 @@ public struct YtdlpProbeResult: Sendable, Equatable {
     /// Signed CDN URLs commonly 403 without them.
     public let httpHeaders: [String: String]
     public let formats: [YtdlpFormat]
+    /// Top-level `protocol`, used to judge ``directURL`` when `formats[]` is absent.
+    public let deliveryProtocol: String?
 
     public init(
         id: String?,
@@ -71,7 +103,8 @@ public struct YtdlpProbeResult: Sendable, Equatable {
         drmFlag: Bool,
         directURL: String? = nil,
         httpHeaders: [String: String] = [:],
-        formats: [YtdlpFormat] = []
+        formats: [YtdlpFormat] = [],
+        deliveryProtocol: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -82,6 +115,7 @@ public struct YtdlpProbeResult: Sendable, Equatable {
         self.directURL = directURL
         self.httpHeaders = httpHeaders
         self.formats = formats
+        self.deliveryProtocol = deliveryProtocol
     }
 
     /// The single-file rendition to hand the transfer engine, or `nil` when the
@@ -95,15 +129,21 @@ public struct YtdlpProbeResult: Sendable, Equatable {
             return best
         }
         guard formats.isEmpty, let directURL else { return nil }
-        return YtdlpFormat(
+        let fallback = YtdlpFormat(
             formatID: formatID,
             url: directURL,
             ext: nil,
             videoCodec: nil,
             audioCodec: nil,
             filesizeBytes: nil,
-            httpHeaders: httpHeaders
+            httpHeaders: httpHeaders,
+            deliveryProtocol: deliveryProtocol
         )
+        // The fallback skips the `isProgressive` filter above (it has no codec
+        // information to judge), so the segmented check has to be repeated here —
+        // otherwise a top-level `.m3u8` URL reaches the transfer engine.
+        guard !fallback.isSegmentedDelivery else { return nil }
+        return fallback
     }
 
     public var mediaDecision: MediaPolicy.Decision {
@@ -144,13 +184,20 @@ public enum YtdlpJSONProbe {
             drmFlag: drm,
             directURL: httpURL(dict["url"]),
             httpHeaders: topLevelHeaders,
-            formats: parseFormats(dict["formats"], fallbackHeaders: topLevelHeaders)
+            formats: parseFormats(dict["formats"], fallbackHeaders: topLevelHeaders),
+            deliveryProtocol: dict["protocol"] as? String
         )
     }
 
-    /// Only `http`/`https` resolve to something the transfer engine can fetch.
-    /// yt-dlp also emits `m3u8`/`rtmp`/`ws` URLs for streaming renditions, and
-    /// handing one of those to curl would produce a playlist file named like a video.
+    /// Rejects URLs whose SCHEME the transfer engine cannot fetch — `rtmp://`,
+    /// `ws://`, and yt-dlp's `m3u8://` pseudo-scheme.
+    ///
+    /// This is a scheme check and nothing more. It does NOT screen out streaming
+    /// deliveries: a real HLS rendition is served from an ordinary
+    /// `https://…/720p.m3u8` and passes here. An earlier version of this comment
+    /// claimed otherwise, and that overstatement is exactly why manifest URLs
+    /// reached the enqueue path. ``YtdlpFormat/isSegmentedDelivery`` is what
+    /// catches those.
     private static func httpURL(_ raw: Any?) -> String? {
         guard let value = raw as? String else { return nil }
         let lowered = value.lowercased()
@@ -183,7 +230,8 @@ public enum YtdlpJSONProbe {
                 audioCodec: entry["acodec"] as? String,
                 filesizeBytes: (entry["filesize"] as? NSNumber)?.int64Value
                     ?? (entry["filesize_approx"] as? NSNumber)?.int64Value,
-                httpHeaders: headers.isEmpty ? fallbackHeaders : headers
+                httpHeaders: headers.isEmpty ? fallbackHeaders : headers,
+                deliveryProtocol: entry["protocol"] as? String
             )
         }
     }

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import AppKit
 import Application
 import Foundation
+import MediaIsolation
 import SwiftUI
 import XPCContracts
 
@@ -16,8 +18,56 @@ public struct SettingsView: View {
     @AppStorage(FlowAppearanceMode.userDefaultsKey) private var appearanceModeRaw = FlowAppearanceMode.system.rawValue
     @AppStorage(UpdateCheckController.automaticChecksDefaultsKey) private var automaticUpdateChecks = false
     @AppStorage(UpdateCheckController.automaticDownloadDefaultsKey) private var automaticUpdateDownload = false
+    /// Bound so the card re-renders the moment a helper is chosen or cleared.
+    @AppStorage(MediaHelperLocator.userChosenPathDefaultsKey) private var chosenMediaHelperPath = ""
+    @State private var mediaHelperError: String?
 
     public init() {}
+
+    /// Recomputed on each render rather than cached: the helper can be moved or
+    /// uninstalled while Settings is open, and a stale path shown here would be
+    /// a path the probe then fails on.
+    private var mediaHelper: MediaHelperLocator.Resolved? {
+        _ = chosenMediaHelperPath
+        return MediaSiteProbe.resolvedHelper()
+    }
+
+    private var mediaHelperIsUserChosen: Bool {
+        !chosenMediaHelperPath.isEmpty
+    }
+
+    private func mediaHelperSourceCaption(_ source: MediaHelperLocator.Source) -> String {
+        switch source {
+        case .bundled: "Included with Flow."
+        case .userChosen: "You chose this helper."
+        case .discovered: "Found on this Mac. Choose a different one if that isn't the tool you expect."
+        }
+    }
+
+    /// The ONLY place the helper path is written. Deliberately a modal panel:
+    /// this value decides which binary Flow executes, so it must come from a
+    /// person picking a file, never from a link, a dropped file, the clipboard,
+    /// or the browser extension's native messaging channel.
+    private func chooseMediaHelper() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the yt-dlp program Flow should use to read video pages."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            mediaHelperError = "That file isn't a program Flow can run."
+            return
+        }
+        mediaHelperError = nil
+        chosenMediaHelperPath = url.path
+    }
+
+    private func clearChosenMediaHelper() {
+        mediaHelperError = nil
+        chosenMediaHelperPath = ""
+    }
 
     public var body: some View {
         Form {
@@ -108,6 +158,43 @@ public struct SettingsView: View {
                     Button("Open Login Items Settings") {
                         launchAtLogin.openLoginItemsSettings()
                     }
+                }
+            }
+
+            Section("Media pages") {
+                if let helper = mediaHelper {
+                    Text(helper.url.path)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(mediaHelperSourceCaption(helper.source))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(
+                        "No media helper found. Video pages need yt-dlp installed; "
+                            + "direct file links download without it."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Button("Choose Helper…") { chooseMediaHelper() }
+                        .accessibilityLabel("Choose media helper")
+                    if mediaHelperIsUserChosen {
+                        Button("Use Default") { clearChosenMediaHelper() }
+                            .accessibilityLabel("Use the default media helper")
+                    }
+                }
+                if let mediaHelperError {
+                    Text(mediaHelperError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 

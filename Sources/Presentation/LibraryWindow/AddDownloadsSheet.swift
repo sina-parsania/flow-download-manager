@@ -304,8 +304,9 @@ struct AddDownloadsSheet: View {
 
                 if MediaSiteProbe.resolvedExecutable() == nil {
                     Text(
-                        "yt-dlp isn’t bundled. Direct file URLs still queue. "
-                            + "Optional: make vendor-media-helpers when VendorBuild manifests include checksums."
+                        "Video pages need the yt-dlp helper, which isn’t installed. "
+                            + "Direct file links still download. Point Flow at a copy in "
+                            + "Settings under Media pages."
                     )
                     .font(FlowTheme.Typeface.caption(12))
                     .foregroundStyle(palette.inkSoft)
@@ -979,6 +980,7 @@ struct AddDownloadsSheet: View {
             case let .failure(error):
                 if case MediaSiteProbe.AvailabilityError.executableMissing = error {
                     message = "The media helper isn’t installed, so page links can’t be checked. "
+                        + "Choose one in Settings under Media pages. "
                         + "Direct file links still queue normally."
                     outcomes.removeAll()
                 } else {

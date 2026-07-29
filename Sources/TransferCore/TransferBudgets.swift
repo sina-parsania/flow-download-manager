@@ -63,9 +63,15 @@ public actor TransferBudgetLedger {
         jobsByHost[host, default: 0] += 1
     }
 
-    public func endHostJob(_ host: String) {
+    /// Returns the number of jobs still counted on `host` afterwards. Callers use
+    /// a `0` return to release per-host state that must survive while any sibling
+    /// is still transferring — the rate limiter's queue cursor in particular,
+    /// since clearing it early would let a live sibling burst past its ceiling.
+    @discardableResult
+    public func endHostJob(_ host: String) -> Int {
         let next = jobsByHost[host, default: 0] - 1
         jobsByHost[host] = next > 0 ? next : nil
+        return max(0, next)
     }
 
     /// Equal split of the per-host socket ceiling across jobs currently counted

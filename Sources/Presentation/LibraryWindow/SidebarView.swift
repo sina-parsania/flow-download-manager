@@ -37,6 +37,26 @@ struct SidebarView: View {
                             (.category(key), key.capitalized, symbol(for: key))
                         }
                     )
+                    // Projects and tags are derived from the rows themselves
+                    // rather than fetched: the row model already carries both
+                    // the id and the name, and a section listing a project with
+                    // nothing in it would be a dead end.
+                    if !model.projectFilters.isEmpty {
+                        filterBlock(
+                            title: "Projects",
+                            items: model.projectFilters.map { project in
+                                (.project(project.id), project.name, "folder")
+                            }
+                        )
+                    }
+                    if !model.tagFilters.isEmpty {
+                        filterBlock(
+                            title: "Tags",
+                            items: model.tagFilters.map { tag in
+                                (.tag(tag.id), tag.name, "tag")
+                            }
+                        )
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 24)

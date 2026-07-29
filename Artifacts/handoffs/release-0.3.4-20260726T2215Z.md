@@ -18,7 +18,9 @@ make release-dmg-unsigned # exit 0
 ```
 
 ## Published
-- (pending push) Tag `v0.3.4`
+- Commit `64bca3a` on `main`
+- Tag `v0.3.4`
+- Release: https://github.com/sina-parsania/flow-download-manager/releases/tag/v0.3.4
 
 ## Not done
 - Track B notarization (skipped; ADR 0008)

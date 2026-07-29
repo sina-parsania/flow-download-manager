@@ -36,6 +36,24 @@ public struct TransferJobDetails: Sendable {
     public let maxBytesPerSecond: Int64?
     /// Per-job connection preference; `nil` derives the count from file size.
     public let preferredConnectionCount: Int?
+    /// Folder already stamped for this job, or `nil` if it has not been stamped
+    /// yet (first attempt) or the feature was off when it was.
+    public let categorySubfolder: String?
+
+    /// Where this job's `.partial`, `.segmap` and final file actually live.
+    ///
+    /// Every path built for a job must come from here rather than from
+    /// ``destinationDirectory``: finalization, the restart wipe and delete-with-files
+    /// each rebuild the partial path independently, and one of them using the parent
+    /// directory means a promoted file goes to the wrong place or an orphaned
+    /// partial is left behind.
+    ///
+    /// ``destinationDirectory`` remains the right receiver for
+    /// `startAccessingSecurityScopedResource` — the scope covers descendants.
+    public var writeDirectory: URL {
+        guard let categorySubfolder else { return destinationDirectory }
+        return destinationDirectory.appendingPathComponent(categorySubfolder, isDirectory: true)
+    }
 }
 
 /// Inspector-facing view of one job's transfer limits and integrity outcome.
@@ -798,8 +816,61 @@ public enum JobRepository {
                 cookieProfileID: job.cookieProfileID,
                 customHeadersJSON: job.customHeadersJSON,
                 maxBytesPerSecond: job.maxBytesPerSecond,
-                preferredConnectionCount: job.preferredConnectionCount
+                preferredConnectionCount: job.preferredConnectionCount,
+                categorySubfolder: job.categorySubfolder
             )
+        }
+    }
+
+    /// Decides, once and for all, which subfolder this job's file lands in.
+    ///
+    /// Idempotent by design: the first call stamps `categorySubfolder` from the
+    /// job's category at that moment and every later call returns the stamped
+    /// value, ignoring `enabled` and ignoring any subsequent category change. That
+    /// is the whole point — a job whose folder moved between attempts would leave
+    /// its `.partial` and `.segmap` behind at the old path and re-download from
+    /// zero. Toggling the setting therefore affects new downloads only.
+    ///
+    /// Called after the probe has had its chance to upgrade a job out of `other`,
+    /// so an unclassified link that turns out to be a video lands in `Videos`.
+    /// Returns `nil` when the feature is off or the category yields no safe folder
+    /// name; the caller then writes straight into the destination directory.
+    @discardableResult
+    public static func stampCategorySubfolder(
+        database: EngineDatabase,
+        jobID: String,
+        enabled: Bool
+    ) throws -> String? {
+        try database.pool.write { db in
+            guard var job = try JobRecord.fetchOne(db, key: jobID) else {
+                throw JobRepositoryError.jobNotFound(jobID)
+            }
+            if let stamped = job.categorySubfolder {
+                return stamped
+            }
+            guard enabled else { return nil }
+            guard let category = try CategoryRecord.fetchOne(db, key: job.categoryID),
+                  let folder = CategoryFolderName.folderName(
+                      forCategoryStableKey: category.stableKey
+                  )
+            else { return nil }
+            job.categorySubfolder = folder
+            // Keep the displayed location in step immediately rather than waiting
+            // for the next state transition. Same helper that transition uses, so
+            // there is one implementation of "where does this job's file live".
+            if let profile = try DestinationProfileRecord.fetchOne(
+                db, key: job.destinationProfileID
+            ) {
+                JobLocationTimeline.refreshDestinationPath(&job, profile: profile)
+            }
+            // No `revision` bump: this is agent-internal path bookkeeping, not state
+            // a client holds an expected revision for — the same reason
+            // `JobLocationTimeline` does not bump it. Bumping here would reject a
+            // Pause or Cancel clicked between the last poll and this write, with a
+            // revision conflict the user has no way to see.
+            job.updatedAt = Date()
+            try job.update(db)
+            return folder
         }
     }
 

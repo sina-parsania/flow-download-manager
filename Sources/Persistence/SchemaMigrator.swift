@@ -23,6 +23,7 @@ public enum SchemaMigrator {
         registerV5(&migrator)
         registerV6(&migrator)
         registerV7(&migrator)
+        registerV8(&migrator)
         return migrator
     }
 
@@ -100,6 +101,9 @@ public enum SchemaMigrator {
 
     /// Stable identifier for the v7 migration (job timeline + on-disk location).
     public static let v7Identifier = "v7-job-location-timeline"
+
+    /// Stable identifier for the v8 migration (per-job category subfolder).
+    public static let v8Identifier = "v8-category-subfolder"
 
     /// Migrator that stops after v6 — used by migration round-trip tests.
     public static var v6Only: DatabaseMigrator {
@@ -397,6 +401,20 @@ public enum SchemaMigrator {
                 t.add(column: "finalFilename", .text)
                 // Last-resolved absolute destination directory for this job's profile.
                 t.add(column: "destinationPath", .text)
+            }
+        }
+    }
+
+    private static func registerV8(_ migrator: inout DatabaseMigrator) {
+        migrator.registerMigration(v8Identifier) { db in
+            try db.alter(table: "jobs") { t in
+                // Single path component appended to the destination directory when
+                // category folders are on, e.g. "Videos". Stamped once, just before
+                // the partial file is opened, and never rewritten afterwards — a job
+                // whose folder moved between attempts would orphan its .partial and
+                // .segmap. `nil` means "write straight into the destination", which
+                // is both the feature-off behaviour and every pre-v8 job.
+                t.add(column: "categorySubfolder", .text)
             }
         }
     }

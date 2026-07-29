@@ -46,6 +46,10 @@ public actor TransferOrchestrator {
 
     private let database: EngineDatabase
     private let budget: TransferBudgetLedger
+    /// Enforces the global and per-host byte ceilings across every concurrent
+    /// transfer. One instance per agent process, by design — a per-job limiter is
+    /// the defect this replaces.
+    private let rateLimiter = SharedRateLimiter()
     private let retryPolicy: RetryPolicy
     private let progressLedger: JobProgressLedger
     private let secretStore: any SecretStore
@@ -292,12 +296,19 @@ public actor TransferOrchestrator {
             )
             defer {
                 let budget = self.budget
+                let limiter = self.rateLimiter
                 let hostToRelease = host
                 let extra = extraSegmentSockets
                 Task.detached {
                     await budget.releaseSocket(host: hostToRelease)
                     await budget.releaseSockets(host: hostToRelease, count: extra)
-                    await budget.endHostJob(hostToRelease)
+                    // Drop the limiter's per-host accounting only once the last
+                    // job on this host is gone. Clearing it while a sibling is
+                    // still transferring would reset the queue cursor and let
+                    // that sibling burst past the host ceiling.
+                    if await budget.endHostJob(hostToRelease) == 0 {
+                        limiter.forgetHost(hostToRelease)
+                    }
                 }
             }
 
@@ -312,7 +323,19 @@ public actor TransferOrchestrator {
                 if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
             }
 
-            let options = try buildDownloadOptions(from: details, hostSetting: hostSetting)
+            var options = try buildDownloadOptions(from: details, hostSetting: hostSetting)
+            // Publish the ceilings this job is subject to into the process-wide
+            // limiter, then hand the job a reference to it. The limits are NOT
+            // copied into `options.maxBytesPerSecond` — a value copied per job is
+            // by construction a per-job cap, which is what let five concurrent
+            // downloads each run at the full configured rate.
+            // A policy read failure means "no limit known", not "unlimited
+            // forever": the next job to start re-reads it.
+            let globalLimit = (try? activeGlobalBandwidthLimit()).flatMap(\.self) ?? 0
+            rateLimiter.setGlobalLimit(bytesPerSecond: globalLimit)
+            rateLimiter.setHostLimit(host: host, bytesPerSecond: hostSetting?.maxBytesPerSecond ?? 0)
+            options.rateLimiter = rateLimiter
+            options.rateLimitHost = host
             // CDN links often expose the real title only via Content-Disposition /
             // Content-Type on the first probe — apply that *before* choosing the
             // on-disk name so we never land "binary.partial" for a named .mp4.
@@ -363,8 +386,24 @@ public actor TransferOrchestrator {
                 url: details.canonicalURL
             )
 
-            let partial = details.destinationDirectory.appendingPathComponent("\(filename).partial")
-            let preferredFinal = details.destinationDirectory.appendingPathComponent(filename)
+            // Stamped only after the refine above, so a link that arrived as `other`
+            // and turned out to be a video lands in `Videos` rather than `Other`.
+            let writeDirectory: URL
+            do {
+                writeDirectory = try Self.resolveWriteDirectory(database: database, details: details)
+            } catch {
+                _ = try JobRepository.updateJobState(
+                    database: database, id: jobID, state: .failed,
+                    terminalReason: "destinationUnavailable", expectedRevision: nil
+                )
+                EngineLog.agent.error(
+                    "category folder unavailable id=\(jobID, privacy: .public) err=\(EngineLog.redacted(error), privacy: .public)"
+                )
+                return
+            }
+
+            let partial = writeDirectory.appendingPathComponent("\(filename).partial")
+            let preferredFinal = writeDirectory.appendingPathComponent(filename)
             let conflictPolicy = DestinationConflictPolicy.parse(details.conflictPolicy)
             let destinationExists = FileManager.default.fileExists(atPath: preferredFinal.path)
             let conflictAction = DestinationConflictResolver.action(
@@ -495,7 +534,7 @@ public actor TransferOrchestrator {
             // CD / MIME often arrive only after the transfer — rename the
             // on-disk partial so promote lands on the real name (e.g. .mp4 / .html).
             let promotePaths = try Self.resolvePromotePaths(
-                destinationDirectory: details.destinationDirectory,
+                destinationDirectory: writeDirectory,
                 startedFilename: filename,
                 betterFilename: betterName,
                 startedPartial: partial,
@@ -569,12 +608,11 @@ public actor TransferOrchestrator {
             }
         }
         options.extraHeaders = headers
-        // `DownloadOptions.maxBytesPerSecond == 0` means unlimited.
-        options.maxBytesPerSecond = try Self.effectiveMaxBytesPerSecond(
-            perJob: details.maxBytesPerSecond,
-            hostLimit: hostSetting?.maxBytesPerSecond,
-            globalPolicyLimit: activeGlobalBandwidthLimit()
-        ) ?? 0
+        // Only the PER-JOB override lives here; `0` means unlimited. The global
+        // and per-host ceilings are enforced by the shared limiter the caller
+        // attaches, because they are aggregate limits and cannot be expressed as
+        // a number copied into each transfer's own budget.
+        options.maxBytesPerSecond = max(0, details.maxBytesPerSecond ?? 0)
         return options
     }
 
@@ -591,7 +629,14 @@ public actor TransferOrchestrator {
         return policy.maxBytesPerSecond
     }
 
-    /// Precedence: per-job > per-host > global calendar policy.
+    /// The narrowest rate a job is subject to right now, for display only.
+    ///
+    /// Precedence: per-job > per-host > global calendar policy. This is what the
+    /// inspector shows; it is deliberately NOT what throttles the transfer. The
+    /// three limits have different scopes — the per-job value budgets one
+    /// transfer, while the host and global values are shared across every
+    /// concurrent transfer — so collapsing them to one number and copying it into
+    /// each job is exactly the bug this slice fixes.
     static func effectiveMaxBytesPerSecond(
         perJob: Int64?,
         hostLimit: Int64? = nil,
@@ -745,9 +790,9 @@ public actor TransferOrchestrator {
                 if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
             }
 
-            let partial = details.destinationDirectory
+            let partial = details.writeDirectory
                 .appendingPathComponent(intent.partialFilename)
-            let final = details.destinationDirectory
+            let final = details.writeDirectory
                 .appendingPathComponent(intent.finalFilename)
 
             try Self.runFinalizationPipeline(
@@ -943,6 +988,37 @@ public actor TransferOrchestrator {
             }
         }
         return dir.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
+    }
+
+    /// The directory this job's bytes are written into: the destination itself, or
+    /// a category subfolder inside it.
+    ///
+    /// Throws rather than falling back to the parent directory. Silently writing
+    /// somewhere other than where the row says the file is would be worse than a
+    /// visible failure — and a resumed job that fell back would look for its
+    /// `.partial` in the wrong place and start over.
+    private nonisolated static func resolveWriteDirectory(
+        database: EngineDatabase,
+        details: TransferJobDetails
+    ) throws -> URL {
+        let stamped = try JobRepository.stampCategorySubfolder(
+            database: database,
+            jobID: details.jobID,
+            enabled: AgentBoolSettings.bool(forKey: AgentBoolSettings.categoryFoldersEnabledKey)
+        )
+        guard let stamped else { return details.destinationDirectory }
+        let directory = details.destinationDirectory.appendingPathComponent(
+            stamped,
+            isDirectory: true
+        )
+        // `createDirectory` succeeds if the directory exists, but throws when a
+        // plain *file* already sits at that name — which is exactly the case that
+        // must not be papered over.
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
     }
 
     /// Auto-assign built-in categories when the job is still `other`.

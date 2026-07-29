@@ -25,11 +25,20 @@ public enum MediaSiteProbe {
         return hosts.contains(where: { lower.contains($0) })
     }
 
-    /// Resolves `yt-dlp` under VendorBuild when present; otherwise `nil`.
+    /// Resolves `yt-dlp`: bundled, then user-chosen, then a permission-checked
+    /// well-known location. `nil` when the helper is not installed.
     public static func resolvedExecutable(
         fileManager: FileManager = .default
     ) -> URL? {
-        MediaProcessLauncher.vendorMediaExecutable(named: "yt-dlp", fileManager: fileManager)
+        resolvedHelper(fileManager: fileManager)?.url
+    }
+
+    /// Same resolution, but keeps where the helper came from so the UI can show
+    /// the user which binary it is about to run.
+    public static func resolvedHelper(
+        fileManager: FileManager = .default
+    ) -> MediaHelperLocator.Resolved? {
+        MediaHelperLocator.resolve(name: "yt-dlp", fileManager: fileManager)
     }
 
     /// Metadata-only probe. Callers must treat missing binaries as a soft skip —

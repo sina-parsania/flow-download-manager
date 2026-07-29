@@ -221,7 +221,8 @@ public enum FinalizationIntentRepository {
 
                 let destination = try resolveDestinationDirectory(
                     db: db,
-                    profileID: intent.destinationProfileID
+                    profileID: intent.destinationProfileID,
+                    categorySubfolder: job.categorySubfolder
                 )
                 let partialURL = destination.appendingPathComponent(intent.partialFilename)
                 let finalURL = destination.appendingPathComponent(intent.finalFilename)
@@ -485,14 +486,24 @@ public enum FinalizationIntentRepository {
         ).insert(db)
     }
 
+    /// Where a job's `.partial` and final file live, for crash recovery.
+    ///
+    /// `categorySubfolder` must be applied here too. Recovery runs after a crash
+    /// with only the intent and the profile in hand, and resolving the profile
+    /// bookmark alone yields the *parent* of a job that was written into a
+    /// category folder — the reconciler would then see no partial and no final
+    /// file, and fail a job whose bytes are sitting safely one level down.
     private static func resolveDestinationDirectory(
         db: Database,
-        profileID: String
+        profileID: String,
+        categorySubfolder: String?
     ) throws -> URL {
         guard let profile = try DestinationProfileRecord.fetchOne(db, key: profileID) else {
             throw FinalizationIntentRepositoryError.destinationUnavailable(profileID)
         }
-        return try DestinationBookmark.resolveDirectory(bookmarkData: profile.bookmarkData)
+        let base = try DestinationBookmark.resolveDirectory(bookmarkData: profile.bookmarkData)
+        guard let categorySubfolder else { return base }
+        return base.appendingPathComponent(categorySubfolder, isDirectory: true)
     }
 
     private static func validateTerminalReason(

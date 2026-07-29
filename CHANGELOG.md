@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-07-29
+
+Community release. Still **unsigned** (ADR 0008).
+
+Upgrading applies schema `v8`. Existing downloads are untouched and keep their
+current location; a database migrated to v8 cannot be opened by an older build.
+
+### Fixed
+- **Speed limits are now enforced in aggregate.** The global and per-host limits were applied per transfer, so several concurrent downloads each ran at the full configured rate — actual throughput reached up to 5× the number you set
+- **Video pages work in a released build.** The yt-dlp helper was resolved relative to the working directory, which is `/` for a launched app, so the probe never found it and the button stayed disabled
+- Streaming pages (HLS/DASH) are no longer mistaken for downloadable files — a `.m3u8` or `.mpd` link produced a few kilobytes of playlist text named like a video
+
+### Library
+- **Create category folders** (Settings): sorts each download into a folder named for its category inside your download folder (schema `v8`). Off by default; affects new downloads only, and a download that has started keeps the folder it began in
+- Fixed: after a crash, finalization looked for the partial file in the parent of a job's category folder
+- Fixed: every state change rewrote the Location column back to the parent folder
+
+### Media pages
+- Resolve a video page to a direct link and queue it, with the site's own headers forwarded. Copy-protected and live pages are still refused, and pages that only offer separate audio and video are reported as such
+- Choose the yt-dlp helper in Settings → Media pages; Flow also finds a Homebrew install, but never runs a binary that other local users could replace
+
+### Browser companion
+- Firefox extension, sharing the Chrome extension's source. Temporary add-on only — a permanent install needs Mozilla signing (ADR 0008)
+
+### Internal
+- Adding an XPC RPC is now guarded by a contract-drift test
+- Mutation records for XPC mutations can no longer be forgotten by a new handler
+
 ## 0.3.5 — 2026-07-27
 
 Community patch. Still **unsigned** (ADR 0008).

@@ -33,8 +33,21 @@ public enum TransferCore {
         public var cookieJarPath: String?
         /// Validated custom request headers (FR-TRN-005).
         public var extraHeaders: [HTTPHeader]
-        /// Soft cap in bytes/second; `0` means unlimited (FR-TRN-011).
+        /// Soft cap in bytes/second for THIS transfer alone; `0` means unlimited
+        /// (FR-TRN-011). Global and per-host ceilings are enforced separately by
+        /// ``rateLimiter`` — they cannot live here, because a value copied into
+        /// each transfer's options is by construction a per-transfer cap.
         public var maxBytesPerSecond: Int64
+        /// Process-wide limiter enforcing the global and per-host ceilings across
+        /// every concurrent transfer. `nil` when neither ceiling is configured.
+        ///
+        /// Not part of `Equatable`: it is a shared reference, and two option sets
+        /// describing the same transfer should compare equal regardless of which
+        /// limiter instance they were handed.
+        public var rateLimiter: SharedRateLimiter?
+        /// Host these bytes are charged to in ``rateLimiter``. Resolved once by
+        /// the caller rather than re-parsed from the URL on every progress tick.
+        public var rateLimitHost: String?
 
         public init(
             connectTimeoutMilliseconds: Int = 8000,
@@ -44,7 +57,9 @@ public enum TransferCore {
             proxyURL: String? = nil,
             cookieJarPath: String? = nil,
             extraHeaders: [HTTPHeader] = [],
-            maxBytesPerSecond: Int64 = 0
+            maxBytesPerSecond: Int64 = 0,
+            rateLimiter: SharedRateLimiter? = nil,
+            rateLimitHost: String? = nil
         ) {
             self.connectTimeoutMilliseconds = connectTimeoutMilliseconds
             self.transferTimeoutMilliseconds = transferTimeoutMilliseconds
@@ -54,6 +69,22 @@ public enum TransferCore {
             self.cookieJarPath = cookieJarPath
             self.extraHeaders = extraHeaders
             self.maxBytesPerSecond = maxBytesPerSecond
+            self.rateLimiter = rateLimiter
+            self.rateLimitHost = rateLimitHost
+        }
+
+        /// Excludes ``rateLimiter``: it is shared mutable infrastructure, not part
+        /// of what makes two option sets describe the same transfer.
+        public static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.connectTimeoutMilliseconds == rhs.connectTimeoutMilliseconds
+                && lhs.transferTimeoutMilliseconds == rhs.transferTimeoutMilliseconds
+                && lhs.maxRedirects == rhs.maxRedirects
+                && lhs.userpwd == rhs.userpwd
+                && lhs.proxyURL == rhs.proxyURL
+                && lhs.cookieJarPath == rhs.cookieJarPath
+                && lhs.extraHeaders == rhs.extraHeaders
+                && lhs.maxBytesPerSecond == rhs.maxBytesPerSecond
+                && lhs.rateLimitHost == rhs.rateLimitHost
         }
 
         /// Newline-separated `Name: Value` lines for CURLOPT_HTTPHEADER.
@@ -460,13 +491,24 @@ public enum TransferCore {
         let transfer = Int(options.transferTimeoutMilliseconds)
         let redirects = Int(options.maxRedirects)
         let abortToken = abortFlag?.cToken
+        // Per-transfer cap and the shared global/per-host ceilings are separate
+        // mechanisms: the first is this transfer's own budget, the second is a
+        // queue every concurrent transfer waits in. Both are charged the same
+        // delta and the caller waits for whichever is slower.
         let governor: SyncBandwidthGovernor? = options.maxBytesPerSecond > 0
             ? SyncBandwidthGovernor(bytesPerSecond: options.maxBytesPerSecond)
             : nil
+        let meter: RateLimitedProgressMeter? = {
+            guard let limiter = options.rateLimiter,
+                  limiter.isLimited(host: options.rateLimitHost)
+            else { return nil }
+            return RateLimitedProgressMeter(limiter: limiter, host: options.rateLimitHost)
+        }()
         let gatedProgress: ProgressHandler? = {
-            guard let governor else { return onProgress }
+            guard governor != nil || meter != nil else { return onProgress }
             return { written, total in
-                governor.noteProgress(totalWritten: written)
+                governor?.noteProgress(totalWritten: written)
+                meter?.noteProgress(totalWritten: written)
                 onProgress?(written, total)
             }
         }()

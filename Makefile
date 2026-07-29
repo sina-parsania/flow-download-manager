@@ -147,6 +147,23 @@ release-notarize: ## Notarize a signed DMG (BLOCKED without credentials)
 install-chrome-native-host: ## Register the Chrome Native Messaging host (extension ID is derived; DM_CHROME_EXTENSION_ID overrides)
 	@Scripts/install-chrome-native-host.sh
 
+.PHONY: install-firefox-native-host
+install-firefox-native-host: ## Register the Firefox Native Messaging host (ID read from the firefox manifest; DM_FIREFOX_EXTENSION_ID overrides)
+	@Scripts/install-firefox-native-host.sh
+
+# Firefox ships the same background/popup source as Chrome — only the manifest
+# differs — so the loadable directory is staged rather than kept as a second
+# copy that would drift out of sync with the cookie validation in background.js.
+.PHONY: browser-extension-firefox
+browser-extension-firefox: ## Stage the Firefox companion into .build/firefox-extension
+	@rm -rf .build/firefox-extension
+	@mkdir -p .build/firefox-extension
+	@cp BrowserExtension/chrome/background.js BrowserExtension/chrome/popup.js \
+		BrowserExtension/chrome/popup.html .build/firefox-extension/
+	@cp -R BrowserExtension/chrome/icons .build/firefox-extension/icons
+	@cp BrowserExtension/firefox/manifest.json .build/firefox-extension/manifest.json
+	@echo "staged .build/firefox-extension (load via about:debugging)"
+
 .PHONY: vendor-media-helpers
 vendor-media-helpers: ## Fetch yt-dlp/ffmpeg when manifests include URL+sha256
 	@Scripts/VendorBuild/fetch-media-helpers.sh

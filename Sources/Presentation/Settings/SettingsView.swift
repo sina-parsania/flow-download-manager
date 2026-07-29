@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import AppKit
 import Application
 import Foundation
+import MediaIsolation
 import SwiftUI
 import XPCContracts
 
@@ -16,8 +18,56 @@ public struct SettingsView: View {
     @AppStorage(FlowAppearanceMode.userDefaultsKey) private var appearanceModeRaw = FlowAppearanceMode.system.rawValue
     @AppStorage(UpdateCheckController.automaticChecksDefaultsKey) private var automaticUpdateChecks = false
     @AppStorage(UpdateCheckController.automaticDownloadDefaultsKey) private var automaticUpdateDownload = false
+    /// Bound so the card re-renders the moment a helper is chosen or cleared.
+    @AppStorage(MediaHelperLocator.userChosenPathDefaultsKey) private var chosenMediaHelperPath = ""
+    @State private var mediaHelperError: String?
 
     public init() {}
+
+    /// Recomputed on each render rather than cached: the helper can be moved or
+    /// uninstalled while Settings is open, and a stale path shown here would be
+    /// a path the probe then fails on.
+    private var mediaHelper: MediaHelperLocator.Resolved? {
+        _ = chosenMediaHelperPath
+        return MediaSiteProbe.resolvedHelper()
+    }
+
+    private var mediaHelperIsUserChosen: Bool {
+        !chosenMediaHelperPath.isEmpty
+    }
+
+    private func mediaHelperSourceCaption(_ source: MediaHelperLocator.Source) -> String {
+        switch source {
+        case .bundled: "Included with Flow."
+        case .userChosen: "You chose this helper."
+        case .discovered: "Found on this Mac. Choose a different one if that isn't the tool you expect."
+        }
+    }
+
+    /// The ONLY place the helper path is written. Deliberately a modal panel:
+    /// this value decides which binary Flow executes, so it must come from a
+    /// person picking a file, never from a link, a dropped file, the clipboard,
+    /// or the browser extension's native messaging channel.
+    private func chooseMediaHelper() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the yt-dlp program Flow should use to read video pages."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard FileManager.default.isExecutableFile(atPath: url.path) else {
+            mediaHelperError = "That file isn't a program Flow can run."
+            return
+        }
+        mediaHelperError = nil
+        chosenMediaHelperPath = url.path
+    }
+
+    private func clearChosenMediaHelper() {
+        mediaHelperError = nil
+        chosenMediaHelperPath = ""
+    }
 
     public var body: some View {
         Form {
@@ -49,6 +99,24 @@ public struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                Toggle(
+                    "Create category folders (Videos, Documents, …)",
+                    isOn: $model.categoryFoldersEnabled
+                )
+                .accessibilityLabel("Create category folders")
+                .disabled(model.isBusy)
+                .onChange(of: model.categoryFoldersEnabled) { _, newValue in
+                    Task { await model.saveCategoryFolders(newValue) }
+                }
+                Text(
+                    "Sorts each download into a folder named for its category inside "
+                        + "the folder above. Downloads already in the queue keep the "
+                        + "location they started with."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Clipboard") {
@@ -90,6 +158,43 @@ public struct SettingsView: View {
                     Button("Open Login Items Settings") {
                         launchAtLogin.openLoginItemsSettings()
                     }
+                }
+            }
+
+            Section("Media pages") {
+                if let helper = mediaHelper {
+                    Text(helper.url.path)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(mediaHelperSourceCaption(helper.source))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(
+                        "No media helper found. Video pages need yt-dlp installed; "
+                            + "direct file links download without it."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Button("Choose Helper…") { chooseMediaHelper() }
+                        .accessibilityLabel("Choose media helper")
+                    if mediaHelperIsUserChosen {
+                        Button("Use Default") { clearChosenMediaHelper() }
+                            .accessibilityLabel("Use the default media helper")
+                    }
+                }
+                if let mediaHelperError {
+                    Text(mediaHelperError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -491,13 +596,16 @@ private final class SettingsModel: ObservableObject {
     @Published var hostSettingUserAgent = ""
     @Published var hostSettingCredentialID = ""
     @Published var zipAutoExtractEnabled = true
+    @Published var categoryFoldersEnabled = false
     @Published var statusMessage: String?
     @Published var statusIsError = false
     @Published var isBusy = false
     private var suppressZipSettingSave = false
+    private var suppressCategoryFolderSave = false
 
     let engineClient = EngineClient()
     private static let zipAutoExtractKey = "zipAutoExtractEnabled"
+    private static let categoryFoldersKey = "categoryFoldersEnabled"
 
     var canSaveCredential: Bool {
         !credentialDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -622,6 +730,10 @@ private final class SettingsModel: ObservableObject {
             suppressZipSettingSave = true
             zipAutoExtractEnabled = zipSetting.value
             suppressZipSettingSave = false
+            let folderSetting = try await engineClient.getBoolSetting(key: Self.categoryFoldersKey)
+            suppressCategoryFolderSave = true
+            categoryFoldersEnabled = folderSetting.value
+            suppressCategoryFolderSave = false
             let hosts = try await engineClient.listHostSettings()
             hostSettings = hosts.settings
             statusMessage = nil
@@ -642,6 +754,20 @@ private final class SettingsModel: ObservableObject {
             statusIsError = false
         } catch {
             statusMessage = "Unable to save ZIP extract preference."
+            statusIsError = true
+        }
+    }
+
+    func saveCategoryFolders(_ enabled: Bool) async {
+        guard !suppressCategoryFolderSave else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            _ = try await engineClient.setBoolSetting(key: Self.categoryFoldersKey, value: enabled)
+            statusMessage = nil
+            statusIsError = false
+        } catch {
+            statusMessage = "Unable to save the category folder preference."
             statusIsError = true
         }
     }

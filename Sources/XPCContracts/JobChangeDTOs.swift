@@ -25,8 +25,7 @@ public final class PullJobChangesRequest: NSObject, NSSecureCoding, @unchecked S
     }
 
     public required init?(coder: NSCoder) {
-        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID") as String?
-        guard let requestID, !requestID.isEmpty else { return nil }
+        guard let requestID = coder.decodeUUIDString("requestID") else { return nil }
         self.requestID = requestID
         sinceSequence = coder.decodeInt64(forKey: "sinceSequence")
     }
@@ -69,10 +68,14 @@ public final class JobChangeBatch: NSObject, NSSecureCoding, @unchecked Sendable
     }
 
     public required init?(coder: NSCoder) {
-        let requestID = coder.decodeObject(of: NSString.self, forKey: "requestID") as String?
         let upserts = coder.decodeArrayOfObjects(ofClass: JobSnapshot.self, forKey: "upserts") ?? []
         let removed = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "removedJobIDs") ?? []
-        guard let requestID, !requestID.isEmpty else { return nil }
+        guard let requestID = coder.decodeUUIDString("requestID") else { return nil }
+        // Removals drive deletion of local rows, so a malformed identifier fails
+        // the whole batch rather than being skipped past.
+        guard removed.count <= EngineXPC.maxCollectionCount,
+              removed.allSatisfy({ UUID(uuidString: $0 as String) != nil })
+        else { return nil }
         self.requestID = requestID
         sequence = coder.decodeInt64(forKey: "sequence")
         sinceSequence = coder.decodeInt64(forKey: "sinceSequence")

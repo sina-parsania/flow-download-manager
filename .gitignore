@@ -43,6 +43,18 @@ VendorBuild/.cache/
 VendorBuild/prefix/
 
 
-# Generated release binaries (attach to GitHub Releases, do not commit)
+# Generated release binaries (attach to GitHub Releases, do not commit).
+# Two 23 MB zips were committed once and still weigh down .git — keep the
+# payloads out. The small text artifacts here (*.sha256, sbom.txt,
+# appcast.example.xml, sparkle/*.md) stay tracked on purpose.
 Artifacts/release/*.dmg
+Artifacts/release/*.zip
 Artifacts/release/dmg-stage/
+Artifacts/release/dmg-stage-zip/
+Artifacts/release/sparkle/*.zip
+Artifacts/release/sparkle/*.delta
+
+# Locally captured gate/CI output. Checked-in evidence is *.md only.
+Artifacts/validation/*.log
+Artifacts/validation/*.txt
+Artifacts/validation/*.zip

@@ -6,8 +6,14 @@ import Foundation
 public enum AgentBoolSettings {
     public static let zipAutoExtractEnabledKey = "zipAutoExtractEnabled"
 
+    /// Sort completed downloads into a per-category folder (`Videos`, `Documents`, …)
+    /// inside the download directory. Off by default: turning it on changes where
+    /// files appear, which should be the user's decision, not an upgrade surprise.
+    public static let categoryFoldersEnabledKey = "categoryFoldersEnabled"
+
     public static let allowlistedKeys: Set<String> = [
-        zipAutoExtractEnabledKey
+        zipAutoExtractEnabledKey,
+        categoryFoldersEnabledKey
     ]
 
     /// Defaults: `zipAutoExtractEnabled` is true when never written (preserve prior behavior).

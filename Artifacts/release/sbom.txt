@@ -1,5 +1,5 @@
 # Download Manager dependency inventory
-# generated: 2026-07-26T22:20:04Z
+# generated: 2026-07-29T17:54:13Z
 
 ## Swift packages (Package.resolved)
 {

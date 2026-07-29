@@ -44,7 +44,8 @@ struct AddDownloadsSheet: View {
     @State private var confirmationCounts: [(stableKey: String, count: Int)] = []
     @State private var torrentInspection: TorrentInspectionSummary?
     @State private var mediaProbeBusy = false
-    @State private var mediaProbeLines: [String] = []
+    @State private var mediaProbeOutcomes: [MediaResolution.Outcome] = []
+    @State private var mediaProbeMessage: String?
 
     private static var torrentContentType: UTType {
         UTType(filenameExtension: "torrent") ?? .data
@@ -77,7 +78,8 @@ struct AddDownloadsSheet: View {
                     if let torrentInspection {
                         torrentInspectionCard(torrentInspection)
                     }
-                    if !mediaCandidateURLs.isEmpty || !mediaProbeLines.isEmpty {
+                    if !mediaCandidateURLs.isEmpty || !mediaProbeOutcomes.isEmpty
+                        || mediaProbeMessage != nil {
                         mediaProbeCard
                     }
                     DestinationFolderCard(
@@ -319,11 +321,15 @@ struct AddDownloadsSheet: View {
                     .disabled(mediaProbeBusy || optionsLocked || MediaSiteProbe.resolvedExecutable() == nil)
                 }
 
-                ForEach(mediaProbeLines, id: \.self) { line in
-                    Text(line)
+                if let mediaProbeMessage {
+                    Text(mediaProbeMessage)
                         .font(FlowTheme.Typeface.caption(12))
                         .foregroundStyle(palette.inkSoft)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                ForEach(mediaProbeOutcomes) { outcome in
+                    mediaOutcomeRow(outcome)
                 }
             }
             .padding(14)
@@ -334,6 +340,44 @@ struct AddDownloadsSheet: View {
                     .strokeBorder(palette.pinStroke, lineWidth: 1)
             }
         }
+    }
+
+    /// One probed page link: either a queue action, or the plain reason it cannot
+    /// be queued. A resolved link never queues itself — the user clicks.
+    @ViewBuilder
+    private func mediaOutcomeRow(_ outcome: MediaResolution.Outcome) -> some View {
+        let name = outcome.title ?? outcome.sourceURL
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(FlowTheme.Typeface.caption(12))
+                    .foregroundStyle(palette.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                switch outcome {
+                case let .resolved(resolved):
+                    if resolved.isSingleConnection {
+                        Text("Sign-in protected — downloads on a single connection.")
+                            .font(FlowTheme.Typeface.caption(11))
+                            .foregroundStyle(palette.inkSoft)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                case let .blocked(_, _, reason):
+                    Text(reason)
+                        .font(FlowTheme.Typeface.caption(11))
+                        .foregroundStyle(palette.inkSoft)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            if case let .resolved(resolved) = outcome {
+                Button("Queue") {
+                    Task { await queueResolvedMedia(resolved) }
+                }
+                .disabled(optionsLocked)
+                .accessibilityLabel("Queue \(name)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Counts alone never told the user *which* line was rejected or why — a
@@ -923,25 +967,64 @@ struct AddDownloadsSheet: View {
     private func probeMediaCandidates() async {
         mediaProbeBusy = true
         defer { mediaProbeBusy = false }
-        var lines: [String] = []
-        for url in mediaCandidateURLs.prefix(5) {
-            do {
-                let probe = try MediaSiteProbe.probeMetadata(urlString: url)
-                if probe.drmFlag || probe.mediaDecision == .rejectedDRM {
-                    lines.append("Rejected DRM: \(probe.title ?? url)")
-                } else if probe.isLive {
-                    lines.append("Live stream (not queued as a file): \(probe.title ?? url)")
+        var outcomes: [MediaResolution.Outcome] = []
+        var message: String?
+        for url in mediaCandidateURLs.prefix(Self.mediaProbeLimit) {
+            // yt-dlp launches a subprocess per page; keep it off the main actor so
+            // the sheet stays responsive while several links resolve.
+            let probe = await Task.detached { try MediaSiteProbe.probeMetadata(urlString: url) }.result
+            switch probe {
+            case let .success(result):
+                outcomes.append(MediaResolution.resolve(sourceURL: url, probe: result))
+            case let .failure(error):
+                if case MediaSiteProbe.AvailabilityError.executableMissing = error {
+                    message = "The media helper isn’t installed, so page links can’t be checked. "
+                        + "Direct file links still queue normally."
+                    outcomes.removeAll()
                 } else {
-                    lines.append("OK: \(probe.title ?? url)")
+                    outcomes.append(
+                        .blocked(
+                            sourceURL: url,
+                            title: nil,
+                            reason: "Flow couldn’t read this page. It may be private or unavailable."
+                        )
+                    )
+                    continue
                 }
-            } catch MediaSiteProbe.AvailabilityError.executableMissing {
-                lines.append("yt-dlp not found — install via VendorBuild or skip page links.")
-                break
-            } catch {
-                lines.append("Probe failed for \(url)")
             }
+            if message != nil { break }
         }
-        mediaProbeLines = lines
+        mediaProbeOutcomes = outcomes
+        mediaProbeMessage = message
+    }
+
+    /// Queues one resolved page link as its own batch, because each one carries the
+    /// headers its own host expects and `customHeadersJSON` applies batch-wide.
+    @MainActor
+    private func queueResolvedMedia(_ resolved: MediaResolution.Resolved) async {
+        let classified = ClassificationEngine.classify(
+            filenameEvidence: URL(string: resolved.downloadURL)?.lastPathComponent,
+            mimeEvidence: nil,
+            urlPath: resolved.downloadURL,
+            rules: classificationRules
+        )
+        do {
+            _ = try await library.engineClient.enqueueBatch(
+                source: "media",
+                displayName: resolved.title,
+                items: [(resolved.downloadURL, classified.stableKey)],
+                credentialProfileID: selectedCredentialID.isEmpty ? nil : selectedCredentialID,
+                proxyProfileID: selectedProxyID.isEmpty ? nil : selectedProxyID,
+                cookieProfileID: selectedCookieID.isEmpty ? nil : selectedCookieID,
+                customHeadersJSON: resolved.headersJSON,
+                projectID: selectedProjectID.isEmpty ? nil : selectedProjectID
+            )
+            mediaProbeOutcomes.removeAll { $0.sourceURL == resolved.sourceURL }
+            mediaProbeMessage = "Queued \(resolved.title ?? "the video")."
+            await library.refreshFromEngine()
+        } catch {
+            mediaProbeMessage = "Could not queue that video. Is the engine running?"
+        }
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -995,6 +1078,10 @@ struct AddDownloadsSheet: View {
 
     /// XPC-friendly chunk size — keeps large pastes (1000+) responsive and durable.
     private static let enqueueChunkSize = 250
+
+    /// Each probe spawns a yt-dlp subprocess and hits the network, so a pasted wall
+    /// of page links resolves the first few rather than launching dozens at once.
+    private static let mediaProbeLimit = 5
 
     @MainActor
     private func enqueue() async {

@@ -363,8 +363,24 @@ public actor TransferOrchestrator {
                 url: details.canonicalURL
             )
 
-            let partial = details.destinationDirectory.appendingPathComponent("\(filename).partial")
-            let preferredFinal = details.destinationDirectory.appendingPathComponent(filename)
+            // Stamped only after the refine above, so a link that arrived as `other`
+            // and turned out to be a video lands in `Videos` rather than `Other`.
+            let writeDirectory: URL
+            do {
+                writeDirectory = try Self.resolveWriteDirectory(database: database, details: details)
+            } catch {
+                _ = try JobRepository.updateJobState(
+                    database: database, id: jobID, state: .failed,
+                    terminalReason: "destinationUnavailable", expectedRevision: nil
+                )
+                EngineLog.agent.error(
+                    "category folder unavailable id=\(jobID, privacy: .public) err=\(EngineLog.redacted(error), privacy: .public)"
+                )
+                return
+            }
+
+            let partial = writeDirectory.appendingPathComponent("\(filename).partial")
+            let preferredFinal = writeDirectory.appendingPathComponent(filename)
             let conflictPolicy = DestinationConflictPolicy.parse(details.conflictPolicy)
             let destinationExists = FileManager.default.fileExists(atPath: preferredFinal.path)
             let conflictAction = DestinationConflictResolver.action(
@@ -495,7 +511,7 @@ public actor TransferOrchestrator {
             // CD / MIME often arrive only after the transfer — rename the
             // on-disk partial so promote lands on the real name (e.g. .mp4 / .html).
             let promotePaths = try Self.resolvePromotePaths(
-                destinationDirectory: details.destinationDirectory,
+                destinationDirectory: writeDirectory,
                 startedFilename: filename,
                 betterFilename: betterName,
                 startedPartial: partial,
@@ -745,9 +761,9 @@ public actor TransferOrchestrator {
                 if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
             }
 
-            let partial = details.destinationDirectory
+            let partial = details.writeDirectory
                 .appendingPathComponent(intent.partialFilename)
-            let final = details.destinationDirectory
+            let final = details.writeDirectory
                 .appendingPathComponent(intent.finalFilename)
 
             try Self.runFinalizationPipeline(
@@ -943,6 +959,37 @@ public actor TransferOrchestrator {
             }
         }
         return dir.appendingPathComponent("\(base)-\(UUID().uuidString).\(ext)")
+    }
+
+    /// The directory this job's bytes are written into: the destination itself, or
+    /// a category subfolder inside it.
+    ///
+    /// Throws rather than falling back to the parent directory. Silently writing
+    /// somewhere other than where the row says the file is would be worse than a
+    /// visible failure — and a resumed job that fell back would look for its
+    /// `.partial` in the wrong place and start over.
+    private nonisolated static func resolveWriteDirectory(
+        database: EngineDatabase,
+        details: TransferJobDetails
+    ) throws -> URL {
+        let stamped = try JobRepository.stampCategorySubfolder(
+            database: database,
+            jobID: details.jobID,
+            enabled: AgentBoolSettings.bool(forKey: AgentBoolSettings.categoryFoldersEnabledKey)
+        )
+        guard let stamped else { return details.destinationDirectory }
+        let directory = details.destinationDirectory.appendingPathComponent(
+            stamped,
+            isDirectory: true
+        )
+        // `createDirectory` succeeds if the directory exists, but throws when a
+        // plain *file* already sits at that name — which is exactly the case that
+        // must not be papered over.
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
     }
 
     /// Auto-assign built-in categories when the job is still `other`.

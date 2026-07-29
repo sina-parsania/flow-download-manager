@@ -31,12 +31,25 @@ public enum JobLocationTimeline {
         job.completedAt = nil
     }
 
+    /// Recomputes the displayed location from the profile, **including the job's
+    /// category subfolder**.
+    ///
+    /// This runs on every state transition, so it is the last word on
+    /// `destinationPath`. Resolving the profile alone would write the parent back
+    /// over a stamped subfolder on the very next transition, and the Location
+    /// column would point somewhere the file is not — which is the one thing the
+    /// stored path exists to prevent.
     public static func refreshDestinationPath(
         _ job: inout JobRecord,
         profile: DestinationProfileRecord
     ) {
-        if let path = DestinationBookmark.pathDisplay(bookmarkData: profile.bookmarkData) {
-            job.destinationPath = path
+        guard let path = DestinationBookmark.pathDisplay(bookmarkData: profile.bookmarkData) else {
+            return
         }
+        guard let subfolder = job.categorySubfolder else {
+            job.destinationPath = path
+            return
+        }
+        job.destinationPath = (path as NSString).appendingPathComponent(subfolder)
     }
 }

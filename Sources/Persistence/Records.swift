@@ -133,6 +133,10 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
     public var finalFilename: String?
     /// Absolute destination directory path last resolved for this job.
     public var destinationPath: String?
+    /// Single path component appended to the destination directory, e.g. `Videos`.
+    /// Stamped once, before the partial is opened, then never rewritten — moving a
+    /// job's folder between attempts would orphan its `.partial` and `.segmap`.
+    public var categorySubfolder: String?
 
     public init(
         id: String, batchID: String?, resourceID: String, state: String, priority: Int,
@@ -142,7 +146,8 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
         cookieProfileID: String? = nil, customHeadersJSON: String? = nil,
         maxBytesPerSecond: Int64? = nil, preferredConnectionCount: Int? = nil,
         startedAt: Date? = nil, completedAt: Date? = nil,
-        finalFilename: String? = nil, destinationPath: String? = nil
+        finalFilename: String? = nil, destinationPath: String? = nil,
+        categorySubfolder: String? = nil
     ) {
         self.id = id
         self.batchID = batchID
@@ -168,6 +173,7 @@ public struct JobRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.completedAt = completedAt
         self.finalFilename = finalFilename
         self.destinationPath = destinationPath
+        self.categorySubfolder = categorySubfolder
     }
 }
 

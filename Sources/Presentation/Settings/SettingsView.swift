@@ -49,6 +49,24 @@ public struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                Toggle(
+                    "Create category folders (Videos, Documents, …)",
+                    isOn: $model.categoryFoldersEnabled
+                )
+                .accessibilityLabel("Create category folders")
+                .disabled(model.isBusy)
+                .onChange(of: model.categoryFoldersEnabled) { _, newValue in
+                    Task { await model.saveCategoryFolders(newValue) }
+                }
+                Text(
+                    "Sorts each download into a folder named for its category inside "
+                        + "the folder above. Downloads already in the queue keep the "
+                        + "location they started with."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Clipboard") {
@@ -491,13 +509,16 @@ private final class SettingsModel: ObservableObject {
     @Published var hostSettingUserAgent = ""
     @Published var hostSettingCredentialID = ""
     @Published var zipAutoExtractEnabled = true
+    @Published var categoryFoldersEnabled = false
     @Published var statusMessage: String?
     @Published var statusIsError = false
     @Published var isBusy = false
     private var suppressZipSettingSave = false
+    private var suppressCategoryFolderSave = false
 
     let engineClient = EngineClient()
     private static let zipAutoExtractKey = "zipAutoExtractEnabled"
+    private static let categoryFoldersKey = "categoryFoldersEnabled"
 
     var canSaveCredential: Bool {
         !credentialDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -622,6 +643,10 @@ private final class SettingsModel: ObservableObject {
             suppressZipSettingSave = true
             zipAutoExtractEnabled = zipSetting.value
             suppressZipSettingSave = false
+            let folderSetting = try await engineClient.getBoolSetting(key: Self.categoryFoldersKey)
+            suppressCategoryFolderSave = true
+            categoryFoldersEnabled = folderSetting.value
+            suppressCategoryFolderSave = false
             let hosts = try await engineClient.listHostSettings()
             hostSettings = hosts.settings
             statusMessage = nil
@@ -642,6 +667,20 @@ private final class SettingsModel: ObservableObject {
             statusIsError = false
         } catch {
             statusMessage = "Unable to save ZIP extract preference."
+            statusIsError = true
+        }
+    }
+
+    func saveCategoryFolders(_ enabled: Bool) async {
+        guard !suppressCategoryFolderSave else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            _ = try await engineClient.setBoolSetting(key: Self.categoryFoldersKey, value: enabled)
+            statusMessage = nil
+            statusIsError = false
+        } catch {
+            statusMessage = "Unable to save the category folder preference."
             statusIsError = true
         }
     }

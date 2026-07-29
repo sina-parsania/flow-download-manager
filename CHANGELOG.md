@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-07-29
+
+Community release. Still **unsigned** (ADR 0008).
+
+Upgrading applies schema `v8`. Existing downloads are untouched and keep their
+current location; a database migrated to v8 cannot be opened by an older build.
+
 ### Fixed
 - **Speed limits are now enforced in aggregate.** The global and per-host limits were applied per transfer, so several concurrent downloads each ran at the full configured rate — actual throughput reached up to 5× the number you set
 - **Video pages work in a released build.** The yt-dlp helper was resolved relative to the working directory, which is `/` for a launched app, so the probe never found it and the button stayed disabled

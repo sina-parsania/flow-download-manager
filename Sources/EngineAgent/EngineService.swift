@@ -108,6 +108,59 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         return false
     }
 
+    /// Thrown from a ``handleMutation(requestID:reply:failure:body:)`` body when the
+    /// failure needs its own error code rather than the handler's generic one —
+    /// a malformed field is `invalidPayload`, not `internalError`.
+    struct MutationFailure: Error {
+        let code: XPCErrorCode
+        let detail: String?
+
+        init(_ code: XPCErrorCode, _ detail: String? = nil) {
+            self.code = code
+            self.detail = detail
+        }
+    }
+
+    /// The whole ritual every mutation RPC performs, in one place: validate the
+    /// request identifier, run the handshake/replay gate, unwrap the database,
+    /// execute, **record the idempotency receipt**, and reply.
+    ///
+    /// Recording the receipt is why this exists. It was previously the last line
+    /// of twenty hand-written handlers, and a handler that omitted it would let a
+    /// retried `requestID` execute the mutation a second time — a double delete or
+    /// a double upsert — with nothing failing to reveal it. Here it cannot be
+    /// omitted, because `body` has no way to reply on its own.
+    ///
+    /// `body` runs only after the gate passes. Throwing ``MutationFailure``
+    /// selects a specific error code; any other error becomes `failure`.
+    private func handleMutation<Response: AnyObject>(
+        requestID: String,
+        reply: @escaping @Sendable (Response?, NSError?) -> Void,
+        failure: String,
+        body: (EngineDatabase) throws -> Response
+    ) {
+        guard isValidRequestID(requestID) else {
+            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
+            return
+        }
+        if gateMutation(requestID: requestID, reply: reply) { return }
+
+        guard let database = services.database else {
+            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
+            return
+        }
+
+        do {
+            let response = try body(database)
+            remember(requestID, response, isMutation: true)
+            reply(response, nil)
+        } catch let mutation as MutationFailure {
+            reply(nil, mutation.code.error(detail: mutation.detail))
+        } catch {
+            reply(nil, XPCErrorCode.internalError.error(detail: failure))
+        }
+    }
+
     /// Record a successful response so a duplicate `requestID` replays it.
     /// Must be called only after a response has actually been produced (never
     /// on an error path), since `isMutation: true` marks the mutation as
@@ -195,60 +248,51 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "enqueue failed"
+        ) { database in
             let items = request.items.map { ($0.url, $0.categoryStableKey) }
             var scheduleStartAt: Date?
             if let iso = request.scheduleStartAtISO8601 {
                 let formatter = ISO8601DateFormatter()
                 formatter.formatOptions = [.withInternetDateTime]
                 guard let parsed = formatter.date(from: iso) else {
-                    reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed scheduleStartAt"))
-                    return
+                    throw MutationFailure(.invalidPayload, "malformed scheduleStartAt")
                 }
                 scheduleStartAt = parsed
             }
             do {
                 _ = try HeaderValidator.parseExtraHeadersJSON(request.customHeadersJSON)
             } catch {
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid customHeadersJSON"))
-                return
+                throw MutationFailure(.invalidPayload, "invalid customHeadersJSON")
             }
             // Re-checked here as well as in the decoder: an in-process caller
             // constructs the request directly and skips secure coding entirely.
             var expectedChecksum: String?
             if let raw = request.expectedChecksumSHA256 {
                 guard let normalized = ChecksumFormat.normalizedSHA256(raw) else {
-                    reply(nil, XPCErrorCode.invalidPayload.error(
-                        detail: "expected checksum must be 64 hex characters"
-                    ))
-                    return
+                    throw MutationFailure(
+                        .invalidPayload, "expected checksum must be 64 hex characters"
+                    )
                 }
                 // One digest cannot describe several different files: applying it
                 // to the whole batch would fail every job but at most one.
                 guard request.items.count == 1 else {
-                    reply(nil, XPCErrorCode.invalidPayload.error(
-                        detail: "expected checksum requires a single-item batch"
-                    ))
-                    return
+                    throw MutationFailure(
+                        .invalidPayload, "expected checksum requires a single-item batch"
+                    )
                 }
                 expectedChecksum = normalized
             }
             if let rate = request.maxBytesPerSecond,
                rate <= 0 || rate > EngineXPC.maxJobBytesPerSecond {
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxBytesPerSecond"))
-                return
+                throw MutationFailure(.invalidPayload, "invalid maxBytesPerSecond")
             }
             if let connections = request.preferredConnectionCount,
                connections < 1 || connections > EngineXPC.maxPreferredConnectionCount {
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid preferredConnectionCount"))
-                return
+                throw MutationFailure(.invalidPayload, "invalid preferredConnectionCount")
             }
             let result = try JobRepository.insertBatch(
                 database: database,
@@ -265,20 +309,16 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 maxBytesPerSecond: request.maxBytesPerSecond,
                 preferredConnectionCount: request.preferredConnectionCount
             )
-            let response = EnqueueBatchResponse(
+            for jobID in result.jobIDs {
+                services.changeLedger?.noteUpsert(jobID)
+            }
+            Task { await services.orchestrator?.start() }
+            return EnqueueBatchResponse(
                 requestID: request.requestID,
                 batchID: result.batchID,
                 jobIDs: result.jobIDs,
                 acceptedCount: result.jobIDs.count
             )
-            for jobID in result.jobIDs {
-                services.changeLedger?.noteUpsert(jobID)
-            }
-            remember(request.requestID, response, isMutation: true)
-            Task { await services.orchestrator?.start() }
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "enqueue failed"))
         }
     }
 
@@ -493,14 +533,11 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "control failed"
+        ) { database in
             let newState: JobState
             let reason: String?
             switch request.command {
@@ -529,7 +566,7 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     id: request.jobID
                 ) {
                     let filename = FilenameSanitizer.sanitize(details.suggestedFilename)
-                    let partial = details.destinationDirectory
+                    let partial = details.writeDirectory
                         .appendingPathComponent("\(filename).partial")
                     let accessed = details.destinationDirectory.startAccessingSecurityScopedResource()
                     defer {
@@ -560,17 +597,13 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 expectedRevision: request.expectedRevision > 0 ? request.expectedRevision : nil,
                 resetTimelineForRestart: request.command == .restart
             )
-            let response = JobCommandResponse(
+            services.changeLedger?.noteUpsert(request.jobID)
+            return JobCommandResponse(
                 requestID: request.requestID,
                 jobID: request.jobID,
                 state: newState.rawValue,
                 revision: revision
             )
-            services.changeLedger?.noteUpsert(request.jobID)
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "control failed"))
         }
     }
 
@@ -582,30 +615,23 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "set job priority failed"
+        ) { database in
             let revision = try JobRepository.setPriority(
                 database: database,
                 id: request.jobID,
                 priority: request.priority
             )
-            let response = SetJobPriorityResponse(
+            services.changeLedger?.noteUpsert(request.jobID)
+            return SetJobPriorityResponse(
                 requestID: request.requestID,
                 jobID: request.jobID,
                 priority: request.priority,
                 revision: revision
             )
-            services.changeLedger?.noteUpsert(request.jobID)
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "set job priority failed"))
         }
     }
 
@@ -617,14 +643,11 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "delete job failed"
+        ) { database in
             // Abort any in-flight transfer before wiping files / dropping the row
             // so curl is not writing into a deleted path.
             if let orchestrator = services.orchestrator {
@@ -649,9 +672,9 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 defer {
                     if accessed { details.destinationDirectory.stopAccessingSecurityScopedResource() }
                 }
-                let partial = details.destinationDirectory
+                let partial = details.writeDirectory
                     .appendingPathComponent("\(filename).partial")
-                let final = details.destinationDirectory
+                let final = details.writeDirectory
                     .appendingPathComponent(filename)
                 try? FileManager.default.removeItem(at: partial)
                 try? FileManager.default.removeItem(
@@ -660,27 +683,21 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 try? FileManager.default.removeItem(at: final)
             }
 
-            let previousState = try JobRepository.deleteTerminalJob(
-                database: database,
-                id: request.jobID
-            )
+            let previousState: String
+            do {
+                previousState = try JobRepository.deleteTerminalJob(
+                    database: database,
+                    id: request.jobID
+                )
+            } catch JobRepositoryError.jobNotFound {
+                throw MutationFailure(.invalidPayload, "job not found")
+            }
             services.changeLedger?.noteRemoval(request.jobID)
-            let response = DeleteJobResponse(
+            return DeleteJobResponse(
                 requestID: request.requestID,
                 jobID: request.jobID,
                 previousState: previousState
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch let error as JobRepositoryError {
-            switch error {
-            case .jobNotFound:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not found"))
-            default:
-                reply(nil, XPCErrorCode.internalError.error(detail: "delete job failed"))
-            }
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "delete job failed"))
         }
     }
 
@@ -692,14 +709,16 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database, let secretStore = services.secretStore else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "credential upsert failed"
+        ) { database in
+            // The password half of this profile lives in the secret store, so both
+            // must be present; the helper only unwraps the database.
+            guard let secretStore = services.secretStore else {
+                throw MutationFailure(.internalError, "database unavailable")
+            }
             try ProfileRepository.upsertCredentialProfile(
                 database: database,
                 id: request.profileID,
@@ -710,14 +729,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 passwordUTF8: request.passwordUTF8,
                 secretStore: secretStore
             )
-            let response = UpsertCredentialProfileResponse(
+            return UpsertCredentialProfileResponse(
                 requestID: request.requestID,
                 profileID: request.profileID
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "credential upsert failed"))
         }
     }
 
@@ -729,14 +744,11 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "proxy upsert failed"
+        ) { database in
             try ProfileRepository.upsertProxyProfile(
                 database: database,
                 id: request.profileID,
@@ -747,14 +759,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     port: request.port
                 )
             )
-            let response = UpsertProxyProfileResponse(
+            return UpsertProxyProfileResponse(
                 requestID: request.requestID,
                 profileID: request.profileID
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "proxy upsert failed"))
         }
     }
 
@@ -849,25 +857,29 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
-            let snap: DestinationRepository.Snapshot = if let bookmark = request.bookmarkData {
-                try DestinationRepository.setDefaultBookmark(
-                    database: database,
-                    bookmarkData: bookmark,
-                    displayName: request.displayName,
-                    pathHint: request.pathDisplay
-                )
-            } else {
-                try DestinationRepository.resetDefault(database: database)
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "set destination failed"
+        ) { database in
+            let snap: DestinationRepository.Snapshot
+            do {
+                snap = if let bookmark = request.bookmarkData {
+                    try DestinationRepository.setDefaultBookmark(
+                        database: database,
+                        bookmarkData: bookmark,
+                        displayName: request.displayName,
+                        pathHint: request.pathDisplay
+                    )
+                } else {
+                    try DestinationRepository.resetDefault(database: database)
+                }
+            } catch {
+                // A stale or foreign bookmark is bad input, not an engine fault, so
+                // this stays `invalidPayload` rather than the helper's default.
+                throw MutationFailure(.invalidPayload, "set destination failed")
             }
-            let response = SetDefaultDestinationResponse(
+            return SetDefaultDestinationResponse(
                 requestID: request.requestID,
                 destination: DefaultDestinationSnapshot(
                     pathDisplay: snap.pathDisplay,
@@ -875,10 +887,6 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                     isDefaultDownloads: snap.isDefaultDownloads
                 )
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "set destination failed"))
         }
     }
 
@@ -890,14 +898,11 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "cookie profile upsert failed"
+        ) { database in
             try ProfileRepository.upsertCookieProfile(
                 database: database,
                 id: request.profileID,
@@ -908,14 +913,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 profileID: request.profileID,
                 applicationSupportRoot: Self.applicationSupportRoot()
             )
-            let response = UpsertCookieProfileResponse(
+            return UpsertCookieProfileResponse(
                 requestID: request.requestID,
                 profileID: request.profileID
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "cookie profile upsert failed"))
         }
     }
 
@@ -927,15 +928,16 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
-            _ = try BandwidthWindowEvaluator.parseWindowsJSON(request.windowsJSON)
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "bandwidth policy upsert failed"
+        ) { database in
+            do {
+                _ = try BandwidthWindowEvaluator.parseWindowsJSON(request.windowsJSON)
+            } catch is BandwidthWindowEvaluator.ParseError {
+                throw MutationFailure(.invalidPayload, "invalid windowsJSON")
+            }
             try ProfileRepository.upsertBandwidthPolicy(
                 database: database,
                 id: request.policyID,
@@ -943,16 +945,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 windowsJSON: request.windowsJSON,
                 maxBytesPerSecond: request.maxBytesPerSecond
             )
-            let response = UpsertBandwidthPolicyResponse(
+            return UpsertBandwidthPolicyResponse(
                 requestID: request.requestID,
                 policyID: request.policyID
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch is BandwidthWindowEvaluator.ParseError {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid windowsJSON"))
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "bandwidth policy upsert failed"))
         }
     }
 
@@ -1025,32 +1021,21 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         _ request: UpsertProjectRequest,
         reply: @escaping @Sendable (UpsertProjectResponse?, NSError?) -> Void
     ) {
-        guard isValidRequestID(request.requestID) else {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
-            return
-        }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "project upsert failed"
+        ) { database in
             try OrganizationRepository.upsertProject(
                 database: database,
                 id: request.projectID,
                 name: request.name,
                 colorRole: request.colorRole
             )
-            let response = UpsertProjectResponse(
+            return UpsertProjectResponse(
                 requestID: request.requestID,
                 projectID: request.projectID
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "project upsert failed"))
         }
     }
 
@@ -1062,27 +1047,20 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "tag upsert failed"
+        ) { database in
             let resolvedTagID = try OrganizationRepository.upsertTag(
                 database: database,
                 id: request.tagID,
                 name: request.name
             )
-            let response = UpsertTagResponse(
+            return UpsertTagResponse(
                 requestID: request.requestID,
                 tagID: resolvedTagID
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "tag upsert failed"))
         }
     }
 
@@ -1090,32 +1068,21 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         _ request: SetJobTagsRequest,
         reply: @escaping @Sendable (SetJobTagsResponse?, NSError?) -> Void
     ) {
-        guard isValidRequestID(request.requestID) else {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
-            return
-        }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "set job tags failed"
+        ) { database in
             try OrganizationRepository.setJobTags(
                 database: database,
                 jobID: request.jobID,
                 tagIDs: request.tagIDs
             )
-            let response = SetJobTagsResponse(
+            services.changeLedger?.noteUpsert(request.jobID)
+            return SetJobTagsResponse(
                 requestID: request.requestID,
                 jobID: request.jobID
             )
-            services.changeLedger?.noteUpsert(request.jobID)
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "set job tags failed"))
         }
     }
 
@@ -1123,32 +1090,21 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         _ request: SetJobProjectRequest,
         reply: @escaping @Sendable (SetJobProjectResponse?, NSError?) -> Void
     ) {
-        guard isValidRequestID(request.requestID) else {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
-            return
-        }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "set job project failed"
+        ) { database in
             try OrganizationRepository.setJobProject(
                 database: database,
                 jobID: request.jobID,
                 projectID: request.projectID
             )
-            let response = SetJobProjectResponse(
+            services.changeLedger?.noteUpsert(request.jobID)
+            return SetJobProjectResponse(
                 requestID: request.requestID,
                 jobID: request.jobID
             )
-            services.changeLedger?.noteUpsert(request.jobID)
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "set job project failed"))
         }
     }
 
@@ -1156,42 +1112,28 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         _ request: SetJobCategoryRequest,
         reply: @escaping @Sendable (SetJobCategoryResponse?, NSError?) -> Void
     ) {
-        guard isValidRequestID(request.requestID) else {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
-            return
-        }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
-            try JobRepository.setJobCategory(
-                database: database,
-                jobID: request.jobID,
-                categoryStableKey: request.categoryStableKey
-            )
-            let response = SetJobCategoryResponse(
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "set job category failed"
+        ) { database in
+            do {
+                try JobRepository.setJobCategory(
+                    database: database,
+                    jobID: request.jobID,
+                    categoryStableKey: request.categoryStableKey
+                )
+            } catch JobRepositoryError.unknownCategory {
+                throw MutationFailure(.invalidPayload, "unknown category")
+            } catch JobRepositoryError.jobNotFound {
+                throw MutationFailure(.invalidPayload, "job not found")
+            }
+            services.changeLedger?.noteUpsert(request.jobID)
+            return SetJobCategoryResponse(
                 requestID: request.requestID,
                 jobID: request.jobID,
                 categoryStableKey: request.categoryStableKey
             )
-            services.changeLedger?.noteUpsert(request.jobID)
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch let error as JobRepositoryError {
-            switch error {
-            case .unknownCategory:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "unknown category"))
-            case .jobNotFound:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not found"))
-            default:
-                reply(nil, XPCErrorCode.internalError.error(detail: "set job category failed"))
-            }
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "set job category failed"))
         }
     }
 
@@ -1199,46 +1141,33 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         _ request: SetJobFilenameRequest,
         reply: @escaping @Sendable (SetJobFilenameResponse?, NSError?) -> Void
     ) {
-        guard isValidRequestID(request.requestID) else {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
-            return
-        }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
-            let filename = try JobRepository.setJobFilename(
-                database: database,
-                jobID: request.jobID,
-                filename: request.filename
-            )
-            let response = SetJobFilenameResponse(
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "set job filename failed"
+        ) { database in
+            let filename: String
+            do {
+                filename = try JobRepository.setJobFilename(
+                    database: database,
+                    jobID: request.jobID,
+                    filename: request.filename
+                )
+            } catch JobRepositoryError.renameWhileActive {
+                throw MutationFailure(.invalidPayload, "pause the download before renaming")
+            } catch JobRepositoryError.renameTargetExists {
+                throw MutationFailure(.invalidPayload, "a file with that name already exists")
+            } catch JobRepositoryError.invalidFilename {
+                throw MutationFailure(.invalidPayload, "invalid filename")
+            } catch JobRepositoryError.jobNotFound {
+                throw MutationFailure(.invalidPayload, "job not found")
+            }
+            services.changeLedger?.noteUpsert(request.jobID)
+            return SetJobFilenameResponse(
                 requestID: request.requestID,
                 jobID: request.jobID,
                 filename: filename
             )
-            services.changeLedger?.noteUpsert(request.jobID)
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch let error as JobRepositoryError {
-            switch error {
-            case .renameWhileActive:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "pause the download before renaming"))
-            case .renameTargetExists:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "a file with that name already exists"))
-            case .invalidFilename:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid filename"))
-            case .jobNotFound:
-                reply(nil, XPCErrorCode.invalidPayload.error(detail: "job not found"))
-            default:
-                reply(nil, XPCErrorCode.internalError.error(detail: "set job filename failed"))
-            }
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "set job filename failed"))
         }
     }
 
@@ -1266,6 +1195,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
         reply(response, nil)
     }
 
+    /// Deliberately not routed through ``handleMutation(requestID:reply:failure:body:)``:
+    /// this setting lives in user defaults, not the database, and the helper fails
+    /// closed when the database is unavailable. Converting it would make the
+    /// setting unwritable whenever the database is closed, which it is not today.
     func setBoolSetting(
         _ request: SetBoolSettingRequest,
         reply: @escaping @Sendable (SetBoolSettingResponse?, NSError?) -> Void
@@ -1331,14 +1264,11 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "category rule upsert failed"
+        ) { database in
             try CategoryRulesRepository.upsert(
                 database: database,
                 id: request.ruleID,
@@ -1347,14 +1277,10 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
                 predicateJSON: request.predicateJSON,
                 categoryStableKey: request.categoryStableKey
             )
-            let response = UpsertCategoryRuleResponse(
+            return UpsertCategoryRuleResponse(
                 requestID: request.requestID,
                 ruleID: request.ruleID
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "category rule upsert failed"))
         }
     }
 
@@ -1419,20 +1345,13 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed jobID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "clear events failed"
+        ) { database in
             let deleted = try JobRepository.clearEvents(database: database, jobID: request.jobID)
-            let response = ClearEventsResponse(requestID: request.requestID, deletedCount: deleted)
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "clear events failed"))
+            return ClearEventsResponse(requestID: request.requestID, deletedCount: deleted)
         }
     }
 
@@ -1530,61 +1449,53 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        if let connections = request.maxConnections, !(1 ... 32).contains(connections) {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxConnections"))
-            return
-        }
-        if let rate = request.maxBytesPerSecond, rate <= 0 {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxBytesPerSecond"))
-            return
-        }
-
-        do {
-            let stored = try HostSettingRepository.upsert(
-                database: database,
-                setting: HostSettingRepository.Setting(
-                    host: request.host,
-                    maxConnections: request.maxConnections,
-                    maxBytesPerSecond: request.maxBytesPerSecond,
-                    userAgent: request.clearUserAgent ? nil : request.userAgent,
-                    credentialProfileID: request.clearCredentialProfileID
-                        ? nil
-                        : request.credentialProfileID
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "host setting upsert failed"
+        ) { database in
+            if let connections = request.maxConnections, !(1 ... 32).contains(connections) {
+                throw MutationFailure(.invalidPayload, "invalid maxConnections")
+            }
+            if let rate = request.maxBytesPerSecond, rate <= 0 {
+                throw MutationFailure(.invalidPayload, "invalid maxBytesPerSecond")
+            }
+            let stored: HostSettingRepository.Setting
+            do {
+                stored = try HostSettingRepository.upsert(
+                    database: database,
+                    setting: HostSettingRepository.Setting(
+                        host: request.host,
+                        maxConnections: request.maxConnections,
+                        maxBytesPerSecond: request.maxBytesPerSecond,
+                        userAgent: request.clearUserAgent ? nil : request.userAgent,
+                        credentialProfileID: request.clearCredentialProfileID
+                            ? nil
+                            : request.credentialProfileID
+                    )
+                )
+            } catch HostSettingRepositoryError.invalidHost {
+                throw MutationFailure(.invalidPayload, "invalid host")
+            } catch HostSettingRepositoryError.invalidMaxConnections {
+                throw MutationFailure(.invalidPayload, "invalid maxConnections")
+            } catch HostSettingRepositoryError.invalidMaxBytesPerSecond {
+                throw MutationFailure(.invalidPayload, "invalid maxBytesPerSecond")
+            } catch HostSettingRepositoryError.invalidUserAgent {
+                throw MutationFailure(.invalidPayload, "invalid userAgent")
+            } catch HostSettingRepositoryError.invalidCredentialProfileID,
+                HostSettingRepositoryError.unknownCredentialProfileID {
+                throw MutationFailure(.invalidPayload, "invalid credentialProfileID")
+            }
+            return UpsertHostSettingResponse(
+                requestID: request.requestID,
+                setting: HostSettingSnapshot(
+                    host: stored.host,
+                    maxConnections: stored.maxConnections,
+                    maxBytesPerSecond: stored.maxBytesPerSecond,
+                    userAgent: stored.userAgent,
+                    credentialProfileID: stored.credentialProfileID
                 )
             )
-            let snapshot = HostSettingSnapshot(
-                host: stored.host,
-                maxConnections: stored.maxConnections,
-                maxBytesPerSecond: stored.maxBytesPerSecond,
-                userAgent: stored.userAgent,
-                credentialProfileID: stored.credentialProfileID
-            )
-            let response = UpsertHostSettingResponse(
-                requestID: request.requestID,
-                setting: snapshot
-            )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch HostSettingRepositoryError.invalidHost {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid host"))
-        } catch HostSettingRepositoryError.invalidMaxConnections {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxConnections"))
-        } catch HostSettingRepositoryError.invalidMaxBytesPerSecond {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid maxBytesPerSecond"))
-        } catch HostSettingRepositoryError.invalidUserAgent {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid userAgent"))
-        } catch HostSettingRepositoryError.invalidCredentialProfileID,
-            HostSettingRepositoryError.unknownCredentialProfileID {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid credentialProfileID"))
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "host setting upsert failed"))
         }
     }
 
@@ -1596,27 +1507,22 @@ final class EngineControlExporter: NSObject, EngineControlProtocol, @unchecked S
             reply(nil, XPCErrorCode.invalidPayload.error(detail: "malformed requestID"))
             return
         }
-        if gateMutation(requestID: request.requestID, reply: reply) { return }
-
-        guard let database = services.database else {
-            reply(nil, XPCErrorCode.internalError.error(detail: "database unavailable"))
-            return
-        }
-
-        do {
-            let deleted = try HostSettingRepository.delete(database: database, host: request.host)
-            let host = HostSettingRepository.normalizeHost(request.host) ?? request.host.lowercased()
-            let response = DeleteHostSettingResponse(
+        handleMutation(
+            requestID: request.requestID,
+            reply: reply,
+            failure: "host setting delete failed"
+        ) { database in
+            let deleted: Bool
+            do {
+                deleted = try HostSettingRepository.delete(database: database, host: request.host)
+            } catch HostSettingRepositoryError.invalidHost {
+                throw MutationFailure(.invalidPayload, "invalid host")
+            }
+            return DeleteHostSettingResponse(
                 requestID: request.requestID,
-                host: host,
+                host: HostSettingRepository.normalizeHost(request.host) ?? request.host.lowercased(),
                 deleted: deleted
             )
-            remember(request.requestID, response, isMutation: true)
-            reply(response, nil)
-        } catch HostSettingRepositoryError.invalidHost {
-            reply(nil, XPCErrorCode.invalidPayload.error(detail: "invalid host"))
-        } catch {
-            reply(nil, XPCErrorCode.internalError.error(detail: "host setting delete failed"))
         }
     }
 

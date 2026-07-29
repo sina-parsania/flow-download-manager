@@ -1,6 +1,6 @@
 # Handoff — release 0.3.3
 
-**COMPLETE** (packaging local). Publish steps follow after commit approval.
+**COMPLETE**
 
 ## Artifacts
 - `Artifacts/release/DownloadManager-0.3.3-unsigned.dmg`
@@ -9,6 +9,10 @@
 - `Artifacts/release/sbom.txt`
 - `docs/appcast.xml` + `Resources/Updates/appcast.xml`
 
-## Not done yet
-- Commit / tag `v0.3.3` / push / `gh release create`
+## Published
+- Commit `f6b27b2` on `main`
+- Tag `v0.3.3`
+- Release: https://github.com/sina-parsania/flow-download-manager/releases/tag/v0.3.3
+
+## Not done
 - Track B notarization (skipped; ADR 0008)

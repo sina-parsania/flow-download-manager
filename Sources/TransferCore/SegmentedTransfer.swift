@@ -413,8 +413,21 @@ public enum SegmentedTransfer {
         let governor: SyncBandwidthGovernor? = options.maxBytesPerSecond > 0
             ? SyncBandwidthGovernor(bytesPerSecond: options.maxBytesPerSecond)
             : nil
+        // Same reasoning for the shared limiter: one meter for the whole job, fed
+        // the ledger's aggregate count, so the job contributes to the global and
+        // per-host queues exactly once per byte rather than once per segment.
+        let sharedMeter: RateLimitedProgressMeter? = {
+            guard let limiter = options.rateLimiter,
+                  limiter.isLimited(host: options.rateLimitHost)
+            else { return nil }
+            return RateLimitedProgressMeter(limiter: limiter, host: options.rateLimitHost)
+        }()
         var segmentOptions = options
         segmentOptions.maxBytesPerSecond = 0
+        // Segments must not charge the shared queues individually — the job-level
+        // meter above already accounts for every byte, and double-charging would
+        // throttle to a fraction of the configured rate.
+        segmentOptions.rateLimiter = nil
         // Budget is spent on *stalls*, not on errors. A pass that moved bytes
         // proves the link works, however many individual ranges hiccuped, so it
         // resets the counter. The old rule — 3 failures for the entire job —
@@ -470,6 +483,7 @@ public enum SegmentedTransfer {
                         // single multi thread, so sleeping here throttles all
                         // segments at once — which is exactly the intent.
                         governor?.noteProgress(totalWritten: done)
+                        sharedMeter?.noteProgress(totalWritten: done)
                     }
                 )
                 // Unique entries only — hedges share an entryIndex.

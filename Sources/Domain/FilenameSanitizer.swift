@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import Foundation
+import UniformTypeIdentifiers
 
 /// Sanitize remote filenames for APFS/macOS without silent data loss (FR-FS-002).
 public enum FilenameSanitizer {
@@ -128,7 +129,21 @@ public enum FilenameSanitizer {
             return sanitize("\(cleaned).\(mimeExt)")
         }
         // Host fallbacks often invent `.bin`; swap when MIME knows better.
-        let genericExts: Set<String> = ["bin", "dat", "tmp", "download", "file"]
+        //
+        // Server-script extensions are in this set for the same reason. A
+        // download endpoint like `getfile.jsp?fileid=1260323` serving
+        // `application/x-apple-diskimage` has NOTHING to do with a JSP page —
+        // the name is the script that produced the bytes, not the bytes. Left
+        // alone, the file lands as "getfile.jsp" and Finder refuses to open a
+        // perfectly good disk image.
+        //
+        // Safe because this only ever fires when the server itself declared a
+        // Content-Type that maps to a known extension, and only when that
+        // extension disagrees with the URL's.
+        let genericExts: Set<String> = [
+            "bin", "dat", "tmp", "download", "file",
+            "jsp", "php", "asp", "aspx", "cgi", "do", "action", "ashx", "jspx", "phtml"
+        ]
         if genericExts.contains(currentExt), currentExt != mimeExt {
             let base = (cleaned as NSString).deletingPathExtension
             return sanitize("\(base).\(mimeExt)")
@@ -136,34 +151,86 @@ public enum FilenameSanitizer {
         return cleaned
     }
 
+    /// Types where the system answer is absent or not what a user expects.
+    ///
+    /// Kept deliberately SHORT. This is not a MIME table — macOS ships a complete
+    /// one, and hand-maintaining a second copy is how `x-apple-diskimage` came to
+    /// be missing while a dozen rarer types were present. Every entry needs a
+    /// reason:
+    ///
+    /// - `jpg` / `mpg` / `tif`: the system prefers `jpeg` / `mpeg` / `tiff`; the
+    ///   short spellings are what people expect to see.
+    /// - the rest: `UTType(mimeType:)` returns nil for them, verified on this
+    ///   macOS rather than guessed. If a later release learns one, the override
+    ///   simply agrees with it.
+    private static let mimeExtensionOverrides: [String: String] = [
+        "image/jpeg": "jpg",
+        "image/tiff": "tif",
+        "video/mpeg": "mpg",
+        "application/x-xar": "pkg",
+        "application/x-newton-compatible-pkg": "pkg",
+        "application/vnd.rar": "rar",
+        "application/x-rar-compressed": "rar",
+        "application/x-iso9660-image": "iso",
+        "video/x-matroska": "mkv",
+        "audio/x-matroska": "mka",
+        "application/vnd.debian.binary-package": "deb",
+        "application/x-debian-package": "deb",
+        "application/x-rpm": "rpm",
+        "application/x-redhat-package-manager": "rpm",
+        "application/zstd": "zst",
+        "application/x-xz": "xz",
+        "application/x-bzip2": "bz2",
+        "application/rtf": "rtf",
+        "application/wasm": "wasm",
+        "font/woff2": "woff2",
+        "font/woff": "woff"
+    ]
+
     /// Map a Content-Type to a conventional file extension (no leading dot).
+    ///
+    /// Asks macOS first through `UTType`, which knows thousands of types and
+    /// gains more with each release. The hand-written table this replaced was
+    /// missing `application/x-apple-diskimage` — a disk image, the single most
+    /// common thing a Mac user downloads — while carrying a dozen far rarer
+    /// types. A second copy of a database the OS already maintains will always
+    /// drift like that, so the list above is now only for what the system gets
+    /// wrong or does not know.
     public static func `extension`(forMIME contentType: String?) -> String? {
         guard let mime = normalizedMIME(contentType) else { return nil }
-        if mime == "text/html" || mime == "application/xhtml+xml" { return "html" }
-        if mime == "application/pdf" { return "pdf" }
-        if mime == "application/zip" || mime == "application/x-zip-compressed" { return "zip" }
-        if mime == "application/gzip" || mime == "application/x-gzip" { return "gz" }
-        if mime == "application/json" { return "json" }
-        if mime == "text/csv" { return "csv" }
-        if mime == "text/markdown" { return "md" }
-        if mime == "image/jpeg" { return "jpg" }
-        if mime == "image/svg+xml" { return "svg" }
-        if mime.hasPrefix("video/")
-            || mime.hasPrefix("audio/")
-            || mime.hasPrefix("image/") {
-            let subtype = String(mime.split(separator: "/", maxSplits: 1).last ?? "")
-            let cleaned = subtype
-                .split(separator: "+", maxSplits: 1).first
-                .map(String.init) ?? subtype
-            if cleaned.isEmpty || cleaned == "*" { return nil }
-            // video/quicktime → mov
-            if cleaned == "quicktime" { return "mov" }
-            if cleaned == "x-matroska" { return "mkv" }
-            if cleaned == "mpeg" { return "mpg" }
-            if cleaned.hasPrefix("x-") {
-                return String(cleaned.dropFirst(2))
+
+        // Overrides win, so a deliberate choice (`jpg`, not `jpeg`) is stable
+        // across macOS releases.
+        if let override = mimeExtensionOverrides[mime] { return override }
+
+        // `octet-stream` is the universal "I have no idea" answer. UTType maps it
+        // to `.data`, whose extension would replace a perfectly good name with a
+        // meaningless suffix, so treat it as no information at all.
+        if mime == "application/octet-stream" || mime == "binary/octet-stream" { return nil }
+
+        if let system = UTType(mimeType: mime)?.preferredFilenameExtension, !system.isEmpty {
+            return system
+        }
+
+        // RFC 6839 structured suffix: an unknown `application/foo+zip` still
+        // behaves like a zip.
+        if let plus = mime.lastIndex(of: "+") {
+            let suffix = String(mime[mime.index(after: plus)...])
+            if !suffix.isEmpty,
+               let mapped = UTType(mimeType: "application/\(suffix)")?.preferredFilenameExtension {
+                return mapped
             }
-            return cleaned
+        }
+
+        // Last resort for media the system has never heard of: the subtype is
+        // usually the extension (`video/x-flv` -> `flv`). Better than no
+        // extension, and this is what the previous implementation did for all
+        // media types.
+        if mime.hasPrefix("video/") || mime.hasPrefix("audio/") || mime.hasPrefix("image/") {
+            let subtype = String(mime.split(separator: "/", maxSplits: 1).last ?? "")
+            let cleaned = subtype.split(separator: "+", maxSplits: 1).first.map(String.init) ?? subtype
+            if cleaned.isEmpty || cleaned == "*" { return nil }
+            return cleaned.hasPrefix("x-") ? String(cleaned.dropFirst(2)) : cleaned
         }
         return nil
     }

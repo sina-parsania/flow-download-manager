@@ -81,9 +81,17 @@ echo "ok — releasing $TAG from $(git rev-parse --short HEAD)"
 # RULE 0: verify-fast is not the gate. A release touches everything.
 
 say "Gates"
-make verify-fast
-make test-integration
-make test-recovery
+
+# This script is itself invoked from a make target, so a plain `make` here is a
+# recursive make that inherits MAKEFLAGS — including the parent's jobserver.
+# That let build-debug and test-unit overlap, and xctest read UnitTests.xctest
+# while it was still being written: "Failed to create a bundle instance
+# representing …UnitTests.xctest". The same gate passes standalone, which is
+# what makes it look like a flaky test rather than a build race.
+unset MAKEFLAGS MAKELEVEL MFLAGS
+make -j1 verify-fast
+make -j1 test-integration
+make -j1 test-recovery
 
 # ------------------------------------------------------------------- version
 

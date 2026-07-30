@@ -131,6 +131,16 @@ release-sbom: ## Write dependency inventory under Artifacts/release/
 release-dmg-unsigned: ## Build unsigned Release DMG (no signing/notarization)
 	@Scripts/release/build-dmg.sh
 
+.PHONY: release
+release: ## Full release: gate, build, tag, publish, appcast. VERSION=X.Y.Z (DRY_RUN=1 to rehearse)
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=0.4.1 [DRY_RUN=1]"; exit 2; }
+	@Scripts/release/publish.sh $(VERSION)
+
+.PHONY: release-appcast
+release-appcast: ## Regenerate docs/appcast.xml from ONE staged zip (DIR=…)
+	@test -n "$(DIR)" || { echo "usage: make release-appcast DIR=/path/with/one/zip"; exit 2; }
+	@Scripts/release/sparkle-appcast.sh $(DIR)
+
 .PHONY: install-release
 install-release: ## Install latest (or TAG=vX.Y.Z) GitHub Release via Scripts/install.sh
 	@Scripts/install.sh $(if $(TAG),--tag $(TAG),) $(INSTALL_FLAGS)

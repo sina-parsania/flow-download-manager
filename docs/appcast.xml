@@ -14,6 +14,24 @@
         <description>In-app updates for Flow Download Manager</description>
         <language>en</language>
         <item>
+            <title>0.4.2</title>
+            <pubDate>Thu, 30 Jul 2026 21:21:07 +0330</pubDate>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>0.4.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Flow 0.4.2
+
+
+### Fixed
+- **Check for Updates actually works.** Since 0.3.5 every update check failed with "An error occurred in retrieving update information". Flow was downloading the update feed itself and handing Sparkle a local file, which Sparkle refuses to accept — so the check failed no matter what the feed contained. If you are on 0.4.1 or earlier you will need to install this one manually; after that, in-app updates work
+
+
+Community build — not Apple notarized.
+]]></description>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.4.2/Flow-0.4.2.zip" length="24507872" type="application/octet-stream" sparkle:edSignature="a7caJZV2PCinWn9f8seUhxvsTHeFgOYpvWbrJ3zrJWmFAf/ZHGdmLRfDI4q/RCo66wInH3//uktZgiLpwknNCQ=="/>
+        </item>
+        <item>
             <title>0.4.1</title>
             <pubDate>Thu, 30 Jul 2026 20:48:24 +0330</pubDate>
             <sparkle:version>10</sparkle:version>
@@ -61,23 +79,6 @@ Community build — not Apple notarized.
 Community build — not Apple notarized.
 ]]></description>
             <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.4.0/Flow-0.4.0.zip" length="24506471" type="application/octet-stream" sparkle:edSignature="YyYYK2dM3HN7JJBHaK4fnMJE8a3G9kthss4TBSsGWivxU4jj6wn8fE6oMFJNhkLLVZxc8+thVw+hBpsmp9Q9AQ=="/>
-        </item>
-        <item>
-            <title>0.3.5</title>
-            <pubDate>Mon, 27 Jul 2026 02:45:00 +0330</pubDate>
-            <link>https://github.com/sina-parsania/flow-download-manager</link>
-            <sparkle:version>8</sparkle:version>
-            <sparkle:shortVersionString>0.3.5</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.5
-
-- Fix in-app **Check for Updates** (fresh appcast download; no stale bundled feed)
-- Sparkle zip signed with the full ad-hoc release pipeline
-
-Community build — not Apple notarized.
-]]></description>
-            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.5/Flow-0.3.5.zip" length="24361298" type="application/octet-stream" sparkle:edSignature="4PjWskKwrLnT+lP9lSDjknT0YqSKHsFzKvXL7tNp3l3rhLyB4r8M2AxvxvfoqPjd5kDZ+JB0bJT9+A1EL7PYBg=="/>
         </item>
     </channel>
 </rss>

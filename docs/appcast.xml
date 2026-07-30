@@ -14,6 +14,16 @@
         <description>In-app updates for Flow Download Manager</description>
         <language>en</language>
         <item>
+            <title>0.4.0</title>
+            <pubDate>Thu, 30 Jul 2026 14:56:18 +0330</pubDate>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <sparkle:releaseNotesLink>https://raw.githubusercontent.com/sina-parsania/flow-download-manager/main/docs/Flow-0.4.0.md</sparkle:releaseNotesLink>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.4.0/Flow-0.4.0.zip" length="24506471" type="application/octet-stream" sparkle:edSignature="YyYYK2dM3HN7JJBHaK4fnMJE8a3G9kthss4TBSsGWivxU4jj6wn8fE6oMFJNhkLLVZxc8+thVw+hBpsmp9Q9AQ=="/>
+        </item>
+        <item>
             <title>0.3.5</title>
             <pubDate>Mon, 27 Jul 2026 02:45:00 +0330</pubDate>
             <link>https://github.com/sina-parsania/flow-download-manager</link>
@@ -47,61 +57,6 @@ Community build — not Apple notarized.
 Community build — not Apple notarized.
 ]]></description>
             <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.4/Flow-0.3.4.zip" length="24361233" type="application/octet-stream" sparkle:edSignature="eEUm73zSsAg0rauA6aVg1GeAACVlhcnblSdSnIInP2vK5nUUMAC/PtyaoMjZx7awu/dzWvWfSVXYcMJHSDrEDw=="/>
-        </item>
-        <item>
-            <title>0.3.3</title>
-            <pubDate>Sun, 26 Jul 2026 02:49:08 +0330</pubDate>
-            <link>https://github.com/sina-parsania/flow-download-manager</link>
-            <sparkle:version>6</sparkle:version>
-            <sparkle:shortVersionString>0.3.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.3
-
-- Safer range probes and ranged-byte validation before writing
-- Crash-recoverable final-file promotion
-- Typed job-state transitions and safer no-range partial restart
-- Redirect metadata / origin-scoped headers; atomic cancel
-
-Community build — not Apple notarized.
-]]></description>
-            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.3/Flow-0.3.3.zip" length="24267287" type="application/octet-stream" sparkle:edSignature="zvH7rglNxbFvwq6Gx8ahSCaMfCkyx1ZC3Q9fgAsftz/bQTcdCnwhu8ll2HAgH0Y9ZrrnX0wPRoQ1PT6IV3hjCg=="/>
-        </item>
-        <item>
-            <title>0.3.2</title>
-            <pubDate>Sat, 25 Jul 2026 17:58:05 +0330</pubDate>
-            <link>https://github.com/sina-parsania/flow-download-manager</link>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>0.3.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.2
-
-- Fix CDN / signed-link filenames (Content-Disposition + MIME on first probe)
-- Correct video/HTML category and extensions for extensionless URLs
-- No more `binary` / UUID placeholder names
-
-Community build — not Apple notarized.
-]]></description>
-            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.2/Flow-0.3.2.zip" length="24067318" type="application/octet-stream" sparkle:edSignature="isvl0jfSiC3M8Sf2JBhskLDZBXWbuuUPRhbnGXbpBBRc+Gg5TZrJvXEtfWN3ZITgJymtBqBRMF9ut8ZWzFnoCA=="/>
-        </item>
-        <item>
-            <title>0.3.1</title>
-            <pubDate>Sat, 25 Jul 2026 05:08:02 +0330</pubDate>
-            <link>https://github.com/sina-parsania/flow-download-manager</link>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>0.3.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.1
-
-- Menu-bar agent (no Dock tile), single instance, Launch at Login
-- Purple Flow mark in the menu bar
-- Chrome companion polish and one-window handoff
-
-Community build — not Apple notarized. See the [GitHub release](https://github.com/sina-parsania/flow-download-manager/releases/tag/v0.3.1).
-]]></description>
-            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.1/Flow-0.3.1.zip" length="24016076" type="application/octet-stream" sparkle:edSignature="lXyLyxRHw7y3FnqIeVXUlu23Q9ylYUkpvGbRc52ed50zMvbb4HwuPMcKfpDzgsFb0dbtRGTtHA+NyIYU7E5lBg=="/>
         </item>
     </channel>
 </rss>

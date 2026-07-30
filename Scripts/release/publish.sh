@@ -175,6 +175,20 @@ gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" \
 # so publishing it first would advertise a URL that does not resolve yet.
 
 say "Appcast"
+
+# Drop any pre-existing entry for this version first. generate_appcast UPDATES
+# an entry it already recognises rather than rewriting it, so a re-run after a
+# failed attempt would preserve whatever was wrong with it — which is exactly
+# how a stale releaseNotesLink survived a regeneration once.
+python3 - "$VERSION" <<'PY'
+import re, sys
+version = re.escape(sys.argv[1])
+path = "docs/appcast.xml"
+text = open(path).read()
+pattern = r"\n\s*<item>\s*\n\s*<title>" + version + r"</title>.*?</item>"
+open(path, "w").write(re.sub(pattern, "", text, flags=re.S))
+PY
+
 CURRENT="$(mktemp -d)"
 cp "$ZIP" "$NOTES" "$CURRENT/"
 SPARKLE_BIN="$SPARKLE_BIN" RELEASE_TAG="$TAG" bash Scripts/release/sparkle-appcast.sh "$CURRENT"

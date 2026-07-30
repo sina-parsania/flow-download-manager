@@ -89,9 +89,38 @@ say "Gates"
 # representing …UnitTests.xctest". The same gate passes standalone, which is
 # what makes it look like a flaky test rather than a build race.
 unset MAKEFLAGS MAKELEVEL MFLAGS
-make -j1 verify-fast
-make -j1 test-integration
-make -j1 test-recovery
+
+# One retry per lane, and only for a specific infrastructure failure.
+#
+# "Failed to create a bundle instance representing …UnitTests.xctest" comes from
+# xctest failing to LOAD a bundle that is present, correctly signed, and passes
+# when the same command runs standalone. It shows up when another process is
+# using the same DerivedData — an xcodebuildmcp server was doing exactly that
+# here. It is not a test result.
+#
+# The retry is deliberately narrow: it matches that one string and runs the lane
+# once more. A real test failure produces different output and still stops the
+# release on the first attempt, which is the whole point of the gate.
+run_lane() {
+  local lane="$1" log
+  log="$(mktemp)"
+  if make -j1 "$lane" 2>&1 | tee "$log"; then
+    rm -f "$log"
+    return 0
+  fi
+  if grep -q "Failed to create a bundle instance representing" "$log"; then
+    echo "  (xctest could not load a bundle that is present — retrying ${lane} once)"
+    rm -f "$log"
+    make -j1 "$lane"
+    return
+  fi
+  rm -f "$log"
+  die "${lane} failed"
+}
+
+run_lane verify-fast
+run_lane test-integration
+run_lane test-recovery
 
 # ------------------------------------------------------------------- version
 

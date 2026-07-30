@@ -14,6 +14,25 @@
         <description>In-app updates for Flow Download Manager</description>
         <language>en</language>
         <item>
+            <title>0.4.1</title>
+            <pubDate>Thu, 30 Jul 2026 20:48:24 +0330</pubDate>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Flow 0.4.1
+
+
+### Fixed
+- **Downloads get the right file extension.** A link like `getfile.jsp?fileid=…` serving a disk image was saved as `getfile.jsp`, which Finder refuses to open. Extensions now come from macOS's own type database instead of a short hand-written list, so disk images, installers, archives and office documents all land with the extension they should have
+- **Check for Updates works again.** The update feed pointed at a release-notes file that is never published, so Sparkle reported "An error occurred in retrieving update information" even though the update itself was fine
+
+
+Community build — not Apple notarized.
+]]></description>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.4.1/Flow-0.4.1.zip" length="24508569" type="application/octet-stream" sparkle:edSignature="5SnH93vZzQfWEqdJSkE5zh3SgNxDH92IQKl3YGvmf6xv6Oh5Y21kf4gkqToO7X8FiXze2u13qx0aL8jyyMAsCg=="/>
+        </item>
+        <item>
             <title>0.4.0</title>
             <pubDate>Thu, 30 Jul 2026 16:10:22 +0330</pubDate>
             <sparkle:version>9</sparkle:version>
@@ -59,24 +78,6 @@ Community build — not Apple notarized.
 Community build — not Apple notarized.
 ]]></description>
             <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.5/Flow-0.3.5.zip" length="24361298" type="application/octet-stream" sparkle:edSignature="4PjWskKwrLnT+lP9lSDjknT0YqSKHsFzKvXL7tNp3l3rhLyB4r8M2AxvxvfoqPjd5kDZ+JB0bJT9+A1EL7PYBg=="/>
-        </item>
-        <item>
-            <title>0.3.4</title>
-            <pubDate>Mon, 27 Jul 2026 02:40:00 +0330</pubDate>
-            <link>https://github.com/sina-parsania/flow-download-manager</link>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>0.3.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Flow 0.3.4
-
-- Per-job destination path — **Open in Finder** reveals the correct file
-- **Started** / **Finished** timestamps and **Location** column (sortable)
-- **Open File** for completed downloads
-
-Community build — not Apple notarized.
-]]></description>
-            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.3.4/Flow-0.3.4.zip" length="24361233" type="application/octet-stream" sparkle:edSignature="eEUm73zSsAg0rauA6aVg1GeAACVlhcnblSdSnIInP2vK5nUUMAC/PtyaoMjZx7awu/dzWvWfSVXYcMJHSDrEDw=="/>
         </item>
     </channel>
 </rss>

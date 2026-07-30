@@ -2,10 +2,6 @@
 
 ## Unreleased
 
-## 0.4.1 — dry-run probe
-
-- probe only
-
 ## 0.4.0 — 2026-07-29
 
 Community release. Still **unsigned** (ADR 0008).

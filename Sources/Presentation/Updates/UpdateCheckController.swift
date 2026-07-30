@@ -56,8 +56,25 @@ public final class UpdateCheckController: ObservableObject {
                     presentUpToDate(short: AppcastFetch.installedShortVersion())
                     return
                 }
-                let feedFile = try AppcastFetch.writeFeedForSparkle(latest.rawXML)
-                feedHost.feedURLString = feedFile.absoluteString
+                // Hand Sparkle the HTTPS feed, never a local file.
+                //
+                // This used to write the freshly downloaded XML to Application
+                // Support and pass a `file://` URL, to defeat HTTP caching. But
+                // Sparkle refuses any scheme other than http/https:
+                //
+                //   The download request URL must use http or https
+                //   (file:///…/Flow/remote-appcast.xml)
+                //
+                // which surfaced to the user as "An error occurred in retrieving
+                // update information" on every single check. The cache-busting
+                // query in `AppcastFetch` is what actually solves the stale-feed
+                // problem; the file hand-off solved nothing and broke the feature
+                // it was added to fix.
+                //
+                // The pre-fetch above is still worth keeping: it decides whether
+                // an update exists at all, so "you're up to date" can be answered
+                // without Sparkle showing an error when the feed is unreachable.
+                feedHost.feedURLString = Self.remoteFeedURLString
                 controller.checkForUpdates(nil)
             } catch {
                 EngineLog.updater.error(

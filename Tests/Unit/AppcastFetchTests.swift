@@ -23,4 +23,24 @@ final class AppcastFetchTests: XCTestCase {
         XCTAssertEqual(latest?.short, "0.3.4")
         XCTAssertEqual(latest?.build, 7)
     }
+
+    /// Sparkle refuses any feed URL that is not http/https:
+    ///
+    ///   "The download request URL must use http or https (file:///…)"
+    ///
+    /// 0.3.5 downloaded the feed itself, wrote it to Application Support, and
+    /// handed Sparkle a `file://` URL to defeat HTTP caching. Every Check for
+    /// Updates then failed with "An error occurred in retrieving update
+    /// information" — the feature the file hand-off was added to fix.
+    ///
+    /// Caching is handled by the cache-busting query in `fetchLatest` instead.
+    @MainActor
+    func testFeedURLGivenToSparkleUsesHTTPS() {
+        let feed = UpdateCheckController.remoteFeedURLString
+        XCTAssertTrue(
+            feed.hasPrefix("https://"),
+            "Sparkle rejects any scheme other than http/https; got \(feed)"
+        )
+        XCTAssertFalse(feed.hasPrefix("file://"))
+    }
 }

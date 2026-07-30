@@ -56,21 +56,6 @@ enum AppcastFetch {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
     }
 
-    /// Persist a freshly downloaded feed where Sparkle can read it without hitting
-    /// stale bundled or HTTP caches.
-    static func writeFeedForSparkle(_ data: Data) throws -> URL {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ).appendingPathComponent("Flow", isDirectory: true)
-        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        let file = base.appendingPathComponent("remote-appcast.xml")
-        try data.write(to: file, options: .atomic)
-        return file
-    }
-
     static func parseLatestBuild(from xml: String) -> (short: String, build: Int)? {
         guard let itemRange = xml.range(of: "<item>") else { return nil }
         let tail = String(xml[itemRange.lowerBound...])

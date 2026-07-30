@@ -69,8 +69,16 @@ PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/sina-parsania/flow-download-ma
 # referenced by the appcast but missing from the release is another 404 — for
 # an ad-hoc build the signing identity differs every release anyway, so
 # generate_appcast warns and Sparkle would fall back to the full zip.
+# --embed-release-notes puts the .md contents inline in <description>. Without
+# it generate_appcast emits <sparkle:releaseNotesLink> pointing at
+# docs/Flow-X.Y.Z.md — a file that is never committed. Sparkle fetches that link
+# while retrieving update information, gets a 404, and shows
+# "An error occurred in retrieving update information", so the update fails even
+# though the feed and the zip are both fine. The 0.3.x entries that worked all
+# used an inline <description>.
 "${GEN}" "${ARCHIVE_DIR}" -o "${OUT}" \
   --download-url-prefix "${PREFIX}" \
+  --embed-release-notes \
   --maximum-deltas 0
 
 # Fail closed rather than publish a feed that 404s.
@@ -82,6 +90,29 @@ fi
 if grep -q '\.delta"' "${OUT}"; then
   echo "error: ${OUT} references .delta files that are not uploaded" >&2
   exit 1
+fi
+if grep -q 'releaseNotesLink' "${OUT}"; then
+  echo "error: ${OUT} contains a releaseNotesLink; those point at docs/*.md files" >&2
+  echo "       that are never committed, and Sparkle fails the whole update on a 404." >&2
+  echo "       Release notes must be embedded — see --embed-release-notes above." >&2
+  exit 1
+fi
+
+# Every enclosure in the feed must resolve, not just the new one: this file is
+# rewritten wholesale, so a prior entry can be silently rewritten to a URL that
+# does not exist. Sparkle fails the whole check on one bad item.
+# SKIP_URL_CHECK=1 for an offline run.
+if [[ -z "${SKIP_URL_CHECK:-}" ]]; then
+  while read -r enclosure; do
+    [[ -n "$enclosure" ]] || continue
+    code="$(curl -sIL "$enclosure" -o /dev/null -w '%{http_code}')"
+    if [[ "$code" != "200" ]]; then
+      echo "error: enclosure is not reachable (HTTP ${code}): ${enclosure}" >&2
+      echo "       upload it to its release before publishing the feed." >&2
+      exit 1
+    fi
+    echo "  ok $(basename "$enclosure")"
+  done < <(grep -oE 'url="[^"]*\.zip"' "${OUT}" | sed 's/url="//;s/"$//')
 fi
 
 echo "wrote ${OUT} (enclosures under ${PREFIX})"

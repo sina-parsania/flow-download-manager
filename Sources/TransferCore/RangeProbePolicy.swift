@@ -47,10 +47,26 @@ public enum RangeProbePolicy: Sendable {
         if !keys.isDisjoint(with: signatureKeys) { return true }
 
         // Expiry alone is too common on ordinary CDNs; require a token-ish peer.
-        let expiryKeys: Set<String> = ["expires", "expiry", "expire", "exp"]
         let tokenKeys: Set<String> = ["token", "key", "hash"]
         return !keys.isDisjoint(with: expiryKeys) && !keys.isDisjoint(with: tokenKeys)
     }
+
+    /// A fragile URL that also carries an explicit expiry.
+    ///
+    /// The distinction matters because the two fragile shapes carry different
+    /// risks. A one-shot token is consumed by the first GET, so it gets exactly
+    /// one unranged request and no parallelism — that is not negotiable. An
+    /// **expiring** signature is by construction re-fetchable until it expires,
+    /// so its opening chunk may be ranged and the download may segment.
+    ///
+    /// Without an expiry key nothing can be concluded, and the conservative
+    /// single-request path is kept.
+    public static func hasExplicitExpiry(_ urlString: String) -> Bool {
+        guard let keys = queryKeySet(urlString) else { return false }
+        return !keys.isDisjoint(with: expiryKeys)
+    }
+
+    private static let expiryKeys: Set<String> = ["expires", "expiry", "expire", "exp"]
 
     private static func queryKeySet(_ urlString: String) -> Set<String>? {
         guard let components = URLComponents(string: urlString),

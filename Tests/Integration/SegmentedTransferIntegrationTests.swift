@@ -362,4 +362,147 @@ final class SegmentedTransferIntegrationTests: XCTestCase {
         XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.largeBody.count))
         XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
     }
+
+    /// A 200 answer to the `Range: 0-0` probe must not disable segmentation.
+    ///
+    /// CDNs ignore Range on a cache miss and honour it on a hit — measured on one
+    /// Cloudflare URL seconds apart. Reading the probe's 200 as "no ranges" pinned
+    /// the download to a single connection for its whole life, which on a
+    /// high-latency link is ~1 MB/s instead of ~10 MB/s.
+    func testProbe200StillSegmentsWhenRealRangesAreHonoured() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-probe200-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let partial = root.appendingPathComponent("probe200.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/probe-200-ranges-ok",
+            partialURL: partial
+        )
+
+        XCTAssertGreaterThan(
+            outcome.segmentCount, 1,
+            "a 200 probe on a range-capable host must still segment"
+        )
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.largeBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
+    }
+
+    /// The user-reported defect: an expiring-signature URL was pinned to one
+    /// connection forever.
+    ///
+    /// `?expires=&sig=` makes `shouldSkipProbe` true, which used to mean
+    /// `singleOutcome` unconditionally. The host honours ranges perfectly — an
+    /// expiring signature is re-fetchable until it expires — so the opening chunk
+    /// now doubles as the probe and the remainder runs in parallel.
+    func testExpiringSignedURLStillSegments() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-signed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let url = "http://127.0.0.1:\(port)/fixtures/signed-ranged?expires=99999999999&sig=deadbeef"
+        XCTAssertTrue(
+            RangeProbePolicy.shouldSkipProbe(url: url, options: TransferCore.DownloadOptions()),
+            "fixture must exercise the probe-skipping path"
+        )
+
+        let partial = root.appendingPathComponent("signed.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(url: url, partialURL: partial)
+
+        XCTAssertGreaterThan(
+            outcome.segmentCount, 1,
+            "an expiring signature is not a one-shot token — it must still segment"
+        )
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.largeBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
+    }
+
+    /// A remainder that tiles to ONE connection is still a remainder.
+    ///
+    /// 1.5 MiB: the 1 MiB opening chunk leaves 0.5 MiB, which is below
+    /// `preferredSegmentCount`'s 1 MiB floor and so tiles to a single connection.
+    /// Treating that as "not worth segmenting" and returning early reported the
+    /// file complete at 1 MiB — a silently truncated download that every
+    /// downstream size check would then have accepted.
+    func testOpeningChunkFinishesARemainderTooSmallToSplit() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-awkward-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let url = "http://127.0.0.1:\(port)/fixtures/signed-ranged-awkward?expires=99999999999&sig=deadbeef"
+        let partial = root.appendingPathComponent("awkward.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(url: url, partialURL: partial)
+
+        XCTAssertEqual(
+            outcome.bytesWritten, Int64(FaultHTTPServer.awkwardRemainderBody.count),
+            "the sub-1 MiB tail must still be downloaded, not declared done"
+        )
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.awkwardRemainderBody)
+    }
+
+    /// The safety half: a probe-skipping URL whose host ignores Range must keep the
+    /// full body from that same first request — one request, no wasted token.
+    func testProbeSkippingURLKeepsFullBodyWhenHostIgnoresRange() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-signed-norange-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let url = "http://127.0.0.1:\(port)/fixtures/no-range-large?expires=99999999999&sig=deadbeef"
+        let partial = root.appendingPathComponent("signed-norange.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(url: url, partialURL: partial)
+
+        XCTAssertEqual(outcome.segmentCount, 1)
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.largeBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
+    }
+
+    /// The other half of the same change: a host that ignores Range on the real
+    /// GETs too must fall back to a single stream, deliver correct bytes, and
+    /// leave no segment map behind for a later resume to trust.
+    func testRangeIgnoringHostFallsBackCleanlyAfterSegmentAttempt() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-norange-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let partial = root.appendingPathComponent("norange.partial")
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: "http://127.0.0.1:\(port)/fixtures/no-range-large",
+            partialURL: partial
+        )
+
+        XCTAssertEqual(outcome.segmentCount, 1)
+        XCTAssertEqual(outcome.bytesWritten, Int64(FaultHTTPServer.largeBody.count))
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: SegmentedTransfer.segmentMapURL(for: partial).path
+            ),
+            "a preallocated shell's segment map must not survive the fallback"
+        )
+    }
 }

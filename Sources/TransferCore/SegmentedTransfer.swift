@@ -158,6 +158,24 @@ public enum SegmentedTransfer {
             )
         }
         if RangeProbePolicy.shouldSkipProbe(url: url, options: options) {
+            // An **expiring** signature is not a one-shot token: it can be fetched
+            // repeatedly until it expires. Such URLs no longer forfeit parallelism
+            // — the opening chunk answers the range question itself, for the same
+            // one request a plain GET would have cost.
+            //
+            // Everything else keeps the conservative path. A credential-bearing
+            // job (Cookie / Authorization / userpwd / cookie jar) may be a genuine
+            // one-shot session download, and a signature with no expiry says
+            // nothing either way — both get exactly one unranged GET, which is the
+            // contract `OrchestratorIntegrationTests` pins.
+            if !RangeProbePolicy.hasFragileCredentials(options),
+               RangeProbePolicy.hasExplicitExpiry(url) {
+                return try openingChunkOutcome(
+                    url: url, partialURL: partialURL, options: options,
+                    abortFlag: abortFlag, onProgress: onProgress,
+                    useCurlMulti: useCurlMulti, hostMaxSegments: hostMaxSegments
+                )
+            }
             return try singleOutcome(
                 url: url, partialURL: partialURL, options: options,
                 abortFlag: abortFlag, onProgress: onProgress
@@ -267,6 +285,32 @@ public enum SegmentedTransfer {
             probe = try TransferCore.probeRangeSupport(url: url, options: options)
         } catch let error as TransferCore.TransferError {
             switch error {
+            // A 200 answer to the `Range: 0-0` probe is NOT proof the host refuses
+            // ranges. CDNs routinely ignore Range on a cache MISS and honour it on
+            // a HIT — measured on the same Cloudflare URL seconds apart. Treating
+            // the miss as "no ranges" pinned that download to one connection for
+            // its whole life, which on a high-RTT link is the difference between
+            // ~1 MB/s and ~10 MB/s.
+            //
+            // Safe to attempt: `DMCurlRangeResponseIsValid` gates every segment on
+            // 206 + an exact `Content-Range` match *before* the first `pwrite`, so
+            // a host that genuinely ignores Range writes zero bytes and
+            // `segmentedOrSingle` falls back cleanly.
+            case .invalidRangeResponse(httpStatus: 200):
+                guard let identity = try? TransferCore.probeForPartialRestart(
+                    url: url, options: options
+                ), let total = TransferCore.totalLength(from: identity) else {
+                    return try singleOutcome(
+                        url: url, partialURL: partialURL, options: options,
+                        abortFlag: abortFlag, onProgress: onProgress
+                    )
+                }
+                return try segmentedOrSingle(
+                    url: url, partialURL: partialURL, sidecarURL: sidecarURL,
+                    options: options, abortFlag: abortFlag, onProgress: onProgress,
+                    probe: identity, total: total, useCurlMulti: useCurlMulti,
+                    hostMaxSegments: hostMaxSegments
+                )
             case .httpStatus, .invalidRangeResponse:
                 return try singleOutcome(
                     url: url, partialURL: partialURL, options: options,
@@ -291,6 +335,34 @@ public enum SegmentedTransfer {
             )
         }
 
+        return try segmentedOrSingle(
+            url: url, partialURL: partialURL, sidecarURL: sidecarURL,
+            options: options, abortFlag: abortFlag, onProgress: onProgress,
+            probe: probe, total: total, useCurlMulti: useCurlMulti,
+            hostMaxSegments: hostMaxSegments
+        )
+    }
+
+    /// Tiles `total` and runs the map loop, falling back to a single stream when
+    /// the host turns out not to honour ranges after all.
+    ///
+    /// The fallback only fires when the ledger recorded **zero** bytes, i.e. every
+    /// segment was rejected by the `Content-Range` gate before writing anything.
+    /// A pass that moved bytes propagates its error instead, so the job's normal
+    /// retry path keeps what is already on disk — a partial is never wiped on the
+    /// strength of one bad response.
+    private static func segmentedOrSingle(
+        url: String,
+        partialURL: URL,
+        sidecarURL: URL,
+        options: TransferCore.DownloadOptions,
+        abortFlag: TransferAbortFlag?,
+        onProgress: TransferCore.ProgressHandler?,
+        probe: TransferCore.ResourceIdentity,
+        total: Int64,
+        useCurlMulti: Bool,
+        hostMaxSegments: Int?
+    ) throws -> Outcome {
         let connectionCount = preferredSegmentCount(totalBytes: total, hostMaxSegments: hostMaxSegments)
         guard connectionCount > 1, total > 1 else {
             return try singleOutcome(
@@ -318,18 +390,33 @@ public enum SegmentedTransfer {
         try ledger.saveNow()
         try preallocate(partialURL: partialURL, size: total)
 
-        return try runMapLoop(
-            url: url,
-            partialURL: partialURL,
-            ledger: ledger,
-            options: options,
-            abortFlag: abortFlag,
-            onProgress: onProgress,
-            probe: probe,
-            useCurlMulti: useCurlMulti,
-            maxConcurrent: connectionCount,
-            hostMaxSegments: hostMaxSegments
-        )
+        do {
+            return try runMapLoop(
+                url: url,
+                partialURL: partialURL,
+                ledger: ledger,
+                options: options,
+                abortFlag: abortFlag,
+                onProgress: onProgress,
+                probe: probe,
+                useCurlMulti: useCurlMulti,
+                maxConcurrent: connectionCount,
+                hostMaxSegments: hostMaxSegments,
+                // The catch below is the fallback that makes bailing early safe.
+                bailOnInvalidRange: true
+            )
+        } catch TransferCore.TransferError.invalidRangeResponse where ledger.downloadedBytes() == 0 {
+            // The host does not honour ranges on the real GETs either. Nothing was
+            // written, so clearing the preallocated shell and its map is safe —
+            // and required, or the next run would resume into an empty full-size
+            // file whose segment map claims ranges that never arrived.
+            try? FileManager.default.removeItem(at: sidecarURL)
+            try? FileManager.default.removeItem(at: partialURL)
+            return try singleOutcome(
+                url: url, partialURL: partialURL, options: options,
+                abortFlag: abortFlag, onProgress: onProgress
+            )
+        }
     }
 
     /// Multi-connection download of bytes `[existing, total)` into an existing partial.
@@ -399,7 +486,10 @@ public enum SegmentedTransfer {
         probe: TransferCore.ResourceIdentity,
         useCurlMulti: Bool,
         maxConcurrent: Int,
-        hostMaxSegments: Int? = nil
+        hostMaxSegments: Int? = nil,
+        // Only the fresh-download paths set this: they can fall back to a single
+        // stream, so a rejected `Content-Range` is worth returning at once.
+        bailOnInvalidRange: Bool = false
     ) throws -> Outcome {
         // Publish already-downloaded bytes immediately so relaunch UI does not
         // flash 0% before the first curl progress callback.
@@ -498,6 +588,19 @@ public enum SegmentedTransfer {
                 ledger.flush()
                 if abortFlag?.isSet == true { throw TransferCore.TransferError.aborted }
                 if case TransferCore.TransferError.aborted = error { throw error }
+                // Hand a rejected `Content-Range` straight back when — and only
+                // when — the caller has a single-stream fallback waiting. Ten
+                // passes with backoff up to 30 s each is minutes of nothing before
+                // a fallback that would have worked immediately.
+                //
+                // NOT unconditional: this is exactly the CDN whose answer flips
+                // between 200 on a cache miss and 206 on a hit, so retrying really
+                // can change it. On the resume paths there is no fallback, the
+                // throw reaches `handleFailure`, and that spends one of only
+                // `RetryPolicy.maxAttempts` (8) whole-job attempts — so those keep
+                // the backoff passes that let a later hit succeed.
+                if bailOnInvalidRange,
+                   case TransferCore.TransferError.invalidRangeResponse = error { throw error }
 
                 if ledger.downloadedBytes() > bytesBeforePass {
                     consecutiveStalls = 0
@@ -625,6 +728,149 @@ public enum SegmentedTransfer {
         if let firstError = state.firstError {
             throw firstError
         }
+    }
+
+    /// Opening chunk size for a URL that must not be probed separately. Small
+    /// enough that a range-honouring host loses almost no serial prefix before
+    /// parallelism starts, and it only ever has to fit *below* the ledger's 4 MiB
+    /// minimum tile, never inside one.
+    private static let openingChunkBytes: Int64 = 1024 * 1024
+
+    /// Filters the opening chunk's reported total before it reaches the UI.
+    ///
+    /// On a 206 libcurl reports the *slice* length as `dltotal`, so the window
+    /// would read "… / 1 MiB" until the map loop corrects it a moment later. Only
+    /// a 200 reports something larger, and in that case it really is the file
+    /// size. Anything else is withheld, which leaves the UI's existing total
+    /// untouched rather than replacing it with a wrong one.
+    private static func openingProgress(
+        _ onProgress: TransferCore.ProgressHandler?
+    ) -> TransferCore.ProgressHandler? {
+        guard let onProgress else { return nil }
+        let slice = openingChunkBytes
+        return { written, reported in
+            guard let reported, reported > slice else {
+                onProgress(written, nil)
+                return
+            }
+            onProgress(written, reported)
+        }
+    }
+
+    /// First request doubles as the range probe, for URLs where a throwaway probe
+    /// could burn a one-shot token.
+    ///
+    /// Asks for `bytes=0-N` with `allowFullBodyOn200`, so exactly one request is
+    /// spent and its bytes are kept no matter how the host answers:
+    ///
+    /// - **206** — ranges work and `Content-Range` carries the total. The prefix is
+    ///   already on disk, so the remainder is tiled and run in parallel.
+    /// - **200** — the host ignored Range and sent the whole body, which was
+    ///   written from offset 0. That *is* the finished single-stream download.
+    /// - **anything else** — nothing was written and the token was not consumed
+    ///   (`/fixtures/once` answers a ranged GET with 403 without burning it), so a
+    ///   plain GET still succeeds.
+    ///
+    /// Before this, such URLs returned `singleOutcome` unconditionally: an
+    /// expiring CDN signature (`?…&expires=…&sig=…`) is not a one-shot token, and
+    /// pinning every one of them to a single connection is what capped those
+    /// downloads at one connection's worth of throughput.
+    private static func openingChunkOutcome(
+        url: String,
+        partialURL: URL,
+        options: TransferCore.DownloadOptions,
+        abortFlag: TransferAbortFlag?,
+        onProgress: TransferCore.ProgressHandler?,
+        useCurlMulti: Bool,
+        hostMaxSegments: Int?
+    ) throws -> Outcome {
+        // This path has always restarted from zero (`singleOutcome` opens with
+        // O_TRUNC). A ranged open does not truncate, so clear the partial
+        // explicitly rather than write a new body over a stale tail.
+        try? FileManager.default.removeItem(at: partialURL)
+        try? FileManager.default.removeItem(at: segmentMapURL(for: partialURL))
+
+        let opening: TransferCore.TransferOutcome
+        do {
+            opening = try TransferCore.downloadSingleStream(
+                url: url,
+                partialURL: partialURL,
+                rangeHeader: "0-\(openingChunkBytes - 1)",
+                fileOffset: 0,
+                options: options,
+                abortFlag: abortFlag,
+                onProgress: openingProgress(onProgress),
+                allowFullBodyOn200: true
+            )
+        } catch let error as TransferCore.TransferError {
+            switch error {
+            case .httpStatus, .invalidRangeResponse:
+                // Host refused the ranged form without serving it. Nothing was
+                // written and no token was spent — a plain GET is still good.
+                return try singleOutcome(
+                    url: url, partialURL: partialURL, options: options,
+                    abortFlag: abortFlag, onProgress: onProgress
+                )
+            default:
+                throw error
+            }
+        }
+
+        let prefix = opening.bytesWritten
+        // ONLY completion may short-circuit here. Folding "the remainder is too
+        // small to split" into this guard reported a 1.5 MiB file as finished
+        // after 1 MiB: the remainder tiles to one connection, which is a valid
+        // answer to "how many connections", not a reason to stop downloading.
+        guard opening.identity.httpStatus == 206,
+              let total = TransferCore.totalLength(from: opening.identity),
+              prefix > 0, prefix < total
+        else {
+            // 200 — the whole body was already written — or a 206 that finished
+            // the file outright.
+            try synchronizeFile(at: partialURL)
+            return Outcome(
+                identity: opening.identity,
+                bytesWritten: prefix,
+                segmentCount: 1,
+                partialURL: partialURL
+            )
+        }
+
+        // Same shape as a legacy contiguous-prefix resume: the bytes on disk are
+        // the base, and only `[prefix, total)` gets tiled. A single-connection
+        // remainder still goes through the map loop, so its completion is checked
+        // against `ledger.total` like any other.
+        let connectionCount = max(1, preferredSegmentCount(
+            totalBytes: total - prefix, hostMaxSegments: hostMaxSegments
+        ))
+        let ledger = SegmentLedger(
+            total: total,
+            baseOffset: prefix,
+            entries: tile(from: prefix, total: total, count: chunkCount(
+                from: prefix, total: total, connectionCount: connectionCount
+            )),
+            sidecarURL: segmentMapURL(for: partialURL),
+            validator: ResourceValidator(
+                etag: opening.identity.etag,
+                lastModified: opening.identity.lastModified,
+                totalBytes: total
+            )
+        )
+        try ledger.saveNow()
+        try preallocate(partialURL: partialURL, size: total)
+
+        return try runMapLoop(
+            url: url,
+            partialURL: partialURL,
+            ledger: ledger,
+            options: options,
+            abortFlag: abortFlag,
+            onProgress: onProgress,
+            probe: opening.identity,
+            useCurlMulti: useCurlMulti,
+            maxConcurrent: connectionCount,
+            hostMaxSegments: hostMaxSegments
+        )
     }
 
     private static func singleOutcome(

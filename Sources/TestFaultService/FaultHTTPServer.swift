@@ -17,6 +17,11 @@ import Network
 ///   GET /fixtures/no-range-truncate -> probe behaves like no-range; plain GET
 ///                                    truncates mid-body (replacement failure)
 ///   GET /fixtures/range-ignored-200 -> alias of no-range (Range → HTTP 200 full body)
+///   GET /fixtures/probe-200-ranges-ok -> `Range: bytes=0-0` → 200 full body, but
+///                                    every other Range → 206 (CDN cache-miss shape)
+///   GET /fixtures/signed-ranged  -> 2 MiB, honours Range; used with a
+///                                    `?expires=&sig=` query (probe-skipping URL
+///                                    that is nonetheless range-capable)
 ///   GET /fixtures/range-shifted     -> 206 with a shifted Content-Range interval
 ///   GET /fixtures/range-malformed-cr -> 206 with malformed Content-Range
 ///   GET /fixtures/range-wrong-total -> 206 with correct slice but wrong total
@@ -52,6 +57,14 @@ public final class FaultHTTPServer: @unchecked Sendable {
     /// `preferredSegmentCount`'s 1 MiB…8 MiB band so segmented transfers under
     /// test really run more than one range.
     public static let largeBody = Data((0 ..< (2 * 1024 * 1024)).map { UInt8($0 % 251) })
+
+    /// 1.5 MiB — deliberately inside the band where a 1 MiB opening chunk leaves a
+    /// remainder **below** `preferredSegmentCount`'s 1 MiB floor, so the remainder
+    /// tiles to a single connection. `largeBody` (2 MiB) leaves exactly 1 MiB and
+    /// tiles to 2, so it cannot reach this case at all.
+    public static let awkwardRemainderBody = Data(
+        (0 ..< (1536 * 1024)).map { UInt8($0 % 251) }
+    )
     public static let strongETag = "\"dm-fixture-v1\""
 
     private let queue = DispatchQueue(label: "org.downloadmanager.local.faultservice")
@@ -275,6 +288,46 @@ public final class FaultHTTPServer: @unchecked Sendable {
                 body: Self.largeBody,
                 rangeHeader: rangeHeader,
                 acceptRanges: true,
+                etag: Self.strongETag,
+                on: connection
+            )
+
+        case "/fixtures/signed-ranged-awkward":
+            // 1.5 MiB: the opening chunk takes 1 MiB and leaves 0.5 MiB, which
+            // tiles to a single connection. Guards against calling that "done".
+            serveFixture(
+                body: Self.awkwardRemainderBody,
+                rangeHeader: rangeHeader,
+                acceptRanges: true,
+                etag: Self.strongETag,
+                on: connection
+            )
+
+        case "/fixtures/signed-ranged":
+            // Expiring-signature CDN shape: served only with `sig=`/`expires=` in
+            // the query (so `looksLikeFragileSignedURL` matches and the separate
+            // probe is skipped), but ranges are honoured normally. This is the
+            // user-reported host's shape — an expiring signature is re-fetchable
+            // until it expires, unlike a one-shot token.
+            serveFixture(
+                body: Self.largeBody,
+                rangeHeader: rangeHeader,
+                acceptRanges: true,
+                etag: Self.strongETag,
+                on: connection
+            )
+
+        case "/fixtures/probe-200-ranges-ok":
+            // CDN cache-miss shape: the `Range: bytes=0-0` probe is answered 200
+            // with the full body, but real ranged GETs are honoured with 206.
+            // Cloudflare does exactly this — same URL, MISS then HIT — and reading
+            // the probe's 200 as "no ranges" pinned the whole download to one
+            // connection. Keyed on the probe's own range so the test is
+            // deterministic rather than dependent on request ordering.
+            serveFixture(
+                body: Self.largeBody,
+                rangeHeader: rangeHeader == "bytes=0-0" ? nil : rangeHeader,
+                acceptRanges: rangeHeader != "bytes=0-0",
                 etag: Self.strongETag,
                 on: connection
             )

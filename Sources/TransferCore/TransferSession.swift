@@ -137,7 +137,8 @@ public enum TransferCore {
         fileOffset: Int64 = 0,
         options: DownloadOptions = DownloadOptions(),
         abortFlag: TransferAbortFlag? = nil,
-        onProgress: ProgressHandler? = nil
+        onProgress: ProgressHandler? = nil,
+        allowFullBodyOn200: Bool = false
     ) throws -> TransferOutcome {
         try downloadSingleStream(
             url: url,
@@ -147,7 +148,8 @@ public enum TransferCore {
             options: options,
             abortFlag: abortFlag,
             onProgress: onProgress,
-            bodyByteLimit: 0
+            bodyByteLimit: 0,
+            allowFullBodyOn200: allowFullBodyOn200
         )
     }
 
@@ -159,7 +161,8 @@ public enum TransferCore {
         options: DownloadOptions = DownloadOptions(),
         abortFlag: TransferAbortFlag? = nil,
         onProgress: ProgressHandler? = nil,
-        bodyByteLimit: Int64 = 0
+        bodyByteLimit: Int64 = 0,
+        allowFullBodyOn200: Bool = false
     ) throws -> TransferOutcome {
         try CurlBridge.initialize()
 
@@ -191,6 +194,7 @@ public enum TransferCore {
             abortFlag: abortFlag,
             onProgress: onProgress,
             bodyByteLimit: bodyByteLimit,
+            allowFullBodyOn200: allowFullBodyOn200,
             result: &result
         )
 
@@ -411,9 +415,14 @@ public enum TransferCore {
         }
     }
 
-    /// Probe used only when classifying an existing partial for resume vs restart.
-    /// A host that ignores `Range: 0-0` with HTTP 200 is treated as no-range here
-    /// without weakening ranged-byte validation on real segment downloads.
+    /// Identity for a host that answered the `Range: 0-0` probe with HTTP 200.
+    /// Falls back to a plain capped GET, so the caller still learns the total even
+    /// though the ranged probe threw. Used when classifying an existing partial for
+    /// resume vs restart, and by ``SegmentedTransfer`` to recover a tiling target
+    /// on CDNs that ignore Range on a cache miss.
+    ///
+    /// Never weakens ranged-byte validation on the real segment downloads: those
+    /// still require 206 plus an exact `Content-Range` match before any write.
     static func probeForPartialRestart(
         url: String,
         options: DownloadOptions = DownloadOptions()
@@ -485,6 +494,7 @@ public enum TransferCore {
         abortFlag: TransferAbortFlag?,
         onProgress: ProgressHandler?,
         bodyByteLimit: Int64,
+        allowFullBodyOn200: Bool,
         result: inout DMCurlDownloadResult
     ) -> CURLcode {
         let connect = Int(options.connectTimeoutMilliseconds)
@@ -536,6 +546,7 @@ public enum TransferCore {
                                             cookieC,
                                             headersC,
                                             curl_off_t(max(bodyByteLimit, 0)),
+                                            allowFullBodyOn200 ? 1 : 0,
                                             &result
                                         )
                                     }
@@ -556,6 +567,7 @@ public enum TransferCore {
                                     cookieC,
                                     headersC,
                                     curl_off_t(max(bodyByteLimit, 0)),
+                                    allowFullBodyOn200 ? 1 : 0,
                                     &result
                                 )
                             }

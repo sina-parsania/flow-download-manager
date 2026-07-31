@@ -212,6 +212,20 @@ typedef struct {
     int writeError;
     int rangedTransfer;
     int rangeResponseInvalid;
+    /* Opt-in, and only ever set on a request whose range starts at offset 0.
+     *
+     * A ranged request that is answered 200 means the server ignored Range and
+     * is sending the whole body. Rejecting that wrote zero bytes and threw, so
+     * the caller had to spend a second request — which on a one-shot link is one
+     * request too many, and is why fragile URLs used to skip segmentation
+     * entirely. With this set, such a response is accepted and written from
+     * offset 0, so the opening chunk doubles as the range probe and costs
+     * nothing when it fails.
+     *
+     * Offset 0 is load-bearing: a mid-file segment that accepted a 200 would
+     * write the file's HEAD at its own offset and silently corrupt the download.
+     * Mid-file segments keep strict validation, always. */
+    int allowFullBodyOn200;
     /* Set by DMCurlEasyDownloadRequestStop. Distinct from abortFlag: that one
      * is job-wide and means "the user cancelled"; this one means "give your
      * remaining range back so it can be re-tiled". */
@@ -777,8 +791,17 @@ static size_t DMCurlWriteCallback(char *ptr, size_t size, size_t nmemb, void *us
         return 0;
     }
     if (ctx->rangedTransfer && !DMCurlRangeResponseIsValid(ctx, tctx->header)) {
-        ctx->rangeResponseInvalid = 1;
-        return 0;
+        /* Server ignored Range and is sending the whole body from byte 0. The
+         * caller asked for this to be kept, and the request starts at offset 0,
+         * so the bytes are exactly what a plain GET would have produced: drop to
+         * an unranged transfer and write them. Any other shape still fails. */
+        if (ctx->allowFullBodyOn200 && ctx->expectedRangeStart == 0 &&
+            tctx->header->responseStatus == 200 && !tctx->header->hasContentRange) {
+            ctx->rangedTransfer = 0;
+        } else {
+            ctx->rangeResponseInvalid = 1;
+            return 0;
+        }
     }
     size_t remaining = total;
     if (ctx->bodyByteLimit > 0) {
@@ -854,6 +877,7 @@ CURLcode DMCurlEasyDownloadToFD(
     const char *cookieJarPath,
     const char *extraHeaders,
     curl_off_t bodyByteLimit,
+    int allowFullBodyOn200,
     DMCurlDownloadResult *out
 ) {
     if (url == NULL || fd < 0 || out == NULL) {
@@ -880,6 +904,7 @@ CURLcode DMCurlEasyDownloadToFD(
         .writeError = 0,
         .rangedTransfer = rangeHeader != NULL && rangeHeader[0] != '\0',
         .rangeResponseInvalid = 0,
+        .allowFullBodyOn200 = allowFullBodyOn200 != 0,
         .stopRequested = 0,
         .bodyCapReached = 0,
         .abortFlag = abortFlag,
@@ -998,6 +1023,10 @@ CURLcode DMCurlEasyDownloadToFD(
         }
         DMCurlHeaderCtxClear(&headerCtx);
         transferCtx.discardResponseBody = 0;
+        // Each hop is judged on its own response: a `rangedTransfer` cleared by
+        // a full-body 200 must not carry over and disable validation for the
+        // next hop's body.
+        writeCtx.rangedTransfer = rangeHeader != NULL && rangeHeader[0] != '\0';
         redirectHopCount++;
     }
     out->code = code;

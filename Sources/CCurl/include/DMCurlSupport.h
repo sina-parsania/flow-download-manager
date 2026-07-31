@@ -23,7 +23,12 @@ int DMCurlAbortFlagIsSet(const DMCurlAbortFlag *flag);
 int DMCurlAbortFlagIsSetHandle(const void *flag);
 void DMCurlAbortFlagReset(DMCurlAbortFlag *flag);
 typedef int (*DMCurlProgressCallback)(curl_off_t written, curl_off_t total, void *userdata);
-CURLcode DMCurlEasyDownloadToFD(const char *url,int fd,curl_off_t fileOffset,const char *rangeHeader,long connectTimeoutMS,long transferTimeoutMS,long maxRedirects,DMCurlAbortFlag *abortFlag,DMCurlProgressCallback progressCallback,void *progressUserdata,const char *userpwd,const char *proxyURL,const char *cookieJarPath,const char *extraHeaders,curl_off_t bodyByteLimit,DMCurlDownloadResult *out);
+/// `allowFullBodyOn200`: accept a 200 answer to a ranged request and write the
+/// whole body from offset 0, instead of failing with `rangeResponseInvalid`.
+/// Honoured ONLY when the requested range starts at 0 — a mid-file segment that
+/// accepted a 200 would write the file's head at its own offset and corrupt the
+/// download. Lets an opening chunk double as the range probe at no extra request.
+CURLcode DMCurlEasyDownloadToFD(const char *url,int fd,curl_off_t fileOffset,const char *rangeHeader,long connectTimeoutMS,long transferTimeoutMS,long maxRedirects,DMCurlAbortFlag *abortFlag,DMCurlProgressCallback progressCallback,void *progressUserdata,const char *userpwd,const char *proxyURL,const char *cookieJarPath,const char *extraHeaders,curl_off_t bodyByteLimit,int allowFullBodyOn200,DMCurlDownloadResult *out);
 typedef struct DMCurlEasyDownload DMCurlEasyDownload;
 DMCurlEasyDownload *DMCurlEasyDownloadCreate(const char *url,int fd,curl_off_t fileOffset,const char *rangeHeader,long connectTimeoutMS,long transferTimeoutMS,long maxRedirects,DMCurlAbortFlag *abortFlag,DMCurlProgressCallback progressCallback,void *progressUserdata,const char *userpwd,const char *proxyURL,const char *cookieJarPath,const char *extraHeaders);
 CURL *DMCurlEasyDownloadGetHandle(DMCurlEasyDownload *download);

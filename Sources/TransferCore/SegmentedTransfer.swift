@@ -145,7 +145,11 @@ public enum SegmentedTransfer {
         onProgress: TransferCore.ProgressHandler? = nil,
         preferResume: Bool = true,
         hostMaxSegments: Int? = nil,
-        useCurlMulti: Bool = true
+        useCurlMulti: Bool = true,
+        // Live concurrency target inside `hostMaxSegments`. The orchestrator owns
+        // it because growing means reserving another socket from a budget only it
+        // can see. `nil` runs flat at the ceiling, as before.
+        desiredConcurrency: (@Sendable () -> Int)? = nil
     ) throws -> Outcome {
         // Range probing, segment maps and the 200/206 status gate are all HTTP
         // semantics. FTP/SFTP were accepted by the UI and then run through this
@@ -177,14 +181,16 @@ public enum SegmentedTransfer {
                 if preferResume, let resumed = try resumeWithoutProbe(
                     url: url, partialURL: partialURL, options: options,
                     abortFlag: abortFlag, onProgress: onProgress,
-                    useCurlMulti: useCurlMulti, hostMaxSegments: hostMaxSegments
+                    useCurlMulti: useCurlMulti, hostMaxSegments: hostMaxSegments,
+                    desiredConcurrency: desiredConcurrency
                 ) {
                     return resumed
                 }
                 return try openingChunkOutcome(
                     url: url, partialURL: partialURL, options: options,
                     abortFlag: abortFlag, onProgress: onProgress,
-                    useCurlMulti: useCurlMulti, hostMaxSegments: hostMaxSegments
+                    useCurlMulti: useCurlMulti, hostMaxSegments: hostMaxSegments,
+                    desiredConcurrency: desiredConcurrency
                 )
             }
             return try singleOutcome(
@@ -240,7 +246,8 @@ public enum SegmentedTransfer {
                         probe: probe,
                         useCurlMulti: useCurlMulti,
                         maxConcurrent: connectionCount,
-                        hostMaxSegments: hostMaxSegments
+                        hostMaxSegments: hostMaxSegments,
+                        desiredConcurrency: desiredConcurrency
                     )
                 }
                 // Probe reached the server but disagreed. Only wipe when the
@@ -320,7 +327,8 @@ public enum SegmentedTransfer {
                     url: url, partialURL: partialURL, sidecarURL: sidecarURL,
                     options: options, abortFlag: abortFlag, onProgress: onProgress,
                     probe: identity, total: total, useCurlMulti: useCurlMulti,
-                    hostMaxSegments: hostMaxSegments
+                    hostMaxSegments: hostMaxSegments,
+                    desiredConcurrency: desiredConcurrency
                 )
             case .httpStatus, .invalidRangeResponse:
                 return try singleOutcome(
@@ -350,7 +358,8 @@ public enum SegmentedTransfer {
             url: url, partialURL: partialURL, sidecarURL: sidecarURL,
             options: options, abortFlag: abortFlag, onProgress: onProgress,
             probe: probe, total: total, useCurlMulti: useCurlMulti,
-            hostMaxSegments: hostMaxSegments
+            hostMaxSegments: hostMaxSegments,
+            desiredConcurrency: desiredConcurrency
         )
     }
 
@@ -372,7 +381,8 @@ public enum SegmentedTransfer {
         probe: TransferCore.ResourceIdentity,
         total: Int64,
         useCurlMulti: Bool,
-        hostMaxSegments: Int?
+        hostMaxSegments: Int?,
+        desiredConcurrency: (@Sendable () -> Int)? = nil
     ) throws -> Outcome {
         let connectionCount = preferredSegmentCount(totalBytes: total, hostMaxSegments: hostMaxSegments)
         guard connectionCount > 1, total > 1 else {
@@ -414,7 +424,8 @@ public enum SegmentedTransfer {
                 maxConcurrent: connectionCount,
                 hostMaxSegments: hostMaxSegments,
                 // The catch below is the fallback that makes bailing early safe.
-                bailOnInvalidRange: true
+                bailOnInvalidRange: true,
+                desiredConcurrency: desiredConcurrency
             )
         } catch TransferCore.TransferError.invalidRangeResponse where ledger.downloadedBytes() == 0 {
             // The host does not honour ranges on the real GETs either. Nothing was
@@ -439,7 +450,8 @@ public enum SegmentedTransfer {
         abortFlag: TransferAbortFlag?,
         onProgress: TransferCore.ProgressHandler?,
         hostMaxSegments: Int?,
-        useCurlMulti: Bool
+        useCurlMulti: Bool,
+        desiredConcurrency: (@Sendable () -> Int)? = nil
     ) throws -> Outcome {
         let probe = try TransferCore.probeRangeSupport(url: url, options: options)
         guard probe.httpStatus == 206,
@@ -480,7 +492,8 @@ public enum SegmentedTransfer {
             probe: probe,
             useCurlMulti: useCurlMulti,
             maxConcurrent: connectionCount,
-            hostMaxSegments: hostMaxSegments
+            hostMaxSegments: hostMaxSegments,
+            desiredConcurrency: desiredConcurrency
         )
     }
 
@@ -500,7 +513,8 @@ public enum SegmentedTransfer {
         hostMaxSegments: Int? = nil,
         // Only the fresh-download paths set this: they can fall back to a single
         // stream, so a rejected `Content-Range` is worth returning at once.
-        bailOnInvalidRange: Bool = false
+        bailOnInvalidRange: Bool = false,
+        desiredConcurrency: (@Sendable () -> Int)? = nil
     ) throws -> Outcome {
         // Publish already-downloaded bytes immediately so relaunch UI does not
         // flash 0% before the first curl progress callback.
@@ -540,11 +554,11 @@ public enum SegmentedTransfer {
         // the ledger may be finer (S1 tiling); this only bounds concurrency.
         // Start at the ceiling, back off on trouble, recover on success.
         //
-        // NOT classic AIMD-from-below: a healthy download is a *single* pass, so
-        // anything that ramps up between passes never ramps at all — it would
-        // just cap every clean transfer at the starting value. Additive increase
-        // only earns its keep on a link that stalled and is recovering, which is
-        // exactly when multiple passes happen.
+        // Between-pass adjustment is still multiplicative-decrease only: a healthy
+        // download is a *single* pass, so anything that ramps up out here would
+        // never ramp at all. Climbing is `ConnectionRamp`'s job and happens
+        // *inside* the pass, where the transport can open another connection from
+        // the pending tiles.
         let ceiling = maxConcurrent
         var connectionLimit = maxConcurrent
         while true {
@@ -568,6 +582,11 @@ public enum SegmentedTransfer {
                     abortFlag: abortFlag,
                     useCurlMulti: useCurlMulti,
                     maxConcurrent: connectionLimit,
+                    // `maxConcurrent` above is the hard bound; this is where the
+                    // caller wants the pass to sit inside it right now. Owned by
+                    // the orchestrator, because raising it means reserving another
+                    // socket from a budget only the orchestrator can see.
+                    desiredConcurrency: desiredConcurrency,
                     // Same ledger entry ⇒ same group. CurlMultiLoop stops losers
                     // when one replica finishes the range in full.
                     replicaGroupByRangeIndex: entryIndices,
@@ -668,6 +687,7 @@ public enum SegmentedTransfer {
         abortFlag: TransferAbortFlag?,
         useCurlMulti: Bool,
         maxConcurrent: Int? = nil,
+        desiredConcurrency: (@Sendable () -> Int)? = nil,
         replicaGroupByRangeIndex: [Int]? = nil,
         onSegmentProgress: (@Sendable (Int, Int64) -> Void)?
     ) throws {
@@ -681,6 +701,7 @@ public enum SegmentedTransfer {
                     abortFlag: abortFlag,
                     onSegmentProgress: onSegmentProgress,
                     maxConcurrent: maxConcurrent,
+                    desiredConcurrency: desiredConcurrency,
                     replicaGroupByRangeIndex: replicaGroupByRangeIndex
                 )
                 return
@@ -740,6 +761,14 @@ public enum SegmentedTransfer {
             throw firstError
         }
     }
+
+    /// Where an in-pass connection ramp begins.
+    ///
+    /// Deliberately today's fixed default rather than something lower: the ramp
+    /// is there to find headroom above this, not to make well-behaved transfers
+    /// start slower. A host that flattens here simply settles and behaves exactly
+    /// as it did before the ramp existed.
+    static let rampStartConnections = 8
 
     /// Opening chunk size for a URL that must not be probed separately. Small
     /// enough that a range-honouring host loses almost no serial prefix before
@@ -807,7 +836,8 @@ public enum SegmentedTransfer {
         abortFlag: TransferAbortFlag?,
         onProgress: TransferCore.ProgressHandler?,
         useCurlMulti: Bool,
-        hostMaxSegments: Int?
+        hostMaxSegments: Int?,
+        desiredConcurrency: (@Sendable () -> Int)? = nil
     ) throws -> Outcome? {
         let sidecarURL = segmentMapURL(for: partialURL)
         guard let ledger = SegmentLedger.load(sidecarURL: sidecarURL) else { return nil }
@@ -839,7 +869,8 @@ public enum SegmentedTransfer {
                 probe: ledgerIdentity(url: url, ledger: ledger),
                 useCurlMulti: useCurlMulti,
                 maxConcurrent: 1,
-                hostMaxSegments: hostMaxSegments
+                hostMaxSegments: hostMaxSegments,
+                desiredConcurrency: desiredConcurrency
             )
         }
 
@@ -895,7 +926,8 @@ public enum SegmentedTransfer {
             probe: chunk.identity,
             useCurlMulti: useCurlMulti,
             maxConcurrent: connectionCount,
-            hostMaxSegments: hostMaxSegments
+            hostMaxSegments: hostMaxSegments,
+            desiredConcurrency: desiredConcurrency
         )
     }
 
@@ -945,7 +977,8 @@ public enum SegmentedTransfer {
         abortFlag: TransferAbortFlag?,
         onProgress: TransferCore.ProgressHandler?,
         useCurlMulti: Bool,
-        hostMaxSegments: Int?
+        hostMaxSegments: Int?,
+        desiredConcurrency: (@Sendable () -> Int)? = nil
     ) throws -> Outcome {
         // This path has always restarted from zero (`singleOutcome` opens with
         // O_TRUNC). A ranged open does not truncate, so clear the partial
@@ -1032,7 +1065,8 @@ public enum SegmentedTransfer {
             probe: opening.identity,
             useCurlMulti: useCurlMulti,
             maxConcurrent: connectionCount,
-            hostMaxSegments: hostMaxSegments
+            hostMaxSegments: hostMaxSegments,
+            desiredConcurrency: desiredConcurrency
         )
     }
 

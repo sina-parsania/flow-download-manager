@@ -86,6 +86,10 @@ public enum CurlMultiLoop {
         onProgress: (@Sendable (Int64) -> Void)? = nil,
         onSegmentProgress: (@Sendable (Int, Int64) -> Void)? = nil,
         maxConcurrent: Int? = nil,
+        // Live concurrency target, polled each drive-loop turn. `maxConcurrent`
+        // stays the hard bound (the orchestrator's socket reservation); this only
+        // moves within it. Policy is the caller's — the transport just refills.
+        desiredConcurrency: (@Sendable () -> Int)? = nil,
         // Same group id ⇒ replicas of one ledger entry. When one finishes in
         // full, siblings in the group are asked to stop so the loser does not
         // download the whole chunk. `nil` means every range is its own group.
@@ -154,7 +158,14 @@ public enum CurlMultiLoop {
             : nil
 
         let effectiveMax = max(1, min(maxConcurrent ?? ranges.count, ranges.count))
-        var pending = Array(effectiveMax ..< ranges.count)
+        // Open only what the controller wants now; the rest of the budget is
+        // reached by ramping. Without a controller this is `effectiveMax`, i.e.
+        // exactly the previous behaviour.
+        let initialConcurrent = min(
+            max(1, desiredConcurrency.map { $0() } ?? effectiveMax),
+            effectiveMax
+        )
+        var pending = Array(initialConcurrent ..< ranges.count)
         var outcomesByIndex: [Outcome?] = Array(repeating: nil, count: ranges.count)
         // Retains a box only while its easy is live; freed right after that
         // easy is removed from the multi handle and finished.
@@ -374,7 +385,7 @@ public enum CurlMultiLoop {
                                 return completed.count
                             }
 
-                            for index in 0 ..< effectiveMax {
+                            for index in 0 ..< initialConcurrent {
                                 try startEasy(index)
                             }
 
@@ -399,6 +410,23 @@ public enum CurlMultiLoop {
                                 guard performCode == CURLM_OK else {
                                     throw MultiError.curl(CURLE_FAILED_INIT)
                                 }
+                                // Grow toward the caller's current target. `pending`
+                                // and `startEasy` already existed for the 1:1
+                                // refill, so ramping up is just refilling more than
+                                // one slot — the tiling is finer than the
+                                // connection count precisely so spare tiles exist.
+                                //
+                                // Only ever grows. Shrinking would mean killing a
+                                // live easy and giving its partial tile back, and
+                                // the caller's controller never asks for less.
+                                if let desiredConcurrency {
+                                    let want = min(max(1, desiredConcurrency()), effectiveMax)
+                                    while liveByIndex.count < want, let next = pending.first {
+                                        pending.removeFirst()
+                                        try startEasy(next)
+                                    }
+                                }
+
                                 let processed = try drainCompletions()
                                 // libcurl reports nothing active and produced no
                                 // completion, yet handles are still tracked: the

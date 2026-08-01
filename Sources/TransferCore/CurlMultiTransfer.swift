@@ -14,6 +14,7 @@ public extension TransferCore {
         onProgress: ProgressHandler? = nil,
         onSegmentProgress: (@Sendable (Int, Int64) -> Void)? = nil,
         maxConcurrent: Int? = nil,
+        desiredConcurrency: (@Sendable () -> Int)? = nil,
         replicaGroupByRangeIndex: [Int]? = nil
     ) throws -> [CurlMultiLoop.Outcome] {
         let parsed = try CurlURLParser.parse(url)
@@ -41,6 +42,7 @@ public extension TransferCore {
                 onProgress: multiProgress,
                 onSegmentProgress: onSegmentProgress,
                 maxConcurrent: maxConcurrent,
+                desiredConcurrency: desiredConcurrency,
                 replicaGroupByRangeIndex: replicaGroupByRangeIndex
             )
         } catch let error as CurlMultiLoop.MultiError {

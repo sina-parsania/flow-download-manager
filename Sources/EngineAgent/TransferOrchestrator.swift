@@ -9,6 +9,34 @@ import SharedSecurity
 import TransferCore
 import XPCContracts
 
+/// Sockets reserved for one transfer beyond its primary connection.
+///
+/// Mutable and shared because the connection ramp reserves more while the
+/// transfer is running, and the release path in `runJob`'s `defer` has to give
+/// back the final total rather than the count it started with. Leaking here
+/// permanently shrinks the host's budget for every later download.
+private final class SocketGrant: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int
+
+    init(extra: Int) {
+        value = extra
+    }
+
+    var extra: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func add(_ sockets: Int) {
+        guard sockets > 0 else { return }
+        lock.lock()
+        value += sockets
+        lock.unlock()
+    }
+}
+
 /// Latest cumulative byte count for one in-flight transfer.
 ///
 /// Written from libcurl's write-callback threads and drained by the
@@ -66,6 +94,8 @@ public actor TransferOrchestrator {
     private var attemptByJob: [String: Int] = [:]
     private var sleepAssertions: [String: AnyObject] = [:]
     private var speedEstimators: [String: TransferSpeedEstimator] = [:]
+    /// Live connection ramp per job, stepped from the progress ticker.
+    private var connectionRamps: [String: ConnectionRamp] = [:]
 
     public init(
         database: EngineDatabase,
@@ -294,11 +324,30 @@ public actor TransferOrchestrator {
                 host: host,
                 upTo: max(0, connectionTarget - 1)
             )
+            // Sockets reserved so far. The ramp grows this during the transfer, so
+            // the release path cannot capture a copy — it has to read the final
+            // count.
+            let grant = SocketGrant(extra: extraSegmentSockets)
+            // An explicit per-job/per-host setting is an instruction, not a
+            // starting point — honour it exactly and let the ramp settle at once.
+            // Otherwise the ceiling is this job's fair share of the host, which is
+            // the headroom the ramp is allowed to discover.
+            let rampCeiling = Self.effectiveHostMaxSegments(
+                preferredConnectionCount: preferredConnections,
+                socketBudget: fairCap
+            )
+            let concurrency = ConcurrencyTarget(1 + extraSegmentSockets)
+            connectionRamps[jobID] = ConnectionRamp(
+                start: 1 + extraSegmentSockets,
+                ceiling: rampCeiling
+            )
+            let rampHost = host
+            defer { connectionRamps[jobID] = nil }
             defer {
                 let budget = self.budget
                 let limiter = self.rateLimiter
                 let hostToRelease = host
-                let extra = extraSegmentSockets
+                let extra = grant.extra
                 Task.detached {
                     await budget.releaseSocket(host: hostToRelease)
                     await budget.releaseSockets(host: hostToRelease, count: extra)
@@ -450,6 +499,15 @@ public actor TransferOrchestrator {
                     // kills it and the map loop can then back off up to 30 s,
                     // which is a long time to display a number that is a lie.
                     await tickProgress(jobID: jobID, sample: liveBytes.take())
+                    // Same tick decides whether this transfer has earned another
+                    // connection. Reserving lives here because the budget is
+                    // actor state — the transfer thread cannot await it.
+                    await stepConnectionRamp(
+                        jobID: jobID,
+                        host: rampHost,
+                        grant: grant,
+                        target: concurrency
+                    )
                 }
             }
             defer { ticker.cancel() }
@@ -459,10 +517,11 @@ public actor TransferOrchestrator {
                 partialURL: partial,
                 options: options,
                 abortFlag: abort,
-                hostMaxSegments: Self.effectiveHostMaxSegments(
-                    preferredConnectionCount: connectionTarget,
-                    socketBudget: 1 + extraSegmentSockets
-                ),
+                // The ceiling the ramp may grow into — NOT what is reserved. Only
+                // `concurrency` says how many may actually run, and it is raised
+                // solely after the matching sockets have been granted.
+                hostMaxSegments: rampCeiling,
+                desiredConcurrency: { concurrency.current() },
                 onProgress: { bytes, total in liveBytes.record(bytes, total: total) }
             )
             ticker.cancel()
@@ -706,6 +765,40 @@ public actor TransferOrchestrator {
         }
     }
 
+    /// One ramp step: has the transfer earned another connection, and can the
+    /// budget actually pay for it?
+    ///
+    /// The order matters. Sockets are reserved **before** the target is raised, so
+    /// the transport is never told it may run more connections than the host
+    /// budget has granted. A refused reservation simply leaves the target where it
+    /// is — the transfer keeps running at its current width, and the ramp will ask
+    /// again on a later tick.
+    private func stepConnectionRamp(
+        jobID: String,
+        host: String,
+        grant: SocketGrant,
+        target: ConcurrencyTarget
+    ) async {
+        guard var ramp = connectionRamps[jobID], !ramp.settled else { return }
+        guard let snapshot = progressLedger.snapshot(for: jobID) else { return }
+
+        let want = ramp.record(
+            totalBytes: snapshot.bytesTransferred,
+            at: ProcessInfo.processInfo.systemUptime
+        )
+        connectionRamps[jobID] = ramp
+
+        let held = 1 + grant.extra
+        guard want > held else { return }
+        let granted = await budget.reserveSockets(host: host, upTo: want - held)
+        guard granted > 0 else { return }
+        grant.add(granted)
+        target.raise(to: held + granted)
+        log.debug(
+            "ramp id=\(jobID, privacy: .public) connections=\(held + granted, privacy: .public)"
+        )
+    }
+
     private func recordProgress(jobID: String, bytes: Int64, total: Int64?) {
         let previous = progressLedger.snapshot(for: jobID)
         var snap = previous ?? JobProgressSnapshot(
@@ -771,6 +864,7 @@ public actor TransferOrchestrator {
         options: TransferCore.DownloadOptions,
         abortFlag: TransferAbortFlag,
         hostMaxSegments: Int?,
+        desiredConcurrency: (@Sendable () -> Int)? = nil,
         onProgress: @escaping TransferCore.ProgressHandler
     ) async throws -> SegmentedTransfer.Outcome {
         try await Task.detached(priority: .high) {
@@ -781,7 +875,8 @@ public actor TransferOrchestrator {
                 abortFlag: abortFlag,
                 onProgress: onProgress,
                 preferResume: true,
-                hostMaxSegments: hostMaxSegments
+                hostMaxSegments: hostMaxSegments,
+                desiredConcurrency: desiredConcurrency
             )
         }.value
     }

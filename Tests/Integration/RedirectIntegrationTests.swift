@@ -134,7 +134,7 @@ final class RedirectIntegrationTests: XCTestCase {
                 options: options
             )
         ) { error in
-            guard case let TransferCore.TransferError.httpStatus(status) = error else {
+            guard case let TransferCore.TransferError.httpStatus(status, _) = error else {
                 return XCTFail("expected redirect status, got \(error)")
             }
             XCTAssertEqual(status, 302)

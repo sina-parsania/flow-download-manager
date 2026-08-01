@@ -170,6 +170,17 @@ public enum SegmentedTransfer {
             // contract `OrchestratorIntegrationTests` pins.
             if !RangeProbePolicy.hasFragileCredentials(options),
                RangeProbePolicy.hasExplicitExpiry(url) {
+                // These downloads used to restart from zero on every attempt: the
+                // branch sat ahead of the segment-map resume, and `singleOutcome`
+                // opens with `O_TRUNC`. On a multi-hundred-megabyte file over a
+                // lossy link that is eight full restarts before the job gives up.
+                if preferResume, let resumed = try resumeWithoutProbe(
+                    url: url, partialURL: partialURL, options: options,
+                    abortFlag: abortFlag, onProgress: onProgress,
+                    useCurlMulti: useCurlMulti, hostMaxSegments: hostMaxSegments
+                ) {
+                    return resumed
+                }
                 return try openingChunkOutcome(
                     url: url, partialURL: partialURL, options: options,
                     abortFlag: abortFlag, onProgress: onProgress,
@@ -736,6 +747,158 @@ public enum SegmentedTransfer {
     /// minimum tile, never inside one.
     private static let openingChunkBytes: Int64 = 1024 * 1024
 
+    /// Identity for a download that needs no further request — everything known
+    /// about the resource comes from the map that recorded it.
+    ///
+    /// `contentType` and `contentDisposition` are unavailable without a request,
+    /// so filename refinement falls back to the evidence the job already had. That
+    /// is a far better trade than re-downloading a finished file to recover two
+    /// header values. `runMapLoop` overrides `contentLength` with `ledger.total`.
+    private static func ledgerIdentity(
+        url: String,
+        ledger: SegmentLedger
+    ) -> TransferCore.ResourceIdentity {
+        TransferCore.ResourceIdentity(
+            finalURL: url,
+            contentLength: ledger.total,
+            contentType: nil,
+            etag: ledger.validator?.etag,
+            lastModified: ledger.validator?.lastModified,
+            acceptRanges: "bytes",
+            contentDisposition: nil,
+            contentRange: nil,
+            httpStatus: 206
+        )
+    }
+
+    /// Reports one chunk's progress against the whole job rather than the chunk.
+    ///
+    /// libcurl counts from zero per request, so a resumed download would rewind
+    /// the UI to the size of whatever chunk is in flight.
+    private static func chunkProgress(
+        _ onProgress: TransferCore.ProgressHandler?,
+        base: Int64,
+        total: Int64
+    ) -> TransferCore.ProgressHandler? {
+        guard let onProgress else { return nil }
+        return { written, _ in onProgress(base + written, total) }
+    }
+
+    /// Segment-map resume for a URL that must not be spent on a throwaway probe.
+    ///
+    /// The normal resume path validates the partial with `probeRangeSupport`
+    /// first. That request is pure overhead, which is exactly what these URLs
+    /// cannot afford — so the **first chunk the map still needs** carries the
+    /// validation instead: its response headers answer "same resource?" and its
+    /// body is work that had to happen anyway.
+    ///
+    /// Returns `nil` when there is nothing resumable (no map, or the map does not
+    /// describe the file on disk), leaving the caller to start fresh.
+    ///
+    /// Order is load-bearing — write, then compare, then record. A crash between
+    /// the write and the wipe is self-healing: the ledger still marks the chunk
+    /// incomplete and still holds the *old* validator, so the next attempt
+    /// re-fetches it, compares again, and discards. Recording first would persist
+    /// the new resource's bytes as progress against the old one.
+    private static func resumeWithoutProbe(
+        url: String,
+        partialURL: URL,
+        options: TransferCore.DownloadOptions,
+        abortFlag: TransferAbortFlag?,
+        onProgress: TransferCore.ProgressHandler?,
+        useCurlMulti: Bool,
+        hostMaxSegments: Int?
+    ) throws -> Outcome? {
+        let sidecarURL = segmentMapURL(for: partialURL)
+        guard let ledger = SegmentLedger.load(sidecarURL: sidecarURL) else { return nil }
+        guard fileSize(at: partialURL) == ledger.total else {
+            // The map does not describe what is on disk. Unusable, and safe to
+            // drop: a preallocated shell is meaningless without its map.
+            try? FileManager.default.removeItem(at: sidecarURL)
+            try? FileManager.default.removeItem(at: partialURL)
+            return nil
+        }
+        guard let work = ledger.remainingWork().first else {
+            // Every entry is complete but the sidecar is still there: the previous
+            // run was killed between `markCompleted`'s snapshot and
+            // `deleteSidecar`, a window that spans a full-file `fsync` — seconds
+            // wide on a large file on external storage.
+            //
+            // Returning nil here would send the caller into `openingChunkOutcome`,
+            // which deletes the partial and re-downloads a file that is already
+            // finished and correct. Hand it to the map loop instead: it finds no
+            // work, verifies `size == total`, drops the sidecar and reports
+            // success — the same completion the killed run was two steps from.
+            return try runMapLoop(
+                url: url,
+                partialURL: partialURL,
+                ledger: ledger,
+                options: options,
+                abortFlag: abortFlag,
+                onProgress: onProgress,
+                probe: ledgerIdentity(url: url, ledger: ledger),
+                useCurlMulti: useCurlMulti,
+                maxConcurrent: 1,
+                hostMaxSegments: hostMaxSegments
+            )
+        }
+
+        // A validator chunk is up to 4 MiB, so `openingProgress`'s 1 MiB threshold
+        // would let curl's per-chunk `dltotal` through and show "… / 4 MiB". The
+        // real total is already known here, as is how much is already on disk.
+        let validatorProgress = chunkProgress(
+            onProgress,
+            base: ledger.baseOffset + ledger.downloadedBytes(),
+            total: ledger.total
+        )
+
+        let chunk = try TransferCore.downloadSingleStream(
+            url: url,
+            partialURL: partialURL,
+            rangeHeader: work.request.rangeHeader,
+            fileOffset: work.request.fileOffset,
+            options: options,
+            abortFlag: abortFlag,
+            onProgress: validatorProgress,
+            // Never: this range does not start at 0, and a 200 here would be the
+            // whole file written at a mid-file offset.
+            allowFullBodyOn200: false
+        )
+
+        let verdict = (ledger.validator ?? ResourceValidator(
+            etag: nil, lastModified: nil, totalBytes: ledger.total
+        )).compare(
+            probeETag: chunk.identity.etag,
+            probeLastModified: chunk.identity.lastModified,
+            probeTotalBytes: TransferCore.totalLength(from: chunk.identity)
+        )
+        if case .changed = verdict {
+            // The bytes on disk belong to a version that no longer exists — both
+            // the old ones and the chunk just written. Discard and start over.
+            try? FileManager.default.removeItem(at: sidecarURL)
+            try? FileManager.default.removeItem(at: partialURL)
+            return nil
+        }
+
+        _ = ledger.record(entry: work.entryIndex, written: work.baseWritten + chunk.bytesWritten)
+
+        let connectionCount = max(1, preferredSegmentCount(
+            totalBytes: ledger.remainingBytes(), hostMaxSegments: hostMaxSegments
+        ))
+        return try runMapLoop(
+            url: url,
+            partialURL: partialURL,
+            ledger: ledger,
+            options: options,
+            abortFlag: abortFlag,
+            onProgress: onProgress,
+            probe: chunk.identity,
+            useCurlMulti: useCurlMulti,
+            maxConcurrent: connectionCount,
+            hostMaxSegments: hostMaxSegments
+        )
+    }
+
     /// Filters the opening chunk's reported total before it reaches the UI.
     ///
     /// On a 206 libcurl reports the *slice* length as `dltotal`, so the window
@@ -1113,7 +1276,15 @@ final class SegmentLedger: @unchecked Sendable {
             let head = entry.start + entry.written
             let mid = head + remainingLocked(entry) / 2
             entries[largest].end = mid - 1
-            entries.append(Entry(start: mid, end: entry.end, written: 0))
+            // Insert, never append. `load` rejects a map whose entries are not
+            // contiguous and ascending — and appending the tail half of a *middle*
+            // entry breaks both that and `last.end == total - 1`. The map still
+            // described the download correctly in memory, so the pass finished
+            // fine; the damage only showed up on the next launch, where `load`
+            // returned nil, the resume was skipped, and a preallocated full-size
+            // partial was left for the caller to misread. Splitting the last entry
+            // happened to be safe, which is why this survived.
+            entries.insert(Entry(start: mid, end: entry.end, written: 0), at: largest + 1)
         }
         let snapshot = MapFile(total: total, baseOffset: baseOffset, entries: entries, validator: validator)
         lock.unlock()

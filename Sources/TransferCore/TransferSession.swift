@@ -118,13 +118,29 @@ public enum TransferCore {
 
     public enum TransferError: Error, Equatable, Sendable {
         case curl(CURLcode)
-        case httpStatus(Int)
+        /// `retryAfterSeconds` is the server's own `Retry-After`, when it sent a
+        /// parseable one. It belongs on this case because it is a property of the
+        /// status response, and the retry path is the only thing that wants it.
+        case httpStatus(Int, retryAfterSeconds: Double? = nil)
         case invalidRangeResponse(httpStatus: Int)
         case emptyURL
         case fileOpenFailed
         case incompleteWrite(expected: Int64?, wrote: Int64)
         case unsupportedScheme(String)
         case aborted
+    }
+
+    /// `Retry-After` in seconds, or nil when absent or not a plain delta.
+    ///
+    /// Delta-seconds only. The HTTP-date form is legal but rare from rate
+    /// limiters, and misreading a date as a delay is worse than ignoring the
+    /// header — the caller's own backoff is a safe fallback, a wrong multi-hour
+    /// wait is not.
+    static func retryAfterSeconds(_ raw: String?) -> Double? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty,
+              let seconds = Double(trimmed), seconds.isFinite, seconds >= 0
+        else { return nil }
+        return seconds
     }
 
     public typealias ProgressHandler = @Sendable (_ bytesTransferred: Int64, _ totalBytes: Int64?) -> Void
@@ -212,7 +228,10 @@ public enum TransferCore {
         if parsed.isHTTPFamily {
             let successStatuses: Set<Int> = rangeHeader == nil ? [200] : [206]
             guard successStatuses.contains(status) else {
-                throw TransferError.httpStatus(status)
+                throw TransferError.httpStatus(
+                    status,
+                    retryAfterSeconds: retryAfterSeconds(result.retryAfter.map { String(cString: $0) })
+                )
             }
         } else {
             // FTP reports 226/250 on a completed transfer and SFTP reports 0.
@@ -220,7 +239,10 @@ public enum TransferCore {
             // already surfaced real failures as a non-OK CURLcode above, so a
             // 2xx-or-zero response code is success for these schemes.
             guard status == 0 || (200 ... 299).contains(status) else {
-                throw TransferError.httpStatus(status)
+                throw TransferError.httpStatus(
+                    status,
+                    retryAfterSeconds: retryAfterSeconds(result.retryAfter.map { String(cString: $0) })
+                )
             }
         }
 

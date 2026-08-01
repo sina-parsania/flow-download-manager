@@ -46,6 +46,9 @@ import Network
 ///   GET /fixtures/redirect/same-origin       -> 302 to capture (same host)
 ///   GET /fixtures/redirect/cross?port=<n>    -> 302 to another loopback port
 ///   GET /fixtures/redirect/capture           -> records request header names
+///   GET /fixtures/rate-limited   -> 429 with `Retry-After: 7` (delta-seconds)
+///   GET /fixtures/rate-limited-http-date -> 429 with an HTTP-date `Retry-After`,
+///                                    deliberately left unparsed
 ///   GET /status/<code>           -> responds with that status code
 ///   POST /control/reset          -> clears request log + counters
 ///   GET  /control/logs           -> newline-delimited request log
@@ -289,6 +292,29 @@ public final class FaultHTTPServer: @unchecked Sendable {
                 rangeHeader: rangeHeader,
                 acceptRanges: true,
                 etag: Self.strongETag,
+                on: connection
+            )
+
+        case "/fixtures/rate-limited":
+            // 429 with the delta-seconds `Retry-After` a real rate limiter sends.
+            // The engine must come back when the server said, not when its own
+            // backoff curve happens to land.
+            send(
+                status: 429,
+                reason: "Too Many Requests",
+                headers: ["Retry-After": "7"],
+                body: Data("slow down".utf8),
+                on: connection
+            )
+
+        case "/fixtures/rate-limited-http-date":
+            // Legal but unparsed on purpose: misreading a date as a delay is worse
+            // than falling back to our own backoff.
+            send(
+                status: 429,
+                reason: "Too Many Requests",
+                headers: ["Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"],
+                body: Data("slow down".utf8),
                 on: connection
             )
 
@@ -825,9 +851,19 @@ public final class FaultHTTPServer: @unchecked Sendable {
         connection.send(content: Data(headers.utf8), completion: .contentProcessed { _ in connection.cancel() })
     }
 
-    private func send(status: Int, reason: String, body: Data, on connection: NWConnection) {
+    private func send(
+        status: Int,
+        reason: String,
+        headers extra: [String: String] = [:],
+        body: Data,
+        on connection: NWConnection
+    ) {
         var headers = "HTTP/1.1 \(status) \(reason)\r\n"
         headers += "Content-Length: \(body.count)\r\n"
+        // Sorted so a fixture's bytes are identical run to run.
+        for (name, value) in extra.sorted(by: { $0.key < $1.key }) {
+            headers += "\(name): \(value)\r\n"
+        }
         headers += "Connection: close\r\n\r\n"
         var response = Data(headers.utf8)
         response.append(body)

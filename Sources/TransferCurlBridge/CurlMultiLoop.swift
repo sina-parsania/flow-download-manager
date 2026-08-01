@@ -55,7 +55,7 @@ public enum CurlMultiLoop {
         case easyCreateFailed
         case multiAddFailed
         case curl(CURLcode)
-        case httpStatus(Int)
+        case httpStatus(Int, retryAfterSeconds: Double? = nil)
         case invalidRangeResponse(httpStatus: Int)
         case incompleteWrite(expected: Int64, wrote: Int64)
         case aborted
@@ -278,7 +278,13 @@ public enum CurlMultiLoop {
 
                                 let status = Int(result.httpStatus)
                                 guard status == 206 else {
-                                    throw MultiError.httpStatus(status)
+                                    throw MultiError.httpStatus(
+                                        status,
+                                        retryAfterSeconds: result.retryAfter
+                                            .map { String(cString: $0) }
+                                            .flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+                                            .flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+                                    )
                                 }
                                 if let expected = ranges[index].expectedBytes, wrote != expected {
                                     throw MultiError.incompleteWrite(expected: expected, wrote: wrote)

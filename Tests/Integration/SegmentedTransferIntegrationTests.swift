@@ -427,6 +427,140 @@ final class SegmentedTransferIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
     }
 
+    // MARK: resume for probe-skipping (expiring-signature) URLs
+
+    private func signedURL(port: UInt16, path: String) -> String {
+        "http://127.0.0.1:\(port)\(path)?expires=99999999999&sig=deadbeef"
+    }
+
+    /// An interrupted signed download must resume, not restart.
+    ///
+    /// These URLs used to restart from zero on every attempt — the probe-skipping
+    /// branch sat ahead of the segment-map resume and `singleOutcome` truncates.
+    /// On a multi-hundred-megabyte file over a lossy link that is eight full
+    /// restarts before the job gives up.
+    func testSignedURLResumesFromSegmentMap() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-signed-resume-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let total = Int64(FaultHTTPServer.largeBody.count)
+        let half = total / 2
+        let partial = root.appendingPathComponent("signed-resume.partial")
+
+        var seeded = FaultHTTPServer.largeBody.prefix(Int(half))
+        seeded.append(Data(repeating: 0, count: Int(total - half)))
+        try Data(seeded).write(to: partial)
+        try writeSegmap(for: partial, total: total, half: half, validator: nil)
+
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: signedURL(port: port, path: "/fixtures/signed-ranged"),
+            partialURL: partial
+        )
+
+        XCTAssertEqual(outcome.bytesWritten, total)
+        XCTAssertEqual(try Data(contentsOf: partial), FaultHTTPServer.largeBody)
+        // Request count is what separates resume from restart here, since both
+        // issue only ranged GETs and both end with correct bytes. The map has one
+        // incomplete entry, so a resume fetches exactly it: **1** request. A
+        // restart would spend one on the opening chunk and then re-tile the
+        // remaining 1 MiB into two more: 3.
+        XCTAssertEqual(
+            server.logs().count, 1,
+            "expected a single ranged GET for the one incomplete entry; more means it restarted"
+        )
+    }
+
+    /// A signed URL whose resource changed must be discarded, not stitched.
+    ///
+    /// The validator arrives on the *first chunk the map still needs*, so the
+    /// comparison happens after those bytes are on disk — the wipe therefore has
+    /// to take the freshly written chunk with it.
+    func testSignedURLResumeDiscardsPartialWhenValidatorContradictsServer() throws {
+        let server = FaultHTTPServer()
+        let port = try server.start()
+        defer { server.stop() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-signed-etag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let total = Int64(FaultHTTPServer.largeBody.count)
+        let half = total / 2
+        let partial = root.appendingPathComponent("signed-etag.partial")
+
+        // 0xFF appears nowhere in the fixture, so any surviving byte is visible.
+        var seeded = Data(repeating: 0xFF, count: Int(half))
+        seeded.append(Data(repeating: 0, count: Int(total - half)))
+        try seeded.write(to: partial)
+        try writeSegmap(
+            for: partial, total: total, half: half,
+            validator: ["etag": "\"stale-version\"", "totalBytes": total]
+        )
+
+        let outcome = try SegmentedTransfer.downloadHTTP(
+            url: signedURL(port: port, path: "/fixtures/signed-ranged"),
+            partialURL: partial
+        )
+
+        XCTAssertEqual(outcome.bytesWritten, total)
+        XCTAssertEqual(
+            try Data(contentsOf: partial), FaultHTTPServer.largeBody,
+            "a contradicted partial must be discarded, not resumed into"
+        )
+    }
+
+    /// A transient failure on the validating chunk must NOT wipe the partial.
+    ///
+    /// This is the rule the repo has been burned by: the network being down at
+    /// relaunch is not evidence the bytes on disk are wrong. The error has to
+    /// propagate so the job's retry path keeps them.
+    func testSignedURLResumeKeepsPartialWhenValidatorRequestFails() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dm-seg-signed-transient-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let total = Int64(FaultHTTPServer.largeBody.count)
+        let half = total / 2
+        let partial = root.appendingPathComponent("signed-transient.partial")
+
+        var seeded = FaultHTTPServer.largeBody.prefix(Int(half))
+        seeded.append(Data(repeating: 0, count: Int(total - half)))
+        try Data(seeded).write(to: partial)
+        try writeSegmap(for: partial, total: total, half: half, validator: nil)
+
+        let sidecar = SegmentedTransfer.segmentMapURL(for: partial)
+        // Port 1 refuses immediately: a connection failure, not a verdict.
+        XCTAssertThrowsError(
+            try SegmentedTransfer.downloadHTTP(
+                url: "http://127.0.0.1:1/fixtures/signed-ranged?expires=99999999999&sig=deadbeef",
+                partialURL: partial
+            )
+        )
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: partial.path),
+            "a transient failure must never wipe the partial"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: sidecar.path),
+            "the segment map must survive with it — the partial is meaningless alone"
+        )
+        XCTAssertEqual(fileByteCount(partial), total)
+    }
+
+    private func fileByteCount(_ url: URL) -> Int64 {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attrs?[.size] as? NSNumber)?.int64Value ?? -1
+    }
+
     /// A remainder that tiles to ONE connection is still a remainder.
     ///
     /// 1.5 MiB: the 1 MiB opening chunk leaves 0.5 MiB, which is below

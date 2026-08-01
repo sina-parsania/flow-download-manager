@@ -13,6 +13,8 @@ typedef struct DMCurlDownloadResult {
     CURLcode code; long httpStatus; curl_off_t bytesWritten; int stoppedByRequest; int stoppedByBodyCap; int rangeResponseInvalid;
     curl_off_t contentLength; char *finalURL; char *contentType; char *etag; char *lastModified;
     char *acceptRanges; char *contentDisposition; char *contentRange;
+    /* `Retry-After` verbatim, delta-seconds or HTTP-date; NULL when absent. */
+    char *retryAfter;
 } DMCurlDownloadResult;
 void DMCurlDownloadResultClear(DMCurlDownloadResult *result);
 typedef struct DMCurlAbortFlag DMCurlAbortFlag;

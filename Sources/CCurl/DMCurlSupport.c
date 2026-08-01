@@ -98,18 +98,36 @@ const curl_version_info_data *DMCurlVersionInfo(void) {
     return curl_version_info(CURLVERSION_NOW);
 }
 
-/// Mark sockets as high-priority interactive bulk transfers (Apple net service type)
-/// and enlarge the kernel receive buffer — closest equivalent to IDM-style priority
-/// without a Network Extension that can throttle other apps.
+/// Classifies the socket for the host's queueing/scheduling.
+///
+/// It used to also set `SO_RCVBUF` to 2 MiB, described as "enlarging" the
+/// receive buffer. It shrank it. Setting `SO_RCVBUF` clears `SB_AUTOSIZE`, so
+/// the kernel stops growing the buffer, and the window scale is then derived
+/// from the value the app set instead of `net.inet.tcp.autorcvbufmax` — which on
+/// this machine is **4 MiB**, i.e. twice what the call asked for. Window scale is
+/// negotiated in the SYN and cannot grow later, so the connection was pinned to
+/// the smaller ceiling for its whole life.
+///
+/// Measured impact of removing it: none. At ~1.7 MB/s per connection over a
+/// 127 ms path the window in use is ~220 KB, far below either ceiling — this path
+/// is loss-limited, not window-limited. Removed because it was a real ceiling
+/// downgrade resting on a false premise, not because it bought throughput.
 static int DMCurlSockoptCallback(void *clientp, curl_socket_t curlfd, curlsocktype purpose) {
     (void)clientp;
     if (purpose != CURLSOCKTYPE_IPCXN) {
         return CURL_SOCKOPT_OK;
     }
-    int serviceType = NET_SERVICE_TYPE_RD; /* Responsive Data — prefer over background apps */
+    /* NOT a priority hack, whatever the old comment claimed. Apple's own header
+     * says service types "do not represent priorities" and that classes with
+     * lower delay tolerance get *smaller* queues — so mislabelling bulk traffic
+     * to look urgent costs drops under congestion, which is exactly the link
+     * this app runs on. RD ("a notch higher than Best Effort", elastic,
+     * long-lived) is kept only because no measurement here separates it from BE
+     * or BK; the A/B was swamped by 3x swings in link conditions. If anyone
+     * revisits this, measure under congestion or delete the call and take the
+     * documented default. */
+    int serviceType = NET_SERVICE_TYPE_RD;
     (void)setsockopt(curlfd, SOL_SOCKET, SO_NET_SERVICE_TYPE, &serviceType, sizeof(serviceType));
-    int rcv = 2 * 1024 * 1024;
-    (void)setsockopt(curlfd, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof(rcv));
     return CURL_SOCKOPT_OK;
 }
 
@@ -117,6 +135,10 @@ static void DMCurlApplyThroughputOptions(CURL *easy) {
     if (gDMCurlShare != NULL) {
         curl_easy_setopt(easy, CURLOPT_SHARE, gDMCurlShare);
     }
+    /* Sizes curl's socket-read buffer only. It does NOT size the write callback:
+     * body writes are capped at CURL_MAX_WRITE_SIZE (16 KiB, curl.h:265) whatever
+     * this is set to — measured at runtime, max chunk 16384 with this at 1 MiB.
+     * Anything reasoning about per-callback cost must use 16 KiB, not this. */
     curl_easy_setopt(easy, CURLOPT_BUFFERSIZE, 1024L * 1024L);
     curl_easy_setopt(easy, CURLOPT_TCP_NODELAY, 1L);
     curl_easy_setopt(easy, CURLOPT_SOCKOPTFUNCTION, DMCurlSockoptCallback);
@@ -157,6 +179,7 @@ void DMCurlDownloadResultClear(DMCurlDownloadResult *result) {
     free(result->etag);
     free(result->lastModified);
     free(result->acceptRanges);
+    free(result->retryAfter);
     free(result->contentDisposition);
     free(result->contentRange);
     memset(result, 0, sizeof(*result));
@@ -244,6 +267,10 @@ typedef struct {
     char *contentDisposition;
     char *contentRange;
     char *location;
+    /* Seconds the server asked us to wait (429/503). Parsed from the
+     * delta-seconds form only — the HTTP-date form is rarer and needs a full
+     * date parser to be worth trusting. */
+    char *retryAfter;
     long responseStatus;
     int hasContentRange;
     int contentRangeMalformed;
@@ -346,6 +373,7 @@ static void DMCurlHeaderCtxClear(DMCurlHeaderCtx *ctx) {
     free(ctx->contentDisposition);
     free(ctx->contentRange);
     free(ctx->location);
+    free(ctx->retryAfter);
     memset(ctx, 0, sizeof(*ctx));
 }
 
@@ -749,6 +777,8 @@ static size_t DMCurlHeaderCallback(char *buffer, size_t size, size_t nitems, voi
         DMCurlAssignHeader(&ctx->lastModified, value, valueLength);
     } else if (DMCurlHeaderEquals(buffer, total, "accept-ranges")) {
         DMCurlAssignHeader(&ctx->acceptRanges, value, valueLength);
+    } else if (DMCurlHeaderEquals(buffer, total, "retry-after")) {
+        DMCurlAssignHeader(&ctx->retryAfter, value, valueLength);
     } else if (DMCurlHeaderEquals(buffer, total, "content-disposition")) {
         DMCurlAssignHeader(&ctx->contentDisposition, value, valueLength);
     } else if (DMCurlHeaderEquals(buffer, total, "content-range")) {
@@ -1070,6 +1100,7 @@ CURLcode DMCurlEasyDownloadToFD(
     out->etag = headerCtx.etag;
     out->lastModified = headerCtx.lastModified;
     out->acceptRanges = headerCtx.acceptRanges;
+    out->retryAfter = headerCtx.retryAfter;
     out->contentDisposition = headerCtx.contentDisposition;
     out->contentRange = headerCtx.contentRange;
 
@@ -1202,6 +1233,7 @@ static void DMCurlFillDownloadResult(
     out->etag = headerCtx->etag;
     out->lastModified = headerCtx->lastModified;
     out->acceptRanges = headerCtx->acceptRanges;
+    out->retryAfter = headerCtx->retryAfter;
     out->contentDisposition = headerCtx->contentDisposition;
     out->contentRange = headerCtx->contentRange;
     memset(headerCtx, 0, sizeof(*headerCtx));

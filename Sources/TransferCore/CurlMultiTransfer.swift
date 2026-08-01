@@ -49,8 +49,8 @@ public extension TransferCore {
                 throw TransferError.aborted
             case let .curl(code):
                 throw TransferError.curl(code)
-            case let .httpStatus(code):
-                throw TransferError.httpStatus(code)
+            case let .httpStatus(code, retryAfter):
+                throw TransferError.httpStatus(code, retryAfterSeconds: retryAfter)
             case let .invalidRangeResponse(httpStatus):
                 throw TransferError.invalidRangeResponse(httpStatus: httpStatus)
             case let .incompleteWrite(expected, wrote):

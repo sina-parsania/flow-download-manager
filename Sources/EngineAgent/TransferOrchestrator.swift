@@ -441,8 +441,15 @@ public actor TransferOrchestrator {
             let ticker = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: Self.progressTickNanoseconds)
-                    guard let self, let sample = liveBytes.take() else { continue }
-                    await recordProgress(jobID: jobID, bytes: sample.bytes, total: sample.total)
+                    guard let self else { continue }
+                    // Tick even when nothing arrived. `take()` returns nil on a
+                    // quiet interval, and skipping the call meant the estimator
+                    // was never told time had passed — so a stalled transfer kept
+                    // showing whatever speed it last managed. A dead connection
+                    // sits for `CURLOPT_LOW_SPEED_TIME` (10 s) before libcurl
+                    // kills it and the map loop can then back off up to 30 s,
+                    // which is a long time to display a number that is a lie.
+                    await tickProgress(jobID: jobID, sample: liveBytes.take())
                 }
             }
             defer { ticker.cancel() }
@@ -679,6 +686,24 @@ public actor TransferOrchestrator {
         let budget = max(1, socketBudget)
         guard let preferredConnectionCount else { return budget }
         return min(max(1, preferredConnectionCount), budget)
+    }
+
+    /// One progress tick, whether or not bytes arrived.
+    ///
+    /// A quiet tick re-reports the same cumulative count, so the estimator sees
+    /// an interval with zero bytes in it and decays toward zero instead of
+    /// holding the last live figure. `recordProgress` takes `max()` of the byte
+    /// count, so re-reporting can never walk progress backwards.
+    private func tickProgress(jobID: String, sample: (bytes: Int64, total: Int64?)?) {
+        if let sample {
+            recordProgress(jobID: jobID, bytes: sample.bytes, total: sample.total)
+        } else if let previous = progressLedger.snapshot(for: jobID) {
+            recordProgress(
+                jobID: jobID,
+                bytes: previous.bytesTransferred,
+                total: previous.totalBytes
+            )
+        }
     }
 
     private func recordProgress(jobID: String, bytes: Int64, total: Int64?) {
@@ -1066,13 +1091,26 @@ public actor TransferOrchestrator {
         let attempt = (attemptByJob[jobID] ?? 0) + 1
         attemptByJob[jobID] = attempt
 
-        let httpStatus: Int? = {
-            if case let TransferCore.TransferError.httpStatus(code) = error { return code }
-            return nil
-        }()
+        let httpStatus: Int?
+        let retryAfterSeconds: Double?
+        if case let TransferCore.TransferError.httpStatus(code, retryAfter) = error {
+            httpStatus = code
+            retryAfterSeconds = retryAfter
+        } else {
+            httpStatus = nil
+            retryAfterSeconds = nil
+        }
 
         if Self.isRetryable(error), retryPolicy.shouldRetry(attempt: attempt, httpStatus: httpStatus) {
-            let delay = retryPolicy.delayNanoseconds(attempt: attempt - 1, retryAfterSeconds: nil)
+            // Honour the server's own `Retry-After` when it sent one. This used to
+            // pass nil unconditionally, so a 429 was answered on our schedule
+            // rather than theirs — coming back early just earns another refusal
+            // and spends one of only `maxAttempts` whole-job attempts.
+            // `RetryPolicy` caps the value, so a hostile header cannot park a job.
+            let delay = retryPolicy.delayNanoseconds(
+                attempt: attempt - 1,
+                retryAfterSeconds: retryAfterSeconds
+            )
             _ = try? JobRepository.updateJobState(
                 database: database, id: jobID, state: .retryWaiting,
                 terminalReason: nil, expectedRevision: nil
@@ -1098,7 +1136,7 @@ public actor TransferOrchestrator {
             return
         }
 
-        let reason = if case let TransferCore.TransferError.httpStatus(code) = error {
+        let reason = if case let TransferCore.TransferError.httpStatus(code, _) = error {
             switch code {
             case 401, 403: "authenticationRejected"
             case 404, 410: "notFound"

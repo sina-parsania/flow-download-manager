@@ -299,6 +299,10 @@ targets:
     dependencies:
       - package: DownloadKit
         product: Persistence
+      - package: DownloadKit
+        product: TransferCore
+      - package: DownloadKit
+        product: TestFaultService
 
   PerformanceTests:
     type: bundle.unit-test

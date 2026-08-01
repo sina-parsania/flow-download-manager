@@ -765,6 +765,27 @@ public actor TransferOrchestrator {
         }
     }
 
+    /// Highest concurrency the ramp may grow one transfer to on a host.
+    ///
+    /// Two separate limits, and both matter:
+    ///
+    /// - **`fairCap`** is this job's share of the host right now. It is re-read on
+    ///   every step, so a download that starts later immediately stops the older
+    ///   one from climbing further.
+    /// - **The floor** keeps `activeJobLimit - 1` sockets unspent, because
+    ///   `tryAcquireSocket` refuses a job that cannot get even a primary socket.
+    ///   Without it a transfer that ramped *before* its siblings existed would
+    ///   hold the whole host allowance, and every later download from that site
+    ///   would sit in `queued`, retrying every 200 ms, until the first finished.
+    ///
+    /// The fair share alone does not cover that case: it is computed from the jobs
+    /// counted on the host *at the time of the step*, so nothing shrinks a grant
+    /// that was already made.
+    static func rampGrowthCeiling(fairCap: Int, hostMax: Int, activeJobLimit: Int) -> Int {
+        let reservedForSiblings = max(0, activeJobLimit - 1)
+        return max(1, min(fairCap, hostMax - reservedForSiblings))
+    }
+
     /// One ramp step: has the transfer earned another connection, and can the
     /// budget actually pay for it?
     ///
@@ -789,8 +810,17 @@ public actor TransferOrchestrator {
         connectionRamps[jobID] = ramp
 
         let held = 1 + grant.extra
-        guard want > held else { return }
-        let granted = await budget.reserveSockets(host: host, upTo: want - held)
+        // Re-read the fair share every step. A download that started after this
+        // one must be able to stop it climbing, and must still find a socket left
+        // to start with.
+        let ceiling = await Self.rampGrowthCeiling(
+            fairCap: budget.fairConnectionCap(forHost: host),
+            hostMax: budget.maxSocketsPerHostLimit(),
+            activeJobLimit: budget.maxActiveJobsLimit()
+        )
+        let allowed = min(want, ceiling)
+        guard allowed > held else { return }
+        let granted = await budget.reserveSockets(host: host, upTo: allowed - held)
         guard granted > 0 else { return }
         grant.add(granted)
         target.raise(to: held + granted)

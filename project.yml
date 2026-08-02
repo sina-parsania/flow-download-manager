@@ -21,8 +21,8 @@ configFiles:
 
 settings:
   base:
-    MARKETING_VERSION: "0.4.2"
-    CURRENT_PROJECT_VERSION: "14"
+    MARKETING_VERSION: "0.4.5"
+    CURRENT_PROJECT_VERSION: "15"
   configs:
     Debug:
       SWIFT_COMPILATION_MODE: incremental

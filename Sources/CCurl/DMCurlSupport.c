@@ -13,7 +13,7 @@
 
 /* Single definition so the two easy-handle setup paths cannot drift apart.
  * Keep in step with VERSION at release time (Documentation/release-checklist.md). */
-#define DM_USER_AGENT "Flow/0.4.3"
+#define DM_USER_AGENT "Flow/0.4.5"
 
 #ifndef CURLE_RANGE_ERROR
 #define CURLE_RANGE_ERROR ((CURLcode)63)

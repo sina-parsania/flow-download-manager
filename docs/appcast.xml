@@ -14,6 +14,39 @@
         <description>In-app updates for Flow Download Manager</description>
         <language>en</language>
         <item>
+            <title>0.4.5</title>
+            <pubDate>Sun, 02 Aug 2026 20:38:33 +0330</pubDate>
+            <sparkle:version>15</sparkle:version>
+            <sparkle:shortVersionString>0.4.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[## Flow 0.4.5
+
+
+Speed release. If your downloads from a site were stuck around 1 MB/s while other
+download managers were much faster, this is the one that fixes it.
+
+### Fixed
+- **Downloads from sites with signed links no longer run on a single connection.** A link carrying a `sig=` or expiring signature — most streaming and file-host links — made Flow give up on splitting the download entirely and fetch it through one connection. On a high-latency connection a single stream tops out around 1 MB/s no matter how fast your line is, which is exactly the cap people were hitting. Those downloads now split across connections like any other
+- **A cached response from a CDN no longer disables splitting.** Content delivery networks answer the first request differently depending on whether the file is already cached near you. Flow read one of those answers as "this server does not support splitting" and stayed on one connection for the rest of the download
+- **Resuming after a bad connection actually works.** When a download hit trouble and Flow re-divided the remaining work, it wrote a progress map it could not read back. The download finished fine, but if you quit and reopened, Flow silently started that file again from zero
+- **The speed shown while a download is stalled.** When a connection went quiet, Flow kept displaying the last speed it managed — sometimes for a minute — instead of showing the transfer slowing to nothing
+- **Servers asking you to wait are now obeyed.** When a site responds "too many requests, retry in N seconds", Flow waits the requested time instead of guessing its own, which stops it burning retry attempts by coming back too early
+
+### Changed
+- **Flow now finds the right number of connections for each site by itself.** It starts conservatively and adds connections while they measurably help, then stops. The best number turns out to differ a lot between sites — one may be at its fastest with 8, another with 20 — so a single fixed setting was always wrong somewhere. Measured across two sites, 24–45% faster than the previous fixed count
+- **What it learns is remembered per site for a week**, so a queue of files from the same place does not spend the first half-minute of every item working it out again
+- A site setting you enter yourself in Settings still wins over all of this
+
+### Note
+Still **unsigned** (ADR 0008) — expect the usual Gatekeeper warning on first launch.
+
+
+Community build — not Apple notarized.
+]]></description>
+            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.4.5/Flow-0.4.5.zip" length="24696045" type="application/octet-stream" sparkle:edSignature="Y5C810wTVInDQkgiAjkXyCdabaX2g7MRvI/aZKilvY9vlESdvgQiWPIe4tkBFeb0VYbqc4gHaWZNNft2GZXrDQ=="/>
+        </item>
+        <item>
             <title>0.4.2</title>
             <pubDate>Thu, 30 Jul 2026 21:21:07 +0330</pubDate>
             <sparkle:version>11</sparkle:version>
@@ -49,36 +82,6 @@ Community build — not Apple notarized.
 Community build — not Apple notarized.
 ]]></description>
             <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.4.1/Flow-0.4.1.zip" length="24508569" type="application/octet-stream" sparkle:edSignature="5SnH93vZzQfWEqdJSkE5zh3SgNxDH92IQKl3YGvmf6xv6Oh5Y21kf4gkqToO7X8FiXze2u13qx0aL8jyyMAsCg=="/>
-        </item>
-        <item>
-            <title>0.4.0</title>
-            <pubDate>Thu, 30 Jul 2026 16:10:22 +0330</pubDate>
-            <sparkle:version>9</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[## Flow 0.4.0
-
-**Upgrading applies schema v8.** Your downloads are untouched and keep their current location, but an older build cannot open the migrated database.
-
-### Fixed
-
-- **Speed limits now apply in aggregate** — the global and per-host limits were applied per transfer, so several downloads at once each ran at the full rate you set
-- **Video pages work in a released build** — the yt-dlp helper was never found by an installed copy
-- **Streaming pages no longer download as a few kilobytes of playlist text**
-
-### New
-
-- **Create category folders** (Settings) — sort each download into a folder named for its category. Off by default; affects new downloads only
-- **Filter and search by project or tag** in the sidebar and search field
-- **Quick Look** a finished download from the board
-- **Numbered ranges** — `img[001-010].jpg` becomes ten links
-- Resolve a video page to a direct link and queue it
-- **Firefox** companion extension
-
-Community build — not Apple notarized.
-]]></description>
-            <enclosure url="https://github.com/sina-parsania/flow-download-manager/releases/download/v0.4.0/Flow-0.4.0.zip" length="24506471" type="application/octet-stream" sparkle:edSignature="YyYYK2dM3HN7JJBHaK4fnMJE8a3G9kthss4TBSsGWivxU4jj6wn8fE6oMFJNhkLLVZxc8+thVw+hBpsmp9Q9AQ=="/>
         </item>
     </channel>
 </rss>

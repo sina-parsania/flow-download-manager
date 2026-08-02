@@ -102,11 +102,31 @@ test-unit: native-dependencies project ## Run unit tests
 	    tail -40 $(ARTIFACTS)/unit-tests.log; \
 	    exit 1; \
 	  fi
+# Retry ONLY the run, never the build. xctest intermittently fails to load a
+# bundle it has just built ("Failed to create a bundle instance representing
+# …UnitTests.xctest") — the bundle is present, correctly signed and the right
+# architecture, and the second run always passes. Root cause not found: it is
+# not stale DerivedData, MAKEFLAGS inheritance, a shared build server, a cold
+# tree, or the keychain; all were tested and ruled out.
+#
+# publish.sh retries the whole LANE, which rebuilds first and so recreates the
+# conditions. Rerunning just the executable step is what actually clears it.
+# This is mitigation, not a cure — a real test failure still fails on both
+# attempts, which is what keeps the gate honest.
 	@set -o pipefail; \
 	  if ! $(XCODEBUILD) \
 	    -only-testing:UnitTests \
 	    -resultBundlePath $(ARTIFACTS)/unit-tests.xcresult test-without-building \
-	    >>$(ARTIFACTS)/unit-tests.log 2>&1; then \
+	    >>$(ARTIFACTS)/unit-tests.log 2>&1 \
+	     && grep -q "Failed to create a bundle instance representing" $(ARTIFACTS)/unit-tests.log; then \
+	    echo "unit tests: xctest could not load a freshly built bundle — rerunning the tests only"; \
+	    rm -rf $(ARTIFACTS)/unit-tests.xcresult; \
+	    $(XCODEBUILD) -only-testing:UnitTests \
+	      -resultBundlePath $(ARTIFACTS)/unit-tests.xcresult test-without-building \
+	      >>$(ARTIFACTS)/unit-tests.log 2>&1 || true; \
+	  fi
+	@set -o pipefail; \
+	  if ! grep -qE "TEST (EXECUTE )?SUCCEEDED" $(ARTIFACTS)/unit-tests.log; then \
 	    echo "unit tests FAILED — failing cases:"; \
 	    grep -E "Test Case .* failed|failed \(|XCTAssert|error:" $(ARTIFACTS)/unit-tests.log \
 	      | grep -vE "Compiling |Linking |note: |warning: " | tail -120 || true; \

@@ -8,10 +8,28 @@ public enum HostObservationRepository {
     public struct Observation: Codable, Sendable, Equatable {
         public var maxSegments: Int?
         public var rangeOK: Bool?
+        /// Connection count the ramp settled on last time, used as the **starting
+        /// point** for the next download from this host.
+        ///
+        /// Safe to keep per host with no size band, unlike ``maxSegments``. That
+        /// one is a hard cap, so a small file's answer really would poison a large
+        /// follow-up. This is only where the ramp begins, and everything
+        /// downstream still applies the size rule: `preferredSegmentCount` caps by
+        /// content length, and that cap binds before the ramp's target does. A
+        /// 5 MB file inheriting 20 from an 800 MB one still runs as a 5 MB file.
+        ///
+        /// Worth having because the ramp needs 30-40 s to climb, which a queue of
+        /// episodes from one site would otherwise pay again on every single item.
+        public var settledConnections: Int?
 
-        public init(maxSegments: Int? = nil, rangeOK: Bool? = nil) {
+        public init(
+            maxSegments: Int? = nil,
+            rangeOK: Bool? = nil,
+            settledConnections: Int? = nil
+        ) {
             self.maxSegments = maxSegments
             self.rangeOK = rangeOK
+            self.settledConnections = settledConnections
         }
     }
 

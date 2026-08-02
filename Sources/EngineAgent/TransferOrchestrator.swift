@@ -316,8 +316,14 @@ public actor TransferOrchestrator {
             // the same CDN. Without this, the first job reserved up to 31 extras
             // and siblings starved at ~one connection (uneven speed in the UI).
             let fairCap = await budget.fairConnectionCap(forHost: host)
+            // Where the last download from this host settled, so a queue of
+            // episodes from one site does not re-pay the 30-40 s climb every time.
+            // An explicit user setting still wins — this only replaces the default.
+            let learnedConnections = (
+                try? HostObservationRepository.get(database: database, host: host)
+            )?.settledConnections
             let connectionTarget = Self.connectionTarget(
-                preferredConnectionCount: preferredConnections,
+                preferredConnectionCount: preferredConnections ?? learnedConnections,
                 fairHostCap: fairCap
             )
             let extraSegmentSockets = await budget.reserveSockets(
@@ -562,13 +568,24 @@ public actor TransferOrchestrator {
             // Record that the host tolerates ranged GETs. Never store the
             // segment count we chose for this file size — a 20 MB download
             // must not poison an 8 GB follow-up to 4 segments for a week.
+            //
+            // Where the ramp *settled* is different: it is a starting point rather
+            // than a cap, and `preferredSegmentCount` still applies the size rule
+            // downstream. Only kept when the ramp actually climbed — a transfer
+            // that ended at its starting value learned nothing worth storing, and
+            // one that never ramped at all (small file, or an explicit user
+            // setting) would otherwise write back a number it never tested.
             if outcome.segmentCount > 1 {
+                let settled = connectionRamps[jobID]
+                    .map(\.current)
+                    .flatMap { $0 > connectionTarget ? $0 : nil }
                 try? HostObservationRepository.set(
                     database: database,
                     host: host,
                     observation: HostObservationRepository.Observation(
                         maxSegments: nil,
-                        rangeOK: true
+                        rangeOK: true,
+                        settledConnections: settled ?? learnedConnections
                     ),
                     expiresAt: Date().addingTimeInterval(7 * 24 * 60 * 60)
                 )

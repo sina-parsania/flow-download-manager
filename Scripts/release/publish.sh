@@ -216,7 +216,11 @@ if [[ -n "$DRY_RUN" ]]; then
 fi
 
 say "Publish"
-git add VERSION project.yml
+# sbom.txt and the DMG checksum are rewritten by the build above and are tracked
+# on purpose (see .gitignore). Leaving them out left the tree dirty after every
+# release, and the NEXT release then died in preflight on "working tree is
+# dirty" — a self-inflicted block that cost the 0.4.5 attempt.
+git add VERSION project.yml Artifacts/release/sbom.txt "${DMG}.sha256"
 git commit -q -m "release: v${VERSION} (build ${NEXT_BUILD})
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"

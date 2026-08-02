@@ -152,10 +152,21 @@ Every one of these was tested, not reasoned about. None reproduce.
 
 ## Separate real defect found
 
-`default.profraw` is written to the repo root by any coverage-enabled test run
-and is **not** in `.gitignore`. It makes the tree dirty, which trips
-`publish.sh`'s own preflight (`working tree is dirty — commit or stash first`)
-on the very next release attempt.
+Two of them, same shape: something the gate or the build writes is left
+untracked, and `publish.sh`'s own preflight (`working tree is dirty — commit or
+stash first`) then refuses to start the **next** release.
+
+1. `default.profraw`, written to the repo root by any coverage-enabled test run.
+   Fixed by gitignoring it.
+2. `Artifacts/release/sbom.txt` and `Artifacts/release/*.dmg.sha256`, rewritten
+   by every build and tracked on purpose, but never added to either release
+   commit. Confirmed live: the tree was dirty with exactly these two files
+   immediately after v0.4.5 published. Fixed by adding them to the version-bump
+   commit.
+
+Everything else a release produces (`*.dmg`, `sparkle/*.zip`, the generated
+`.xcodeproj`) is gitignored, and `docs/appcast.xml` plus `sparkle/*.md` are
+committed by the appcast step — so the tree is now clean after a release.
 
 ---
 

@@ -22,7 +22,7 @@ FIRST_PARTY  := Sources Tests BrowserExtension Scripts .github Makefile project.
 export PATH := $(CURDIR)/Tools/bin:$(PATH)
 
 XCODEBUILD := xcodebuild -project $(PROJECT) -scheme $(SCHEME) \
-	-destination '$(DESTINATION)' -derivedDataPath $(DERIVED)
+	-destination '$(DESTINATION)' -derivedDataPath '$(DERIVED)'
 
 # Warnings-as-errors is enforced PER FIRST-PARTY TARGET via Configuration/Shared.xcconfig
 # (SWIFT_TREAT_WARNINGS_AS_ERRORS / GCC_TREAT_WARNINGS_AS_ERRORS). It is deliberately NOT
@@ -270,5 +270,5 @@ recovery-crash-matrix: native-dependencies project ## Crash-boundary reconciliat
 
 .PHONY: clean
 clean: ## Remove build products and evidence scratch
-	@rm -rf $(DERIVED) Artifacts/validation/latest
+	@rm -rf '$(DERIVED)' Artifacts/validation/latest
 	@echo "cleaned"

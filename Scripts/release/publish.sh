@@ -90,6 +90,21 @@ say "Gates"
 # what makes it look like a flaky test rather than a build race.
 unset MAKEFLAGS MAKELEVEL MFLAGS
 
+# Build in a tree nothing else touches.
+#
+# The retry below was written for "Failed to create a bundle instance
+# representing …UnitTests.xctest", which happens when a second process is using
+# the same DerivedData — an editor's build server, or xcodebuildmcp. Retrying
+# does not help: whatever is sharing the directory is still there on the second
+# attempt, so the release just fails twice and looks like a flaky test. It cost
+# a whole release to work that out, because the identical `make` command passes
+# the moment you run it by hand.
+#
+# Giving the release its own path removes the contention instead of racing it.
+# build-dmg.sh already reads DERIVED from the environment, so the DMG comes out
+# of the same tree the gates validated — which is the property that matters.
+export DERIVED="$ROOT/.build/ReleaseDerivedData"
+
 # One retry per lane, and only for a specific infrastructure failure.
 #
 # "Failed to create a bundle instance representing …UnitTests.xctest" comes from

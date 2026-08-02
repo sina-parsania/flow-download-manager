@@ -7,7 +7,11 @@ SHELL := /bin/bash
 PROJECT      := DownloadManager.xcodeproj
 SCHEME       := DownloadManager
 DESTINATION  := platform=macOS,arch=arm64
-DERIVED      := .build/DerivedData
+# Overridable so a release can build in its own tree. Sharing one DerivedData
+# with a long-running tool (an editor's build server, xcodebuildmcp) makes
+# xctest fail to load a bundle that is present and correctly signed — see
+# Scripts/release/publish.sh.
+DERIVED      ?= .build/DerivedData
 CONFIG_DEBUG := Debug
 ARTIFACTS    := Artifacts/validation/latest
 FIRST_PARTY  := Sources Tests BrowserExtension Scripts .github Makefile project.yml

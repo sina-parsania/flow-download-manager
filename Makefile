@@ -145,7 +145,12 @@ release-dmg-unsigned: ## Build unsigned Release DMG (no signing/notarization)
 .PHONY: release
 release: ## Full release: gate, build, tag, publish, appcast. VERSION=X.Y.Z (DRY_RUN=1 to rehearse)
 	@test -n "$(VERSION)" || { echo "usage: make release VERSION=0.4.1 [DRY_RUN=1]"; exit 2; }
-	@Scripts/release/publish.sh $(VERSION)
+# Invoked through `bash`, not by its shebang, on purpose. A shebang-started
+# script's executable image is the script file itself; when that file is on a
+# removable volume macOS withholds removable-volume access from the process, and
+# xctest cannot read the test bundles the gate is trying to run. See the header
+# of Scripts/release/publish.sh.
+	@bash Scripts/release/publish.sh $(VERSION)
 
 .PHONY: release-appcast
 release-appcast: ## Regenerate docs/appcast.xml from ONE staged zip (DIR=…)

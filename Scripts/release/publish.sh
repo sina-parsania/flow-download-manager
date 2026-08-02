@@ -12,6 +12,21 @@
 # Requires: gh (authenticated), Sparkle tools, the EdDSA key in the Keychain.
 set -euo pipefail
 
+# START THIS SCRIPT AS `bash Scripts/release/publish.sh <version>`, or via
+# `make release`, which does exactly that. Do not run it as ./publish.sh.
+#
+# When a script is started by its shebang, the process's executable image is the
+# script file itself. This repo lives on a removable volume, and macOS withholds
+# kTCCServiceSystemPolicyRemovableVolumes from such a process — so xctest cannot
+# READ the test bundles it is told to run, and every lane dies with "Failed to
+# create a bundle instance representing …UnitTests.xctest". That reads like a
+# missing or corrupt bundle and is neither.
+#
+# Measured 2026-08-02 on one file, alternating invocations: shebang 3/3 fail,
+# `bash <script>` 3/3 pass; tccd logs RemovableVolumes as Allowed only in the
+# passing runs. Re-execing through bash from inside the script does NOT fix it
+# (verified, 3/3 still fail) — exec preserves the attribution the parent set, so
+# the interpreter has to be the image from the start.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
@@ -82,40 +97,24 @@ echo "ok — releasing $TAG from $(git rev-parse --short HEAD)"
 
 say "Gates"
 
-# This script is itself invoked from a make target, so a plain `make` here is a
-# recursive make that inherits MAKEFLAGS — including the parent's jobserver.
-# That let build-debug and test-unit overlap, and xctest read UnitTests.xctest
-# while it was still being written: "Failed to create a bundle instance
-# representing …UnitTests.xctest". The same gate passes standalone, which is
-# what makes it look like a flaky test rather than a build race.
+# This script is invoked from a make target, so a plain `make` here would be a
+# recursive make inheriting the parent's jobserver. The lanes below are meant to
+# run serially, one at a time.
 unset MAKEFLAGS MAKELEVEL MFLAGS
 
-# Build in a tree nothing else touches.
-#
-# The retry below was written for "Failed to create a bundle instance
-# representing …UnitTests.xctest", which happens when a second process is using
-# the same DerivedData — an editor's build server, or xcodebuildmcp. Retrying
-# does not help: whatever is sharing the directory is still there on the second
-# attempt, so the release just fails twice and looks like a flaky test. It cost
-# a whole release to work that out, because the identical `make` command passes
-# the moment you run it by hand.
-#
-# Giving the release its own path removes the contention instead of racing it.
-# build-dmg.sh already reads DERIVED from the environment, so the DMG comes out
-# of the same tree the gates validated — which is the property that matters.
+# Build in a tree no editor build server is also writing to. build-dmg.sh reads
+# DERIVED from the environment, so the DMG comes out of the same tree the gates
+# validated — which is the property that matters.
 export DERIVED="$ROOT/.build/ReleaseDerivedData"
 
-# One retry per lane, and only for a specific infrastructure failure.
+# "Failed to create a bundle instance representing …UnitTests.xctest" is not a
+# test result and not a missing file — it is xctest being refused permission to
+# READ the bundle, as described at the top of this script. Starting the script
+# through `bash` is what prevents it; this branch turns the remaining cases into
+# an explanation instead of a puzzle.
 #
-# "Failed to create a bundle instance representing …UnitTests.xctest" comes from
-# xctest failing to LOAD a bundle that is present, correctly signed, and passes
-# when the same command runs standalone. It shows up when another process is
-# using the same DerivedData — an xcodebuildmcp server was doing exactly that
-# here. It is not a test result.
-#
-# The retry is deliberately narrow: it matches that one string and runs the lane
-# once more. A real test failure produces different output and still stops the
-# release on the first attempt, which is the whole point of the gate.
+# There is deliberately no retry: the condition is deterministic, so a second
+# attempt fails the same way and only doubles the time to the error.
 run_lane() {
   local lane="$1" log
   log="$(mktemp)"
@@ -124,10 +123,16 @@ run_lane() {
     return 0
   fi
   if grep -q "Failed to create a bundle instance representing" "$log"; then
-    echo "  (xctest could not load a bundle that is present — retrying ${lane} once)"
     rm -f "$log"
-    make -j1 "$lane"
-    return
+    die "xctest was denied permission to load its own test bundle.
+
+The bundle is fine. This repo lives on ${ROOT%%/Projects/*}, a removable volume,
+and macOS withheld removable-volume access from the test runner.
+
+Run the release as 'bash Scripts/release/publish.sh ${VERSION}', or grant Full
+Disk Access to the terminal that runs it (System Settings -> Privacy & Security).
+Moving DERIVED does not help — it was on the removable volume in every passing
+run. See Artifacts/handoffs/release-gate-xctest-bundle-20260802T1632Z.md."
   fi
   rm -f "$log"
   die "${lane} failed"

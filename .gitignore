@@ -58,3 +58,9 @@ Artifacts/release/sparkle/*.delta
 Artifacts/validation/*.log
 Artifacts/validation/*.txt
 Artifacts/validation/*.zip
+
+# Coverage counters dropped in the repo root by any coverage-enabled test run.
+# Untracked, these make the tree dirty and publish.sh's preflight refuses to
+# start ("working tree is dirty") on the next release attempt.
+default.profraw
+*.profraw

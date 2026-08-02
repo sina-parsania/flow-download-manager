@@ -95,6 +95,27 @@ passing runs.
 
 ---
 
+## Gate verification after the fix
+
+All three release lanes, run with the release `DERIVED` on the removable volume,
+2026-08-02 20:21–20:22 UTC+3:30:
+
+```text
+verify-fast:      PASS   Executed 563 tests, with 0 failures (0 unexpected)
+test-integration: PASS   Executed  78 tests, with 0 failures (0 unexpected)
+test-recovery:    PASS   Executed  10 tests, with 0 failures (0 unexpected)
+```
+
+651 tests, 0 failures, `** TEST EXECUTE SUCCEEDED **` on each lane. Tree clean
+afterwards.
+
+**Still not exercised:** publish.sh's own end-to-end path (version bump, DMG,
+Sparkle zip, appcast verification). `make release VERSION=0.4.5 DRY_RUN=1`
+requires the fix commit to be pushed first — publish.sh refuses to run with
+unpushed commits — and that push was deliberately not made here.
+
+---
+
 ## Hypotheses refuted by direct measurement
 
 Every one of these was tested, not reasoned about. None reproduce.
@@ -140,14 +161,12 @@ on the very next release attempt.
 
 ## Not done
 
-- No fix committed. Changes prepared but **not** committed pending approval
-  (CLAUDE.md RULE 3). Changed: `Makefile`, `Scripts/release/publish.sh`,
-  `.gitignore`, plus this handoff.
+- Fix committed as `cad3de3` on `main`, **not pushed**. `Makefile`,
+  `Scripts/release/publish.sh`, `.gitignore`, and this handoff.
 - Nothing published; `v0.4.5` is still untagged, no release, no appcast change.
-- Only the `verify-fast` lane was exercised. `test-integration` and
-  `test-recovery` were never reached in any failing run and are **unverified for
-  this release** — a full `make release VERSION=0.4.5 DRY_RUN=1` still has to get
-  through all three lanes before publishing.
+- The full `DRY_RUN` rehearsal was **not** run — it needs `cad3de3` pushed, and
+  pushing was not authorized in this slice. The three test lanes were verified
+  directly instead (above); the DMG and Sparkle steps remain unexercised.
 - The Full Disk Access route is untested (needs a human at System Settings).
 - `make lint` was not re-run for these changes; they touch shell and make only,
   no Swift (CLAUDE.md RULE 1 still applies to anyone extending them).

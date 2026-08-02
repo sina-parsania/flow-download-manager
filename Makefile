@@ -96,10 +96,17 @@ test-unit: native-dependencies project ## Run unit tests
 	@mkdir -p $(ARTIFACTS)
 	@rm -rf $(ARTIFACTS)/unit-tests.xcresult $(ARTIFACTS)/unit-tests.log
 	@set -o pipefail; \
+	  if ! $(XCODEBUILD) -only-testing:UnitTests build-for-testing \
+	    >$(ARTIFACTS)/unit-tests.log 2>&1; then \
+	    echo "unit tests FAILED — build-for-testing:"; \
+	    tail -40 $(ARTIFACTS)/unit-tests.log; \
+	    exit 1; \
+	  fi
+	@set -o pipefail; \
 	  if ! $(XCODEBUILD) \
 	    -only-testing:UnitTests \
-	    -resultBundlePath $(ARTIFACTS)/unit-tests.xcresult test \
-	    >$(ARTIFACTS)/unit-tests.log 2>&1; then \
+	    -resultBundlePath $(ARTIFACTS)/unit-tests.xcresult test-without-building \
+	    >>$(ARTIFACTS)/unit-tests.log 2>&1; then \
 	    echo "unit tests FAILED — failing cases:"; \
 	    grep -E "Test Case .* failed|failed \(|XCTAssert|error:" $(ARTIFACTS)/unit-tests.log \
 	      | grep -vE "Compiling |Linking |note: |warning: " | tail -120 || true; \
@@ -186,11 +193,13 @@ vendor-media-helpers: ## Fetch yt-dlp/ffmpeg when manifests include URL+sha256
 
 .PHONY: test-integration
 test-integration: native-dependencies project ## Integration tests
-	@set -o pipefail; $(XCODEBUILD) -only-testing:IntegrationTests test 2>&1 | tail -40
+	@set -o pipefail; $(XCODEBUILD) -only-testing:IntegrationTests build-for-testing 2>&1 | tail -20
+	@set -o pipefail; $(XCODEBUILD) -only-testing:IntegrationTests test-without-building 2>&1 | tail -40
 
 .PHONY: test-recovery
 test-recovery: native-dependencies project ## Recovery / crash-boundary tests
-	@set -o pipefail; $(XCODEBUILD) -only-testing:RecoveryTests test 2>&1 | tail -40
+	@set -o pipefail; $(XCODEBUILD) -only-testing:RecoveryTests build-for-testing 2>&1 | tail -20
+	@set -o pipefail; $(XCODEBUILD) -only-testing:RecoveryTests test-without-building 2>&1 | tail -40
 
 .PHONY: test-ui
 test-ui: native-dependencies project ## UI automation tests

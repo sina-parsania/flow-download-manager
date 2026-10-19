@@ -215,6 +215,7 @@ final class FilenameSanitizerTests: XCTestCase {
             ("application/x-iso9660-image", "iso"),
             ("application/epub+zip", "epub"),
             ("application/vnd.android.package-archive", "apk"),
+            ("application/x-bittorrent", "torrent"),
             ("application/vnd.debian.binary-package", "deb"),
             ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"),
             ("application/msword", "doc"),
@@ -232,7 +233,6 @@ final class FilenameSanitizerTests: XCTestCase {
             ("image/webp", "webp"),
             ("image/avif", "avif"),
             ("image/heic", "heic"),
-            ("application/x-bittorrent", "torrent"),
             ("text/x-python-script", "py")
         ]
         for (mime, expected) in cases {

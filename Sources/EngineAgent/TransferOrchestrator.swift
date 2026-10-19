@@ -387,7 +387,7 @@ public actor TransferOrchestrator {
             // A policy read failure means "no limit known", not "unlimited
             // forever": the next job to start re-reads it.
             // `try?` already flattens the `Int64?` (SE-0230). A `.flatMap(\.self)`
-            // here typed as `Int64` under Swift 6.3 but `Int64?` under CI's 6.1.
+            // here typed as `Int64` under Swift 6.4 but `Int64?` under Swift 6.1.
             let globalLimit: Int64 = (try? activeGlobalBandwidthLimit()) ?? 0
             rateLimiter.setGlobalLimit(bytesPerSecond: globalLimit)
             rateLimiter.setHostLimit(host: host, bytesPerSecond: hostSetting?.maxBytesPerSecond ?? 0)

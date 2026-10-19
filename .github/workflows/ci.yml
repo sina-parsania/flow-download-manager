@@ -18,20 +18,18 @@ concurrency:
 
 jobs:
   fast-gate:
-    name: Fast gate (macos-15)
-    # Flow requires Swift 6 / Xcode 16+. Public macos-14 images still default to
-    # Xcode 15.4, so they cannot build this tree even when format-check is green.
-    runs-on: macos-15
+    name: Fast gate (Xcode 27)
+    # `xcode-27` is GitHub's macOS 27 image (public preview as of 2026-10). It
+    # carries Xcode 27.0 27A266a, the same build the maintainers develop on.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode 16
+      - name: Select Xcode 27
+        # Pinned to the maintainers' toolchain. The old fallback loop silently
+        # built with whatever Xcode it found, which is how CI ended up on Swift
+        # 6.1 while development moved to 6.4 and the two disagreed on types.
         run: |
-          for app in /Applications/Xcode_16.4.app /Applications/Xcode_16.3.app /Applications/Xcode_16.app /Applications/Xcode.app; do
-            if [[ -d "$app" ]]; then
-              sudo xcode-select -s "$app"
-              break
-            fi
-          done
+          sudo xcode-select -s /Applications/Xcode_27.app
           xcodebuild -version
       - name: Bootstrap tools
         run: make bootstrap-tools
@@ -49,19 +47,17 @@ jobs:
           if-no-files-found: ignore
 
   full-gate:
-    name: Full stable gate (macos-15)
-    runs-on: macos-15
+    name: Full stable gate (Xcode 27)
+    runs-on: xcode-27
     needs: fast-gate
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode 16
+      - name: Select Xcode 27
+        # Pinned to the maintainers' toolchain. The old fallback loop silently
+        # built with whatever Xcode it found, which is how CI ended up on Swift
+        # 6.1 while development moved to 6.4 and the two disagreed on types.
         run: |
-          for app in /Applications/Xcode_16.4.app /Applications/Xcode_16.3.app /Applications/Xcode_16.app /Applications/Xcode.app; do
-            if [[ -d "$app" ]]; then
-              sudo xcode-select -s "$app"
-              break
-            fi
-          done
+          sudo xcode-select -s /Applications/Xcode_27.app
           xcodebuild -version
       - name: Bootstrap tools
         run: make bootstrap-tools
@@ -76,3 +72,25 @@ jobs:
           name: validation-evidence-${{ github.run_id }}
           path: Artifacts/validation/
           if-no-files-found: ignore
+
+  # Flow supports macOS 14+, but the gates above run on macOS 27. Some behaviour
+  # comes from the OS rather than the code — UTType's MIME database, for one,
+  # did not know apk/torrent on macOS 15, so those downloads lost their
+  # extension there. This lane runs the unit tests on macOS 15 to surface that.
+  # Xcode 27 does not run on this image, so it builds with Xcode 26.3; a failure
+  # caused only by that older compiler is not a user-facing bug, hence
+  # non-blocking. Read its failures; do not let them go stale.
+  macos-15-compat:
+    name: Unit tests on macOS 15 (non-blocking)
+    runs-on: macos-15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app
+          xcodebuild -version
+      - name: Bootstrap tools
+        run: make bootstrap-tools
+      - name: Unit tests
+        run: make test-unit

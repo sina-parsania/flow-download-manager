@@ -65,6 +65,17 @@ final class NativeMessagingTests: XCTestCase {
         XCTAssertTrue(buffer.isEmpty)
     }
 
+    /// After `decodeNext` trims a message off the front, the next header can sit at
+    /// any byte offset in the buffer's storage. Reading it with an aligned load
+    /// trapped ("load from misaligned raw pointer"), first seen under TSan.
+    func testDecodesAHeaderAtAnUnalignedOffset() throws {
+        let body = Data(#"{"command":"ping"}"#.utf8)
+        // `dropFirst` keeps the storage and starts the header one byte into it.
+        var buffer = try (Data([0]) + NativeMessagingFraming.encodeJSONData(body)).dropFirst()
+        XCTAssertEqual(try NativeMessagingFraming.decodeNext(from: &buffer), body)
+        XCTAssertTrue(buffer.isEmpty)
+    }
+
     func testRejectsOversizedMessage() {
         let huge = Data(repeating: 0x41, count: NativeMessagingFraming.maxMessageBytes + 1)
         XCTAssertThrowsError(try NativeMessagingFraming.encodeJSONData(huge)) { error in

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Record a performance baseline with the exact machine/OS/toolchain
-# (05-quality-testing-release-gates.md §5, 08-validation-commands.md §11).
+# Record a performance baseline with the exact machine/OS/toolchain.
 # Writes an immutable timestamped candidate; never overwrites approved baselines.
 # CI from unlike machines is not compared against this baseline.
 set -euo pipefail

@@ -2,7 +2,7 @@
 
 // Deterministic, arm64-only, macOS 14 deployment target with Swift 6 strict
 // concurrency and warnings-as-errors. These settings are shared by every
-// first-party target (see 00-master-plan.md §2 and 02-architecture.md §15).
+// first-party target.
 
 // Platform / architecture
 SDKROOT = macosx

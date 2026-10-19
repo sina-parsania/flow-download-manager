@@ -1,6 +1,6 @@
 # Download Manager CI — stable gates across supported macOS lanes.
 # This workflow NEVER signs, notarizes, or uses production secrets (they are not
-# required for ordinary development — 00-master-plan.md §6, bootstrap prompt §7).
+# required for ordinary development).
 name: CI
 
 on:

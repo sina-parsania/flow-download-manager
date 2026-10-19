@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install pinned developer tools. Dev-only: no production target depends on these,
-# on Homebrew, or on user PATH (02-architecture.md §15). Verifies exact versions
+# on Homebrew, or on user PATH. Verifies exact versions
 # so CI and local machines cannot silently drift onto newer SwiftFormat /
 # SwiftLint rule sets that fail the gate without rewriting the tree.
 set -euo pipefail

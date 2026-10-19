@@ -1,4 +1,4 @@
-# Download Manager — stable validation interface (08-validation-commands.md).
+# Download Manager — stable validation interface.
 # Underlying scripts may evolve without changing this developer-facing interface.
 
 SHELL := /bin/bash

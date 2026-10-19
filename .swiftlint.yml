@@ -1,5 +1,5 @@
-# SwiftLint configuration — syntax-aware safety rules for first-party code
-# (05-quality-testing-release-gates.md §6). Run strict via `make lint`.
+# SwiftLint configuration — syntax-aware safety rules for first-party code.
+# Run strict via `make lint`.
 #
 # only_rules (not the full default set): metric/style defaults like file_length,
 # type_body_length, identifier_name, and cyclomatic_complexity are not part of

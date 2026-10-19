@@ -145,7 +145,6 @@ download_release_assets() {
 
   [[ -n "$dmg_url" ]] || die "no ${ASSET_PREFIX}*${ASSET_SUFFIX} asset on release${TAG:+ ${TAG}}"
 
-  echo "Downloading $(basename "$dmg_url")…"
   # Fail closed: every release carries a .sha256 and its signature. A missing one
   # means a broken or tampered release, not an old one. `--dmg` is the escape hatch.
   [[ -n "$sha_url" ]] || die "no .sha256 asset on release${TAG:+ ${TAG}}; refusing to install unverified DMG"
@@ -160,6 +159,7 @@ download_release_assets() {
     <"${WORKDIR}/flow.dmg.sha256" >/dev/null 2>&1 \
     || die "release signature does not verify; refusing to install"
   echo "Signature OK."
+  echo "Downloading $(basename "$dmg_url")…"
   curl -fL --progress-bar -o "${WORKDIR}/flow.dmg" "$dmg_url"
   echo "Verifying SHA-256…"
   expected="$(awk '{print $1}' "${WORKDIR}/flow.dmg.sha256")"

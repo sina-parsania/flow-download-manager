@@ -143,17 +143,17 @@ PY
   [[ -n "$dmg_url" ]] || die "no ${ASSET_PREFIX}*${ASSET_SUFFIX} asset on release${TAG:+ ${TAG}}"
 
   echo "Downloading $(basename "$dmg_url")…"
+  # Fail closed: every release since v0.1.0 publishes a .sha256. A missing one
+  # means a broken or tampered release, not an old one. `--dmg` is the escape hatch.
+  [[ -n "$sha_url" ]] || die "no .sha256 asset on release${TAG:+ ${TAG}}; refusing to install unverified DMG"
   curl -fL --progress-bar -o "${WORKDIR}/flow.dmg" "$dmg_url"
-  if [[ -n "$sha_url" ]]; then
-    curl -fsSL -o "${WORKDIR}/flow.dmg.sha256" "$sha_url"
-    echo "Verifying SHA-256…"
-    expected="$(awk '{print $1}' "${WORKDIR}/flow.dmg.sha256")"
-    actual="$(shasum -a 256 "${WORKDIR}/flow.dmg" | awk '{print $1}')"
-    [[ "$expected" == "$actual" ]] || die "checksum mismatch (expected ${expected}, got ${actual})"
-    echo "Checksum OK."
-  else
-    echo "warning: no .sha256 asset published for this release; skipping checksum" >&2
-  fi
+  curl -fsSL -o "${WORKDIR}/flow.dmg.sha256" "$sha_url"
+  echo "Verifying SHA-256…"
+  expected="$(awk '{print $1}' "${WORKDIR}/flow.dmg.sha256")"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "malformed .sha256 asset"
+  actual="$(shasum -a 256 "${WORKDIR}/flow.dmg" | awk '{print $1}')"
+  [[ "$expected" == "$actual" ]] || die "checksum mismatch (expected ${expected}, got ${actual})"
+  echo "Checksum OK."
 }
 
 if [[ -n "$LOCAL_DMG" ]]; then

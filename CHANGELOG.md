@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+- **Sorting the download list behaves like Finder.** Rows with nothing to show in a column (no speed, no ETA, unknown size) now stay at the bottom whichever way you sort, instead of filling the top of the list when you flip the order. The first click on Size, Speed, Progress, Started or Finished shows the largest or newest first. Status sorts in order of activity (downloading, then waiting, paused, failed, completed) rather than alphabetically
+- **The list remembers how you sorted it**, along with column order and widths, across relaunches
+- **The list no longer jumps back to the selected download** every half-second while you scroll, which made sorting by Speed or ETA impossible to browse
+- **The one-line installer refuses a release without a checksum** instead of installing it unverified with a warning
+
 ## 0.4.5 — 2026-08-02
 
 Speed release. If your downloads from a site were stuck around 1 MB/s while other

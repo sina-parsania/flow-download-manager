@@ -13,6 +13,14 @@ ASSET_SUFFIX="-unsigned.dmg"
 APP_BUNDLE_NAME="Flow Download Manager.app"
 PRODUCT_APP_NAME="DownloadManager.app"
 
+# Public half of the release signing key. publish.sh signs each DMG's .sha256
+# with the private half, which never leaves the maintainer's machine, so a
+# replaced DMG + checksum on GitHub fails here. This script itself is the root
+# of trust: anyone who can change this line could change everything below it.
+# Rotating the key means changing this line AND re-signing every release.
+RELEASE_SIGNING_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILfxPMGAU7b/YzH1eZHp9kxAkZU7ZQbgOYC9MDgNabMH"
+RELEASE_SIGNING_NAMESPACE="flow-release"
+
 TAG=""
 INSTALL_PARENT="${HOME}/Applications"
 NEED_SUDO=0
@@ -90,6 +98,7 @@ require_cmd hdiutil
 require_cmd ditto
 require_cmd shasum
 require_cmd python3
+require_cmd ssh-keygen
 
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/flow-install.XXXXXX")"
 MOUNTPOINT=""
@@ -101,6 +110,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Prints the download URL of the first "${ASSET_PREFIX}*<suffix>" asset, or nothing.
+asset_url() {
+  RELEASE_JSON="$1" PREFIX="$ASSET_PREFIX" SUFFIX="$2" python3 - <<'PY'
+import json, os
+data = json.loads(os.environ["RELEASE_JSON"])
+prefix, suffix = os.environ["PREFIX"], os.environ["SUFFIX"]
+for asset in data.get("assets", []):
+    name = asset.get("name") or ""
+    if name.startswith(prefix) and name.endswith(suffix):
+        print(asset["browser_download_url"])
+        break
+PY
+}
+
 api_json() {
   curl -fsSL \
     -H "Accept: application/vnd.github+json" \
@@ -109,45 +132,35 @@ api_json() {
 }
 
 download_release_assets() {
-  local release_json dmg_url sha_url
+  local release_json dmg_url sha_url sig_url
   if [[ -n "$TAG" ]]; then
     release_json="$(api_json "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")"
   else
     release_json="$(api_json "https://api.github.com/repos/${REPO}/releases/latest")"
   fi
 
-  dmg_url="$(RELEASE_JSON="$release_json" PREFIX="$ASSET_PREFIX" SUFFIX="$ASSET_SUFFIX" python3 - <<'PY'
-import json, os
-data = json.loads(os.environ["RELEASE_JSON"])
-prefix, suffix = os.environ["PREFIX"], os.environ["SUFFIX"]
-for asset in data.get("assets", []):
-    name = asset.get("name") or ""
-    if name.startswith(prefix) and name.endswith(suffix) and not name.endswith(".sha256"):
-        print(asset["browser_download_url"])
-        break
-PY
-)"
-  sha_url="$(RELEASE_JSON="$release_json" PREFIX="$ASSET_PREFIX" SUFFIX="$ASSET_SUFFIX" python3 - <<'PY'
-import json, os
-data = json.loads(os.environ["RELEASE_JSON"])
-prefix, suffix = os.environ["PREFIX"], os.environ["SUFFIX"]
-want = suffix + ".sha256"
-for asset in data.get("assets", []):
-    name = asset.get("name") or ""
-    if name.startswith(prefix) and name.endswith(want):
-        print(asset["browser_download_url"])
-        break
-PY
-)"
+  dmg_url="$(asset_url "$release_json" "$ASSET_SUFFIX")"
+  sha_url="$(asset_url "$release_json" "${ASSET_SUFFIX}.sha256")"
+  sig_url="$(asset_url "$release_json" "${ASSET_SUFFIX}.sha256.sig")"
 
   [[ -n "$dmg_url" ]] || die "no ${ASSET_PREFIX}*${ASSET_SUFFIX} asset on release${TAG:+ ${TAG}}"
 
   echo "Downloading $(basename "$dmg_url")…"
-  # Fail closed: every release since v0.1.0 publishes a .sha256. A missing one
+  # Fail closed: every release carries a .sha256 and its signature. A missing one
   # means a broken or tampered release, not an old one. `--dmg` is the escape hatch.
   [[ -n "$sha_url" ]] || die "no .sha256 asset on release${TAG:+ ${TAG}}; refusing to install unverified DMG"
-  curl -fL --progress-bar -o "${WORKDIR}/flow.dmg" "$dmg_url"
+  [[ -n "$sig_url" ]] || die "no .sha256.sig asset on release${TAG:+ ${TAG}}; refusing to install unverified DMG"
   curl -fsSL -o "${WORKDIR}/flow.dmg.sha256" "$sha_url"
+  curl -fsSL -o "${WORKDIR}/flow.dmg.sha256.sig" "$sig_url"
+  echo "Verifying release signature…"
+  printf '%s namespaces="%s" %s\n' "$RELEASE_SIGNING_NAMESPACE" "$RELEASE_SIGNING_NAMESPACE" \
+    "$RELEASE_SIGNING_KEY" >"${WORKDIR}/allowed_signers"
+  ssh-keygen -Y verify -f "${WORKDIR}/allowed_signers" -I "$RELEASE_SIGNING_NAMESPACE" \
+    -n "$RELEASE_SIGNING_NAMESPACE" -s "${WORKDIR}/flow.dmg.sha256.sig" \
+    <"${WORKDIR}/flow.dmg.sha256" >/dev/null 2>&1 \
+    || die "release signature does not verify; refusing to install"
+  echo "Signature OK."
+  curl -fL --progress-bar -o "${WORKDIR}/flow.dmg" "$dmg_url"
   echo "Verifying SHA-256…"
   expected="$(awk '{print $1}' "${WORKDIR}/flow.dmg.sha256")"
   [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || die "malformed .sha256 asset"

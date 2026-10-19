@@ -6,7 +6,7 @@
 - **Sorting the download list behaves like Finder.** Rows with nothing to show in a column (no speed, no ETA, unknown size) now stay at the bottom whichever way you sort, instead of filling the top of the list when you flip the order. The first click on Size, Speed, Progress, Started or Finished shows the largest or newest first. Status sorts in order of activity (downloading, then waiting, paused, failed, completed) rather than alphabetically
 - **The list remembers how you sorted it**, along with column order and widths, across relaunches
 - **The list no longer jumps back to the selected download** every half-second while you scroll, which made sorting by Speed or ETA impossible to browse
-- **The one-line installer refuses a release without a checksum** instead of installing it unverified with a warning
+- **The one-line installer verifies a signed checksum.** Each release's SHA-256 is now signed with a release key, and the installer refuses a DMG whose checksum is missing, unsigned or wrong — so swapping both files on GitHub no longer gets a tampered build installed. Older releases were signed after the fact, except v0.3.0, whose published DMG does not match its recorded checksum
 
 ## 0.4.5 — 2026-08-02
 

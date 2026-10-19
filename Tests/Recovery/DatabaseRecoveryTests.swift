@@ -3,9 +3,8 @@
 import Persistence
 import XCTest
 
-/// Database recovery across an unclean close / injected boundary
-/// (`05-quality-testing-release-gates.md` §4 Process/persistence,
-/// `08-validation-commands.md` §10 recovery-crash-matrix). The filesystem is not
+/// Database recovery across an unclean close / injected boundary.
+/// The filesystem is not
 /// blindly trusted: reopening reconciles the WAL.
 final class DatabaseRecoveryTests: XCTestCase {
     private func tempURL() -> URL {

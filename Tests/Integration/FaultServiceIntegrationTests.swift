@@ -4,7 +4,7 @@ import TestFaultService
 import XCTest
 
 /// End-to-end checks of the deterministic loopback fault service — the harness
-/// Phase 1 transfer tests depend on (`05-quality-testing-release-gates.md` §3).
+/// Phase 1 transfer tests depend on.
 final class FaultServiceIntegrationTests: XCTestCase {
     private func startServer() throws -> (FaultHTTPServer, UInt16) {
         let server = FaultHTTPServer()

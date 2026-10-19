@@ -3,7 +3,7 @@
 import Foundation
 
 /// A non-negative byte count. Byte counts and offsets are signed 64-bit with
-/// non-negative validation (`04-domain-and-data-contracts.md` §1); this wrapper
+/// non-negative validation; this wrapper
 /// makes an invalid (negative) count unrepresentable.
 public struct ByteCount: Hashable, Sendable, Comparable, Codable {
     public let value: Int64
@@ -28,8 +28,8 @@ public struct ByteCount: Hashable, Sendable, Comparable, Codable {
 }
 
 /// A half-open byte interval `[lowerBound, upperBoundExclusive)` with the segment
-/// invariant `lowerBound <= committedExclusive <= upperBoundExclusive`
-/// (`04-domain-and-data-contracts.md` §4). Construction validates the invariant so
+/// invariant `lowerBound <= committedExclusive <= upperBoundExclusive`.
+/// Construction validates the invariant so
 /// an inconsistent range is unrepresentable.
 public struct ByteRange: Hashable, Sendable, Codable {
     public let lowerBound: Int64

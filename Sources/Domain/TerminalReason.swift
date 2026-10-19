@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Typed, stable terminal reason codes (`04-domain-and-data-contracts.md` §5).
+/// Typed, stable terminal reason codes.
 ///
 /// Raw libcurl/OSStatus/errno/yt-dlp/FFmpeg/libtorrent details are nested
 /// diagnostics, never this public contract. Localized presentation is derived

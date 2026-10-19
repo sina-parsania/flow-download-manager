@@ -313,8 +313,7 @@ final class FlowProgressBarView: NSView {
 }
 
 /// Reusable progress cell: a determinate bar plus a monospaced-digit label.
-/// Honors Reduce Motion by never animating (progress reflects throttled snapshots
-/// — `03-design-system-ui-ux.md` §5).
+/// Honors Reduce Motion by never animating (progress reflects throttled snapshots).
 @MainActor
 final class ProgressCellView: NSTableCellView {
     private let bar = FlowProgressBarView()

@@ -3,8 +3,7 @@
 import Foundation
 import os
 
-/// Unified Logging categories and redaction primitives (`02-architecture.md` §16,
-/// `06-licensing-security-privacy.md` §4).
+/// Unified Logging categories and redaction primitives.
 ///
 /// URLs, paths, headers, cookies and credentials must be redacted *at the
 /// interpolation source*: interpolate dynamic strings with `privacy: .private`
@@ -38,7 +37,7 @@ public enum EngineLog {
     }
 
     /// Reduce a URL to `scheme + registrable-host` only; path and query are
-    /// dropped (`02-architecture.md` §16). Returns `"<invalid-url>"` for
+    /// dropped. Returns `"<invalid-url>"` for
     /// unparseable input rather than echoing it.
     public static func redacted(_ url: URL) -> String {
         guard let scheme = url.scheme, let host = url.host() else { return "<invalid-url>" }

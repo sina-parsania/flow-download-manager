@@ -4,13 +4,11 @@ import Foundation
 
 /// Bounded, thread-safe replay store backing XPC request idempotency.
 ///
-/// A duplicate `requestID` on the same connection must replay the prior
-/// response rather than re-executing (`EngineControlProtocol` doc comments,
-/// `04-domain-and-data-contracts.md` §9). Earlier revisions kept one unbounded
-/// `[String: Response]` dictionary per RPC, which could grow without bound for
-/// the lifetime of a connection. This type replaces all of them with a single
-/// store shared by every RPC on the exporter, enforcing one count/age/byte
-/// budget in total.
+/// A duplicate `requestID` on the same connection must replay the prior response rather
+/// than re-executing (`EngineControlProtocol` doc comments). Earlier revisions kept one
+/// unbounded `[String: Response]` dictionary per RPC, which could grow without bound
+/// for the lifetime of a connection. This type replaces all of them with a single store
+/// shared by every RPC on the exporter, enforcing one count/age/byte budget in total.
 ///
 /// Evicting a cached response must not let a mutation silently re-execute:
 /// callers store mutation responses with `isMutation: true`, and the store

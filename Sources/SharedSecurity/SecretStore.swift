@@ -4,8 +4,8 @@ import Foundation
 import Security
 
 /// Persistent secret storage. Secrets live only here (the Keychain); the database
-/// stores an opaque persistent reference and never the secret itself
-/// (`02-architecture.md` §18.4, `06-licensing-security-privacy.md` §4). The
+/// stores an opaque persistent reference and never the secret itself.
+/// The
 /// protocol is a seam so callers and tests can substitute an in-memory store.
 public protocol SecretStore: Sendable {
     /// Store `secret` for `account`, replacing any existing item, returning an

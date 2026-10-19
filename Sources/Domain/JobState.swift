@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Lifecycle state of a `DownloadJob` (`04-domain-and-data-contracts.md` §3).
+/// Lifecycle state of a `DownloadJob`.
 ///
 /// Raw values are the stable persistence tokens (never localized). The transition
 /// table is exhaustive and enforced by `JobStateTransitionTests`, which enumerates
@@ -28,8 +28,7 @@ public enum JobState: String, CaseIterable, Sendable, Codable {
     /// States that require a terminal reason. `completed` carries NO reason (it is
     /// verified success — see `TerminalReason` and the DB CHECK in `SchemaMigrator`);
     /// only `failed`/`cancelled` require one, and they may re-enter the pipeline
-    /// only by creating a new attempt and returning to `ready`/`queued`
-    /// (`04-domain-and-data-contracts.md` §3).
+    /// only by creating a new attempt and returning to `ready`/`queued`.
     public static let terminalReasonRequiring: Set<JobState> = [.failed, .cancelled]
 
     /// All terminal completion states (no further active transfer).
@@ -59,7 +58,7 @@ public enum JobState: String, CaseIterable, Sendable, Codable {
         .paused: [.connecting, .queued, .cancelled, .failed],
         .retryWaiting: [.connecting, .cancelled, .failed],
         // `verifying → completed` is illegal: completion passes finalization and
-        // optional post-processing first (`04-domain-and-data-contracts.md` §3).
+        // optional post-processing first.
         .verifying: [.merging, .postProcessing, .retryWaiting, .failed, .cancelled],
         .merging: [.verifying, .postProcessing, .failed, .cancelled],
         // The single path to `completed`.

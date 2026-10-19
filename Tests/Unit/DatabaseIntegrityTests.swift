@@ -3,8 +3,7 @@
 import Persistence
 import XCTest
 
-/// Constraint enforcement and integrity checks on schema v1
-/// (`04-domain-and-data-contracts.md` §7, `08-validation-commands.md` §10).
+/// Constraint enforcement and integrity checks on schema v1.
 final class DatabaseIntegrityTests: XCTestCase {
     private func makeDatabase() throws -> (EngineDatabase, URL) {
         let url = FileManager.default.temporaryDirectory

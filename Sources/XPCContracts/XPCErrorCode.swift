@@ -3,8 +3,7 @@
 import Foundation
 
 /// Stable error domain for the XPC control interface. Raw underlying diagnostics
-/// (OSStatus, errno) are nested in `userInfo`, never the public contract
-/// (`04-domain-and-data-contracts.md` §5).
+/// (OSStatus, errno) are nested in `userInfo`, never the public contract.
 public let XPCErrorDomain = "org.downloadmanager.local.xpc"
 
 /// Typed, stable XPC failure codes. New cases are appended; existing raw values

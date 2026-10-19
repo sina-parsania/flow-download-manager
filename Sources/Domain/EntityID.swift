@@ -4,7 +4,7 @@ import Foundation
 
 /// A phantom-typed entity identifier. Prevents assigning e.g. a `ResourceID`
 /// where a `JobID` is expected. Backed by a UUIDv7 created at the authority that
-/// owns creation (`04-domain-and-data-contracts.md` §1).
+/// owns creation.
 public struct EntityID<Entity>: Hashable, Sendable, Codable {
     public let rawValue: UUID
 

@@ -4,8 +4,8 @@ import Foundation
 
 /// A string value that never prints its contents. Interpolating or describing a
 /// `SecretString` yields `"<redacted>"`; the real value is available only via the
-/// explicit `reveal()` call site, which is auditable (`06-licensing-security-privacy.md`
-/// §4). Use for passwords, tokens and cookie material held transiently in memory.
+/// explicit `reveal()` call site, which is auditable. Use for passwords, tokens and
+/// cookie material held transiently in memory.
 public struct SecretString: CustomStringConvertible, CustomDebugStringConvertible, Sendable, Equatable {
     private let value: String
 

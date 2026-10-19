@@ -6,8 +6,8 @@ import GRDB
 
 /// GRDB migrations for the engine database.
 ///
-/// Phase 0 ships migration `v1` covering the Phase 0/1 foundational tables
-/// (`04-domain-and-data-contracts.md` §7). Media/torrent tables are added only in
+/// Phase 0 ships migration `v1` covering the Phase 0/1 foundational tables.
+/// Media/torrent tables are added only in
 /// their phase via a later versioned migration. `eraseDatabaseOnSchemaChange`
 /// stays off: no migration silently discards user history (`13. Migration
 /// contract`); downgrade uses a restored pre-upgrade backup.
@@ -223,7 +223,7 @@ public enum SchemaMigrator {
             }
 
             try db.create(table: "host_observations") { t in
-                // Expiring hints, never proof (`02-architecture.md` §7.2).
+                // Expiring hints, never proof.
                 t.primaryKey("host", .text)
                 t.column("observation", .text).notNull()
                 t.column("expiresAt", .datetime).notNull()

@@ -5,8 +5,8 @@ import Domain
 import Foundation
 import XPCContracts
 
-/// Sidebar filter: independent Library (status) and Category filters
-/// (`03-design-system-ui-ux.md` §2). A category never implies a folder.
+/// Sidebar filter: independent Library (status) and Category filters.
+/// A category never implies a folder.
 public enum LibraryFilter: Hashable, Sendable {
     case all
     case active

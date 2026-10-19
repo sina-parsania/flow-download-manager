@@ -5,7 +5,7 @@ import Foundation
 
 /// Immutable read snapshot for one row of the download table. Presentation
 /// consumes read snapshots and submits commands; it never reads persistence
-/// directly (`02-architecture.md` §4.5).
+/// directly.
 public struct JobRowModel: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let name: String
@@ -69,7 +69,7 @@ public struct JobRowModel: Identifiable, Hashable, Sendable {
     }
 
     /// A stable status role used to pick supplemental colour/symbol (colour is
-    /// never the only signal — `03-design-system-ui-ux.md` §10).
+    /// never the only signal).
     public var statusRole: StatusRole {
         switch state {
         case .downloading, .connecting, .verifying, .merging, .postProcessing: return .active

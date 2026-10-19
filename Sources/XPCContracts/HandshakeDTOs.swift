@@ -3,7 +3,7 @@
 import Foundation
 
 /// Role a connecting client claims. Authorization uses process identity, not this
-/// value (`04-domain-and-data-contracts.md` §9); the role only selects the
+/// value; the role only selects the
 /// command surface offered.
 @objc(DMClientRole)
 public enum ClientRole: Int, Sendable {

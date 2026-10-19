@@ -4,8 +4,8 @@ import AppKit
 import Presentation
 import XCTest
 
-/// Performance baselines for the 10,000-row library
-/// (`05-quality-testing-release-gates.md` §5). Records CPU/clock via XCTest
+/// Performance baselines for the 10,000-row library.
+/// Records CPU/clock via XCTest
 /// metrics; the collected result is compared against an approved baseline by
 /// `make performance-compare`.
 @MainActor

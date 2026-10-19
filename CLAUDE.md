@@ -162,7 +162,7 @@ Rate caps matter because an uncapped loopback transfer finishes instantly and pa
 
 ## What you cannot read
 
-The normative specification pack (`00-master-plan.md`, `03-design-system-ui-ux.md`, `04-domain-and-data-contracts.md`, `05-quality-testing-release-gates.md`, `07-handoff-protocol.md`, `08-validation-commands.md`) is **kept local and gitignored**. Source comments and ADRs cite it constantly — those references are dead ends for you and for outside contributors. Don't hunt for those files; work from `AGENTS.md`, the ADRs in `Documentation/adr/`, and the code.
+The normative specification pack (`00-master-plan.md`, `03-design-system-ui-ux.md`, `04-domain-and-data-contracts.md`, `05-quality-testing-release-gates.md`, `07-handoff-protocol.md`, `08-validation-commands.md`) is **kept local and gitignored**. ADRs still cite it, and those references are dead ends for you and for outside contributors. Source comments no longer cite it: a comment must stand on its own, so don't add a spec citation back. Don't hunt for those files; work from `AGENTS.md`, the ADRs in `Documentation/adr/`, and the code.
 
 ## Handoffs
 

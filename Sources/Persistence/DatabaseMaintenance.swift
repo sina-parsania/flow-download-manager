@@ -3,8 +3,8 @@
 import Foundation
 import GRDB
 
-/// Integrity, checkpoint and backup operations on the engine database
-/// (`02-architecture.md` §9, `04-domain-and-data-contracts.md` §13). A verified
+/// Integrity, checkpoint and backup operations on the engine database.
+/// A verified
 /// backup precedes any destructive transformation; corruption enters recovery
 /// rather than silently recreating history.
 public extension EngineDatabase {

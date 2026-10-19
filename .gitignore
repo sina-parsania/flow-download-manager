@@ -45,7 +45,7 @@ VendorBuild/prefix/
 
 # Generated release binaries (attach to GitHub Releases, do not commit).
 # Two 23 MB zips were committed once and still weigh down .git — keep the
-# payloads out. The small text artifacts here (*.sha256, sbom.txt,
+# payloads out. The small text artifacts here (*.sha256, *.sha256.sig, sbom.txt,
 # appcast.example.xml, sparkle/*.md) stay tracked on purpose.
 Artifacts/release/*.dmg
 Artifacts/release/*.zip

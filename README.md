@@ -123,5 +123,5 @@ GPL-3.0-or-later. See [`LICENSE`](LICENSE).
 ## Security & privacy
 
 - Processing is **local**. No telemetry in the community build.
-- Prefer verifying Release checksums (`*.dmg.sha256`) or building from a reviewed commit.
+- The installer verifies a signed SHA-256 for every DMG; see [manual verification](Documentation/install-from-github.md#security-note), or build from a reviewed commit.
 - Report issues via GitHub; see [`SECURITY.md`](SECURITY.md).

@@ -3,8 +3,7 @@
 import Persistence
 import XCTest
 
-/// Backup / restore and integrity of the produced copy
-/// (`04-domain-and-data-contracts.md` §13, `08-validation-commands.md` §10).
+/// Backup / restore and integrity of the produced copy.
 final class BackupRestoreTests: XCTestCase {
     func testBackupProducesIntegralCopyWithData() throws {
         let root = FileManager.default.temporaryDirectory

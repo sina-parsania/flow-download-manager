@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Lint gate: pinned SwiftLint (strict) + banned-token/unsafe-pattern backstop
-# (05-quality-testing-release-gates.md §6). Never fall through to a Homebrew /
+# Lint gate: pinned SwiftLint (strict) + banned-token/unsafe-pattern backstop.
+# Never fall through to a Homebrew /
 # image-preinstalled SwiftLint — version drift turns metric defaults into CI red.
 set -euo pipefail
 cd "$(dirname "$0")/.."

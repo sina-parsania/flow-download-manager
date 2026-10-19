@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assemble the Phase 0 evidence bundle (05-quality-testing-release-gates.md §13).
+# Assemble the Phase 0 evidence bundle.
 # Contains no secrets; paths are recorded in the handoff.
 set -euo pipefail
 cd "$(dirname "$0")/.."

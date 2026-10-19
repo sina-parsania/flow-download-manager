@@ -5,7 +5,7 @@ import GRDB
 
 /// GRDB-free access surface over the agent's writable database. Callers (the agent
 /// and its tests/previews) use these without importing GRDB. The app never links
-/// this module — it reads through XPC read models (`02-architecture.md` §9).
+/// this module — it reads through XPC read models.
 public extension EngineDatabase {
     /// Insert a record. Throws on constraint violation (FK/CHECK/unique), which is
     /// how persistence-layer invariants are enforced.

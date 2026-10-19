@@ -160,9 +160,10 @@ public enum FilenameSanitizer {
     ///
     /// - `jpg` / `mpg` / `tif`: the system prefers `jpeg` / `mpeg` / `tiff`; the
     ///   short spellings are what people expect to see.
-    /// - the rest: `UTType(mimeType:)` returns nil for them, verified on this
-    ///   macOS rather than guessed. If a later release learns one, the override
-    ///   simply agrees with it.
+    /// - the rest: `UTType(mimeType:)` returns nil for them on at least one
+    ///   supported macOS, verified rather than guessed. `apk` and `torrent`
+    ///   resolve on macOS 27 but not on macOS 15 (CI). If a later release learns
+    ///   one, the override simply agrees with it.
     private static let mimeExtensionOverrides: [String: String] = [
         "image/jpeg": "jpg",
         "image/tiff": "tif",
@@ -174,6 +175,8 @@ public enum FilenameSanitizer {
         "application/x-iso9660-image": "iso",
         "video/x-matroska": "mkv",
         "audio/x-matroska": "mka",
+        "application/vnd.android.package-archive": "apk",
+        "application/x-bittorrent": "torrent",
         "application/vnd.debian.binary-package": "deb",
         "application/x-debian-package": "deb",
         "application/x-rpm": "rpm",

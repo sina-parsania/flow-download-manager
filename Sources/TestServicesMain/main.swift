@@ -3,7 +3,7 @@
 import Foundation
 import TestFaultService
 
-// CLI for the deterministic loopback fault service (08-validation-commands.md §6).
+// CLI for the deterministic loopback fault service.
 // `serve` runs the server foreground and writes the bound port under a safe
 // scratch root; Scripts/test-services.sh wraps up/health/reset/logs/down.
 

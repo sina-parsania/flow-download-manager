@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Regenerate the resolved dependency/license manifest from Package.resolved
-# (06-licensing-security-privacy.md §2). Phase 0 ships exactly one runtime
+# Regenerate the resolved dependency/license manifest from Package.resolved.
+# Phase 0 ships exactly one runtime
 # dependency: GRDB.swift (MIT).
 set -euo pipefail
 cd "$(dirname "$0")/.."

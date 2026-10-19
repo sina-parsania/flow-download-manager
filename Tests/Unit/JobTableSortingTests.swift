@@ -13,8 +13,43 @@ final class JobTableSortingTests: XCTestCase {
         let ascending = JobTableSorting.sorted([large, unknown, small], by: .size, ascending: true)
         XCTAssertEqual(ascending.map(\.name), ["a", "b", "c"])
 
+        // Unknown size stays last when flipped — blanks never float to the top.
         let descending = JobTableSorting.sorted([small, unknown, large], by: .size, ascending: false)
-        XCTAssertEqual(descending.map(\.name), ["c", "b", "a"])
+        XCTAssertEqual(descending.map(\.name), ["b", "a", "c"])
+    }
+
+    func testRowsShowingDashSortLastInBothDirections() {
+        // Speed 0 and ETA 0 render "—", so they are blank even though non-nil.
+        let idle = row(name: "idle", total: 1, speed: 0, fraction: 0.5, eta: 0)
+        let slow = row(name: "slow", total: 1, speed: 10, fraction: 0.5, eta: 90)
+        let fast = row(name: "fast", total: 1, speed: 200, fraction: 0.5, eta: 5)
+
+        for key in [JobTableSortKey.speed, .eta] {
+            for ascending in [true, false] {
+                let names = JobTableSorting.sorted([idle, slow, fast], by: key, ascending: ascending).map(\.name)
+                XCTAssertEqual(names.last, "idle", "\(key) ascending=\(ascending)")
+            }
+        }
+        XCTAssertEqual(
+            JobTableSorting.sorted([idle, slow, fast], by: .eta, ascending: true).map(\.name),
+            ["fast", "slow", "idle"]
+        )
+    }
+
+    func testTiesBreakByNameAToZRegardlessOfDirection() {
+        let b = row(name: "b", total: 5, speed: 0, fraction: nil, eta: nil)
+        let a = row(name: "a", total: 5, speed: 0, fraction: nil, eta: nil)
+        XCTAssertEqual(JobTableSorting.sorted([b, a], by: .size, ascending: false).map(\.name), ["a", "b"])
+        XCTAssertEqual(JobTableSorting.sorted([b, a], by: .size, ascending: true).map(\.name), ["a", "b"])
+    }
+
+    func testFirstClickDirectionMatchesFinder() {
+        for key in [JobTableSortKey.size, .speed, .progress, .started, .finished] {
+            XCTAssertFalse(key.defaultAscending, "\(key) should open largest/newest first")
+        }
+        for key in [JobTableSortKey.name, .status, .eta, .category, .location] {
+            XCTAssertTrue(key.defaultAscending, "\(key) should open A→Z / soonest first")
+        }
     }
 
     func testSortsBySpeedAndProgress() {
@@ -31,11 +66,14 @@ final class JobTableSortingTests: XCTestCase {
         )
     }
 
-    func testSortsByStatusDisplayName() {
+    func testSortsByStatusInLifecycleOrder() {
         let paused = row(name: "p", state: .paused, total: 1, speed: 0, fraction: 0.5, eta: nil)
         let done = row(name: "d", state: .completed, total: 1, speed: 0, fraction: 1, eta: nil)
-        let ordered = JobTableSorting.sorted([paused, done], by: .status, ascending: true)
-        XCTAssertEqual(ordered.map(\.state), [.completed, .paused])
+        let active = row(name: "a", state: .downloading, total: 1, speed: 5, fraction: 0.1, eta: 9)
+        let failed = row(name: "f", state: .failed, total: 1, speed: 0, fraction: 0.2, eta: nil)
+        let ordered = JobTableSorting.sorted([done, failed, paused, active], by: .status, ascending: true)
+        // Lifecycle order, not alphabetical ("Completed" would otherwise lead).
+        XCTAssertEqual(ordered.map(\.state), [.downloading, .paused, .failed, .completed])
     }
 
     func testSortsByStartedAndFinishedDates() {

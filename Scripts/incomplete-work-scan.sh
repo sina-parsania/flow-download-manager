@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fail on banned incomplete-work tokens and unambiguous unsafe Swift patterns in
-# first-party code (08-validation-commands.md §5, 05-quality-testing-release-gates.md §6).
+# first-party code.
 # Uses `grep -rn` (not `git grep`) so it inspects files regardless of git staging
 # state — an untracked file must not produce a false "clean".
 set -euo pipefail

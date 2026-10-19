@@ -2,8 +2,7 @@
 
 import SwiftUI
 
-/// Semantic appearance adapter (`03-design-system-ui-ux.md` §11,
-/// `00-master-plan.md` §4). One code path, two implementations: standard Liquid
+/// Semantic appearance adapter. One code path, two implementations: standard Liquid
 /// Glass on macOS 26 (Xcode 26+ SDK), native materials on macOS 14/15 and on
 /// older toolchains that do not yet know the glass APIs. Behavior and data are
 /// identical; only the surface differs. Reduce Transparency is honored by the

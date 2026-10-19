@@ -3,8 +3,7 @@
 import Foundation
 import Network
 
-/// Deterministic loopback HTTP/1.1 fault server for Phase 1 transfer tests
-/// (`05-quality-testing-release-gates.md` §3, `08-validation-commands.md` §6).
+/// Deterministic loopback HTTP/1.1 fault server for Phase 1 transfer tests.
 /// Binds only to 127.0.0.1, serves fixed fixture bytes, and encodes fault
 /// scenarios in the request path so tests are reproducible without the public
 /// internet. Supports lifecycle, health, reset and request logs.

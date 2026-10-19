@@ -4,8 +4,7 @@ import GRDB
 import Persistence
 import XCTest
 
-/// Migration v1→v2 round-trip and interrupted-migration atomicity
-/// (`04-domain-and-data-contracts.md` §13, `08-validation-commands.md` §10).
+/// Migration v1→v2 round-trip and interrupted-migration atomicity.
 final class MigrationTests: XCTestCase {
     private func tempURL() -> URL {
         FileManager.default.temporaryDirectory

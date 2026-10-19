@@ -34,8 +34,7 @@ private final class ResumeOnce<T: Sendable>: @unchecked Sendable {
 }
 
 /// XPC handshake, health, idempotency, identity and reconnect behavior over an
-/// in-process anonymous listener (`04-domain-and-data-contracts.md` §9,
-/// `05-quality-testing-release-gates.md` §2 Component tests).
+/// in-process anonymous listener.
 final class XPCRoundTripTests: XCTestCase {
     private func makeServices() -> EngineServices {
         EngineServices(

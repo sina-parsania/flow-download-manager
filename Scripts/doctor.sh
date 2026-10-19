@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Environment/toolchain report (08-validation-commands.md §1). Fails on Intel or an
+# Environment/toolchain report. Fails on Intel or an
 # unsupported deployment/toolchain combination. Prints signing identity STATUS only,
 # never private key material.
 set -euo pipefail

@@ -2,7 +2,7 @@
 
 import Foundation
 
-/// Lifecycle state of a `DownloadSegment` (`04-domain-and-data-contracts.md` §4).
+/// Lifecycle state of a `DownloadSegment`.
 ///
 /// Raw values are stable persistence tokens. The transition table is exhaustive
 /// and enforced by `SegmentStateTransitionTests`.

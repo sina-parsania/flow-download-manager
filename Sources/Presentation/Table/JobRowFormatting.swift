@@ -3,8 +3,8 @@
 import Foundation
 
 /// Presentation formatting for byte counts, rates and durations. Uses byte/rate
-/// formatters and produces strings suitable for monospaced-digit columns
-/// (`03-design-system-ui-ux.md` §10). Main-actor isolated: it is used only from
+/// formatters and produces strings suitable for monospaced-digit columns.
+/// Main-actor isolated: it is used only from
 /// UI (table cells, inspector), which lets the shared `ByteCountFormatter` be
 /// cached without violating Swift 6 concurrency.
 @MainActor

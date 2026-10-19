@@ -3,7 +3,7 @@
 import Foundation
 
 /// Versioned, authenticated control interface exported by the engine agent over
-/// XPC (`02-architecture.md` §10, `04-domain-and-data-contracts.md` §9).
+/// XPC.
 ///
 /// Every method takes an explicit request identifier and replies with a typed
 /// DTO or an `NSError` carrying a stable ``XPCErrorCode``. Reply blocks are
@@ -12,7 +12,7 @@ import Foundation
 ///
 /// The handshake MUST precede any other command; the service rejects commands
 /// received before a successful handshake (`fail closed on unknown major version
-/// or role`, `06-licensing-security-privacy.md` §4).
+/// or role`).
 @objc(DMEngineControlProtocol)
 public protocol EngineControlProtocol {
     /// Negotiate protocol version and exchange build/database metadata.
@@ -25,7 +25,7 @@ public protocol EngineControlProtocol {
 
     /// Harmless health/status probe. Requires a prior successful handshake on the
     /// same connection. `requestID` is a UUID string used for idempotency and
-    /// duplicate-detection (`04-domain-and-data-contracts.md` §9).
+    /// duplicate-detection.
     func healthStatus(
         requestID: String,
         reply: @escaping @Sendable (EngineHealthSnapshot?, NSError?) -> Void
@@ -236,7 +236,7 @@ public enum EngineXPC {
     public static let bundledXPCServiceName = "DownloadEngineAgent"
 
     /// Hard cap on any single decoded XPC payload string/collection to bound
-    /// interprocess DoS (`06-licensing-security-privacy.md` §4). Larger transfers
+    /// interprocess DoS. Larger transfers
     /// use dedicated chunked/file-handle methods, never one giant message.
     public static let maxPayloadStringLength = 4096
     public static let maxCollectionCount = 4096

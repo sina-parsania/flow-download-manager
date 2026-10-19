@@ -9,7 +9,8 @@
 #   Scripts/release/publish.sh 0.4.1
 #   DRY_RUN=1 Scripts/release/publish.sh 0.4.1   # everything local, nothing pushed
 #
-# Requires: gh (authenticated), Sparkle tools, the EdDSA key in the Keychain.
+# Requires: gh (authenticated), Sparkle tools, the EdDSA key in the Keychain,
+# and the release signing key (see Scripts/release/sign-checksum.sh).
 set -euo pipefail
 
 # START THIS SCRIPT AS `bash Scripts/release/publish.sh <version>`, or via
@@ -88,6 +89,15 @@ PUB_KEY="$("$SPARKLE_BIN/generate_keys" -p 2>/dev/null | tr -d '[:space:]')"
 BAKED_KEY="$(sed -n 's/^[[:space:]]*SUPublicEDKey:[[:space:]]*\(.*\)$/\1/p' project.yml | tr -d '[:space:]')"
 [[ "$PUB_KEY" == "$BAKED_KEY" ]] || die "Sparkle key mismatch — keychain=$PUB_KEY app=$BAKED_KEY"
 
+# The installer refuses a checksum without a valid signature, so a release that
+# cannot be signed must stop here, not after the build. Signing a probe runs the
+# same key-matches-installer check the real signature gets.
+PROBE="$(mktemp)"
+printf 'probe' >"$PROBE"
+bash Scripts/release/sign-checksum.sh "$PROBE" >/dev/null \
+  || { rm -f "$PROBE" "$PROBE.sig"; die "release signing key unusable — the installer would reject this release"; }
+rm -f "$PROBE" "$PROBE.sig"
+
 grep -q "^## ${VERSION} " CHANGELOG.md || die "CHANGELOG.md has no '## ${VERSION}' section"
 
 echo "ok — releasing $TAG from $(git rev-parse --short HEAD)"
@@ -165,6 +175,7 @@ make release-dmg-unsigned
 
 DMG="Artifacts/release/DownloadManager-${VERSION}-unsigned.dmg"
 [[ -f "$DMG" ]] || die "expected $DMG"
+bash Scripts/release/sign-checksum.sh "${DMG}.sha256"
 
 # --------------------------------------------------------------- sparkle zip
 # Cut from the app INSIDE the DMG, not from a fresh build, so the bytes users
@@ -220,7 +231,7 @@ say "Publish"
 # on purpose (see .gitignore). Leaving them out left the tree dirty after every
 # release, and the NEXT release then died in preflight on "working tree is
 # dirty" — a self-inflicted block that cost the 0.4.5 attempt.
-git add VERSION project.yml Artifacts/release/sbom.txt "${DMG}.sha256"
+git add VERSION project.yml Artifacts/release/sbom.txt "${DMG}.sha256" "${DMG}.sha256.sig"
 git commit -q -m "release: v${VERSION} (build ${NEXT_BUILD})
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
@@ -229,7 +240,7 @@ git tag -a "$TAG" -m "${TAG}"
 git push origin "$TAG"
 
 gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" \
-  "$DMG" "${DMG}.sha256" "$ZIP"
+  "$DMG" "${DMG}.sha256" "${DMG}.sha256.sig" "$ZIP"
 
 # --------------------------------------------------------------- appcast
 # LAST, and only after the zip is uploaded: the feed points at a release asset,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Lifecycle wrapper for the deterministic loopback fault service
-# (08-validation-commands.md §6). Binds only to loopback; all state lives under
+# Lifecycle wrapper for the deterministic loopback fault service.
+# Binds only to loopback; all state lives under
 # the build scratch root, never a real user destination.
 set -euo pipefail
 cd "$(dirname "$0")/.."

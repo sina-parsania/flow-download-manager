@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Verify the resolved dependency graph matches the exact pins in DEPENDENCIES.md
-# (06-licensing-security-privacy.md §2). Fails on drift or unexpected packages.
+# Verify the resolved dependency graph matches the exact pins in DEPENDENCIES.md.
+# Fails on drift or unexpected packages.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

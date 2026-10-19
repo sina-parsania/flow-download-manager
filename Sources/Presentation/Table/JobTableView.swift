@@ -105,10 +105,13 @@ public struct JobTableView: NSViewRepresentable {
             column.minWidth = spec.minWidth
             column.sortDescriptorPrototype = NSSortDescriptor(
                 key: spec.identifier.rawValue,
-                ascending: true
+                ascending: JobTableSortKey(rawValue: spec.identifier.rawValue)?.defaultAscending ?? true
             )
             tableView.addTableColumn(column)
         }
+        // Column order, widths and hidden state survive relaunch, like Finder.
+        tableView.autosaveName = "FlowJobTable"
+        tableView.autosaveTableColumns = true
 
         context.coordinator.tableView = tableView
         tableView.onContextMenuRow = { [weak coordinator = context.coordinator] row in
@@ -117,6 +120,7 @@ public struct JobTableView: NSViewRepresentable {
         tableView.dataSource = context.coordinator
         tableView.delegate = context.coordinator
         tableView.menu = context.coordinator.makeContextMenu()
+        context.coordinator.restoreSort(in: tableView)
         context.coordinator.replaceRows(rows, reload: true)
 
         let scrollView = NSScrollView()
@@ -154,6 +158,7 @@ public struct JobTableView: NSViewRepresentable {
         private var sortKey: JobTableSortKey?
         private var sortAscending = true
         private var isApplyingSelection = false
+        private var revealedID: JobRowModel.ID?
         var contextMenuRow: Int = -1
 
         init(
@@ -193,6 +198,21 @@ public struct JobTableView: NSViewRepresentable {
             syncSelection(keep, primary: primary)
         }
 
+        private static let sortKeyDefault = "JobTable.sortKey"
+        private static let sortAscendingDefault = "JobTable.sortAscending"
+
+        /// Re-applies the last header the user clicked. Setting `sortDescriptors`
+        /// routes through `sortDescriptorsDidChange`, so the indicator and the
+        /// row order come back together.
+        func restoreSort(in tableView: NSTableView) {
+            let defaults = UserDefaults.standard
+            guard let raw = defaults.string(forKey: Self.sortKeyDefault),
+                  let key = JobTableSortKey(rawValue: raw)
+            else { return }
+            let ascending = defaults.object(forKey: Self.sortAscendingDefault) as? Bool ?? key.defaultAscending
+            tableView.sortDescriptors = [NSSortDescriptor(key: key.rawValue, ascending: ascending)]
+        }
+
         private func ordered(_ rows: [JobRowModel]) -> [JobRowModel] {
             guard let sortKey else { return rows }
             return JobTableSorting.sorted(rows, by: sortKey, ascending: sortAscending)
@@ -210,11 +230,15 @@ public struct JobTableView: NSViewRepresentable {
                 tableView.deselectAll(nil)
             } else {
                 tableView.selectRowIndexes(indexes, byExtendingSelection: false)
-                if let primary,
+                // Reveal only a newly chosen row. This runs on every poll, and
+                // under a Speed/ETA sort the selected row moves each tick —
+                // re-scrolling then yanks the list away from wherever the user is.
+                if let primary, primary != revealedID,
                    let focus = displayedRows.firstIndex(where: { $0.id == primary }) {
                     tableView.scrollRowToVisible(focus)
                 }
             }
+            revealedID = primary
         }
 
         func makeContextMenu() -> NSMenu {
@@ -415,6 +439,8 @@ public struct JobTableView: NSViewRepresentable {
             }
             sortKey = key
             sortAscending = descriptor.ascending
+            UserDefaults.standard.set(key.rawValue, forKey: Self.sortKeyDefault)
+            UserDefaults.standard.set(descriptor.ascending, forKey: Self.sortAscendingDefault)
             replaceRows(sourceRows, reload: true)
         }
     }

@@ -7,8 +7,7 @@ import XPCSecuritySupport
 /// Validates the identity of a process connecting to the engine's XPC listener.
 ///
 /// Authorization uses the connecting process's audit token and code signature,
-/// never a caller-supplied role (`04-domain-and-data-contracts.md` §9,
-/// `06-licensing-security-privacy.md` §4). The protocol is a seam so tests can
+/// never a caller-supplied role. The protocol is a seam so tests can
 /// exercise both the authorized and rejected paths deterministically.
 public protocol ClientIdentityValidator: Sendable {
     func isAuthorized(_ connection: NSXPCConnection) -> Bool

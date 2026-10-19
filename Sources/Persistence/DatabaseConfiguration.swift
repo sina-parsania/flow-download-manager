@@ -6,7 +6,7 @@ import GRDB
 /// Central GRDB `Configuration` for the engine's database.
 ///
 /// WAL mode is provided by `DatabasePool`; this configuration adds foreign-key
-/// enforcement and an explicit busy timeout (`02-architecture.md` §9). The agent
+/// enforcement and an explicit busy timeout. The agent
 /// is the sole writer; the app never opens a competing writable connection.
 public enum DatabaseConfiguration {
     /// Default busy timeout for writer contention against WAL readers.

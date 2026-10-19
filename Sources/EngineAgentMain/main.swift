@@ -11,7 +11,7 @@ import XPCContracts
 
 // Entry point for the per-user LaunchAgent and the app-scoped XPC service.
 // launchd launches the LaunchAgent on demand when the app connects to the Mach
-// service (`02-architecture.md` §2). The agent is the sole database writer and
+// service. The agent is the sole database writer and
 // owns the XPC listener.
 //
 // Ad-hoc / DerivedData builds cannot use launchd MachServices (LWCR kills the

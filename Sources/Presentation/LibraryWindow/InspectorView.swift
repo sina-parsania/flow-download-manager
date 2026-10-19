@@ -5,7 +5,7 @@ import Domain
 import SwiftUI
 import XPCContracts
 
-/// Job detail form for one inspected download (`03-design-system-ui-ux.md` §7).
+/// Job detail form for one inspected download.
 /// Presented inside ``JobDetailSheet``; identity is independent of multi-select.
 struct InspectorView: View {
     let row: JobRowModel

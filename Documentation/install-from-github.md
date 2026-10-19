@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/sina-parsania/flow-download-manager
 What it does:
 
 1. Fetches the latest (or `--tag`) unsigned Release DMG
-2. Verifies the published SHA-256 when available
+2. Verifies the release signature on the published SHA-256, then the DMG against it — and refuses to install if either is missing or wrong
 3. Installs **Flow Download Manager.app** to `~/Applications` (or `/Applications` with `--system`)
 4. Clears `com.apple.quarantine`
 5. Launches Flow (unless `--no-open`)
@@ -147,5 +147,20 @@ authenticated downloads, start Flow first so the direct path is available.
 
 ## Security note
 
-Prefer verifying `*.dmg.sha256` from the Release, or build from a reviewed commit.
-Unsigned binaries trust the GitHub release publisher and your download path.
+The installer checks each DMG's SHA-256, and checks that the SHA-256 itself was signed by the
+release key whose public half is embedded in `Scripts/install.sh`. Replacing a DMG and its
+checksum on GitHub is therefore not enough to get a tampered build installed. The root of trust
+is the installer script itself, served from this repository.
+
+To check a DMG by hand, download `DownloadManager-<version>-unsigned.dmg`, its
+`.sha256` and its `.sha256.sig` from the Release, then:
+
+```bash
+echo 'flow-release namespaces="flow-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILfxPMGAU7b/YzH1eZHp9kxAkZU7ZQbgOYC9MDgNabMH' > allowed_signers
+ssh-keygen -Y verify -f allowed_signers -I flow-release -n flow-release \
+  -s DownloadManager-<version>-unsigned.dmg.sha256.sig < DownloadManager-<version>-unsigned.dmg.sha256
+shasum -a 256 -c DownloadManager-<version>-unsigned.dmg.sha256
+```
+
+v0.3.0 is not signed: its published DMG does not match the checksum on record,
+so the installer refuses it.

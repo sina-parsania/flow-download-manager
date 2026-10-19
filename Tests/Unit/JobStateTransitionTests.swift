@@ -3,10 +3,9 @@
 import Domain
 import XCTest
 
-/// Exhaustive coverage of the job state machine (`04-domain-and-data-contracts.md`
-/// §3). Every ordered pair of the 16 states is asserted against an independently
-/// written expectation table, and the spec's named rules are checked directly so
-/// the two encodings cannot silently drift together.
+/// Exhaustive coverage of the job state machine. Every ordered pair of the 16 states is
+/// asserted against an independently written expectation table, and the spec's named
+/// rules are checked directly so the two encodings cannot silently drift together.
 final class JobStateTransitionTests: XCTestCase {
     /// Expected adjacency, authored from the contract independently of the Domain
     /// implementation. Any pair not listed is forbidden (including self-loops).

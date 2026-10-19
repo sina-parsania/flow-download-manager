@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import Domain
 import Foundation
 
 /// Column sort keys for the download list table. Keys match `NSTableColumn`
@@ -15,21 +16,38 @@ public enum JobTableSortKey: String, Sendable, CaseIterable {
     case started
     case finished
     case location
+
+    /// Direction of the first header click, matching Finder: text and ETA
+    /// start A→Z / soonest-first; sizes, rates, progress and dates start
+    /// biggest / newest-first.
+    public var defaultAscending: Bool {
+        switch self {
+        case .status, .name, .eta, .category, .location: true
+        case .progress, .speed, .size, .started, .finished: false
+        }
+    }
 }
 
 /// Pure ordering for `JobRowModel` rows. Numeric columns compare raw values
 /// (bytes / seconds / fractions), not formatted strings.
 public enum JobTableSorting {
-    /// Stable sort: primary column, then name, then id.
+    /// Stable sort: primary column, then name A→Z, then id. Rows whose cell
+    /// shows "—" for the column sort last in **both** directions, as in Finder,
+    /// so flipping a column never floods the top of the list with blanks.
     public static func sorted(
         _ rows: [JobRowModel],
         by key: JobTableSortKey,
         ascending: Bool
     ) -> [JobRowModel] {
         rows.sorted { lhs, rhs in
-            let primary = compare(lhs, rhs, by: key)
-            if primary != .orderedSame {
-                return ascending ? primary == .orderedAscending : primary == .orderedDescending
+            let lhsBlank = isBlank(lhs, for: key)
+            let rhsBlank = isBlank(rhs, for: key)
+            if lhsBlank != rhsBlank { return rhsBlank }
+            if !lhsBlank {
+                let primary = compare(lhs, rhs, by: key)
+                if primary != .orderedSame {
+                    return ascending == (primary == .orderedAscending)
+                }
             }
             let byName = lhs.name.localizedStandardCompare(rhs.name)
             if byName != .orderedSame {
@@ -39,35 +57,66 @@ public enum JobTableSorting {
         }
     }
 
-    public static func compare(
+    /// True when the column renders "—" (or nothing) for this row. Kept in step
+    /// with `JobRowFormatting`: speed and ETA show "—" at zero, not only at nil.
+    static func isBlank(_ row: JobRowModel, for key: JobTableSortKey) -> Bool {
+        switch key {
+        case .status, .name, .category: false
+        case .progress: row.progressFraction == nil
+        case .speed: row.speedBytesPerSecond <= 0
+        case .eta: (row.etaSeconds ?? 0) <= 0
+        case .size: row.totalBytes == nil
+        case .started: row.startedAt == nil
+        case .finished: row.completedAt == nil
+        case .location: (row.destinationDirectoryPath ?? "").isEmpty
+        }
+    }
+
+    /// Compares two non-blank rows on `key`.
+    static func compare(
         _ lhs: JobRowModel,
         _ rhs: JobRowModel,
         by key: JobTableSortKey
     ) -> ComparisonResult {
         switch key {
         case .status:
-            return lhs.state.displayName.localizedStandardCompare(rhs.state.displayName)
+            order(statusRank(lhs.state), statusRank(rhs.state))
         case .name:
-            return lhs.name.localizedStandardCompare(rhs.name)
+            lhs.name.localizedStandardCompare(rhs.name)
         case .progress:
-            return compareOptionalDouble(lhs.progressFraction, rhs.progressFraction)
+            order(lhs.progressFraction ?? 0, rhs.progressFraction ?? 0)
         case .speed:
-            return compareInt64(lhs.speedBytesPerSecond, rhs.speedBytesPerSecond)
+            order(lhs.speedBytesPerSecond, rhs.speedBytesPerSecond)
         case .eta:
-            return compareOptionalInt(lhs.etaSeconds, rhs.etaSeconds)
+            order(lhs.etaSeconds ?? 0, rhs.etaSeconds ?? 0)
         case .size:
-            return compareOptionalInt64(lhs.totalBytes, rhs.totalBytes)
+            order(lhs.totalBytes ?? 0, rhs.totalBytes ?? 0)
         case .category:
-            let left = categorySortKey(lhs)
-            let right = categorySortKey(rhs)
-            return left.localizedStandardCompare(right)
+            categorySortKey(lhs).localizedStandardCompare(categorySortKey(rhs))
         case .started:
-            return compareOptionalDate(lhs.startedAt, rhs.startedAt)
+            order(lhs.startedAt ?? .distantPast, rhs.startedAt ?? .distantPast)
         case .finished:
-            return compareOptionalDate(lhs.completedAt, rhs.completedAt)
+            order(lhs.completedAt ?? .distantPast, rhs.completedAt ?? .distantPast)
         case .location:
-            return (lhs.destinationDirectoryPath ?? "")
-                .localizedStandardCompare(rhs.destinationDirectoryPath ?? "")
+            (lhs.destinationDirectoryPath ?? "").localizedStandardCompare(rhs.destinationDirectoryPath ?? "")
+        }
+    }
+
+    /// Lifecycle order, not alphabetical: what is moving now, then what is about
+    /// to move, then what needs a hand, then what is finished.
+    static func statusRank(_ state: JobState) -> Int {
+        switch state {
+        case .downloading: 0
+        case .connecting: 1
+        case .verifying, .merging, .postProcessing: 2
+        case .retryWaiting: 3
+        case .awaitingUserSelection: 4
+        case .created, .inspecting: 5
+        case .ready, .queued, .scheduled: 6
+        case .paused: 7
+        case .failed: 8
+        case .cancelled: 9
+        case .completed: 10
         }
     }
 
@@ -76,56 +125,9 @@ public enum JobTableSorting {
             .joined(separator: " · ")
     }
 
-    private static func compareOptionalDate(_ lhs: Date?, _ rhs: Date?) -> ComparisonResult {
-        switch (lhs, rhs) {
-        case (nil, nil): return .orderedSame
-        case (nil, _): return .orderedDescending
-        case (_, nil): return .orderedAscending
-        case let (l?, r?):
-            if l < r { return .orderedAscending }
-            if l > r { return .orderedDescending }
-            return .orderedSame
-        }
-    }
-
-    private static func compareInt64(_ lhs: Int64, _ rhs: Int64) -> ComparisonResult {
+    private static func order<T: Comparable>(_ lhs: T, _ rhs: T) -> ComparisonResult {
         if lhs < rhs { return .orderedAscending }
         if lhs > rhs { return .orderedDescending }
         return .orderedSame
-    }
-
-    /// Missing values sort after known ones when ascending (and before when descending
-    /// via the caller flipping the result).
-    private static func compareOptionalInt64(_ lhs: Int64?, _ rhs: Int64?) -> ComparisonResult {
-        switch (lhs, rhs) {
-        case (nil, nil): return .orderedSame
-        case (nil, _): return .orderedDescending
-        case (_, nil): return .orderedAscending
-        case let (l?, r?): return compareInt64(l, r)
-        }
-    }
-
-    private static func compareOptionalInt(_ lhs: Int?, _ rhs: Int?) -> ComparisonResult {
-        switch (lhs, rhs) {
-        case (nil, nil): return .orderedSame
-        case (nil, _): return .orderedDescending
-        case (_, nil): return .orderedAscending
-        case let (l?, r?):
-            if l < r { return .orderedAscending }
-            if l > r { return .orderedDescending }
-            return .orderedSame
-        }
-    }
-
-    private static func compareOptionalDouble(_ lhs: Double?, _ rhs: Double?) -> ComparisonResult {
-        switch (lhs, rhs) {
-        case (nil, nil): return .orderedSame
-        case (nil, _): return .orderedDescending
-        case (_, nil): return .orderedAscending
-        case let (l?, r?):
-            if l < r { return .orderedAscending }
-            if l > r { return .orderedDescending }
-            return .orderedSame
-        }
     }
 }

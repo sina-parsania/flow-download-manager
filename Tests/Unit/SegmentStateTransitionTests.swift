@@ -3,8 +3,8 @@
 import Domain
 import XCTest
 
-/// Exhaustive coverage of the segment state machine (`04-domain-and-data-contracts.md`
-/// §4). Every ordered pair is asserted against an independently written table.
+/// Exhaustive coverage of the segment state machine. Every ordered pair is asserted
+/// against an independently written table.
 final class SegmentStateTransitionTests: XCTestCase {
     private let expected: [SegmentState: Set<SegmentState>] = [
         .planned: [.connecting, .cancelled],

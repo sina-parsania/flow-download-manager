@@ -4,8 +4,8 @@ import Foundation
 
 /// Monotonically increasing integer schema versions.
 ///
-/// Database, XPC and Native Messaging schemas version independently
-/// (`00-master-plan.md` §5). Phase 0 establishes version 1 of the database and
+/// Database, XPC and Native Messaging schemas version independently.
+/// Phase 0 establishes version 1 of the database and
 /// the XPC protocol; the Native Messaging schema is declared for completeness but
 /// has no shipping surface until Phase 2.
 public enum SchemaVersions {
@@ -13,7 +13,7 @@ public enum SchemaVersions {
     public static let database = 5
 
     /// XPC handshake `protocolVersion`. Unknown major versions are rejected
-    /// before payload decoding (`04-domain-and-data-contracts.md` §9).
+    /// before payload decoding.
     public static let xpcProtocol = 1
 
     /// Native Messaging envelope `protocolVersion`. Phase 2 Chrome host/extension.

@@ -6,7 +6,7 @@ import SharedObservability
 
 /// Availability-neutral projection of `SMAppService.Status` used by the UI. The
 /// app explains background processing and links to System Settings when approval
-/// is required (`bootstrap prompt §4`, `03-design-system-ui-ux.md` §13).
+/// is required.
 public enum LaunchAgentStatus: Equatable, Sendable {
     case notRegistered
     case enabled

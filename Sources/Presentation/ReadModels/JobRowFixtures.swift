@@ -4,8 +4,8 @@ import Domain
 import Foundation
 
 #if DEBUG
-    /// Deterministic fixture read models for the 10,000-row performance baseline
-    /// (`05-quality-testing-release-gates.md` §5). Deterministic: the same
+    /// Deterministic fixture read models for the 10,000-row performance baseline.
+    /// Deterministic: the same
     /// `count`/`seed` always yields the same rows, so measurements are comparable.
     /// Debug-only so fixture data is not linked into the shipping app binary; the
     /// only consumer is `Tests/Performance/TablePerformanceTests.swift`.

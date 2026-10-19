@@ -4,8 +4,7 @@ import Foundation
 import SharedObservability
 import XCTest
 
-/// Redaction primitives must never echo sensitive material
-/// (`02-architecture.md` §16, `06-licensing-security-privacy.md` §4).
+/// Redaction primitives must never echo sensitive material.
 final class ObservabilityRedactionTests: XCTestCase {
     func testRedactedErrorIsDomainAndCodeOnly() {
         let error = NSError(domain: "TestDomain", code: 42, userInfo: [

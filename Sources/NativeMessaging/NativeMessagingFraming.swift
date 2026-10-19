@@ -33,14 +33,18 @@ public enum NativeMessagingFraming {
 
     public static func decodeNext(from buffer: inout Data) throws -> Data? {
         guard buffer.count >= 4 else { return nil }
+        // Unaligned: once a message is trimmed off the front, the next header can
+        // start at any byte offset in the buffer's storage.
         let length: UInt32 = buffer.prefix(4).withUnsafeBytes { raw in
-            raw.load(as: UInt32.self).littleEndian
+            raw.loadUnaligned(as: UInt32.self).littleEndian
         }
         let bodyLength = Int(length)
         guard bodyLength <= maxMessageBytes else { throw FramingError.messageTooLarge }
         guard buffer.count >= 4 + bodyLength else { return nil }
-        let body = buffer.subdata(in: 4 ..< (4 + bodyLength))
-        buffer.removeSubrange(0 ..< (4 + bodyLength))
+        // Offsets from `startIndex`, not 0: a `Data` slice keeps its parent's indices.
+        let start = buffer.startIndex
+        let body = buffer.subdata(in: (start + 4) ..< (start + 4 + bodyLength))
+        buffer.removeSubrange(start ..< (start + 4 + bodyLength))
         return body
     }
 
@@ -48,7 +52,7 @@ public enum NativeMessagingFraming {
         let header = handle.readData(ofLength: 4)
         guard header.count == 4 else { throw FramingError.truncatedHeader }
         let length: UInt32 = header.withUnsafeBytes { raw in
-            raw.load(as: UInt32.self).littleEndian
+            raw.loadUnaligned(as: UInt32.self).littleEndian
         }
         let bodyLength = Int(length)
         guard bodyLength <= maxMessageBytes else { throw FramingError.messageTooLarge }

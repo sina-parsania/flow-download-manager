@@ -6,8 +6,8 @@ import GRDB
 /// Owns the engine's writable database connection.
 ///
 /// Backed by a GRDB `DatabasePool` (WAL, concurrent readers, single writer). Only
-/// the agent constructs this; the app reads through XPC read models
-/// (`02-architecture.md` §9). GRDB's `DatabasePool` is internally thread-safe, so
+/// the agent constructs this; the app reads through XPC read models.
+/// GRDB's `DatabasePool` is internally thread-safe, so
 /// this wrapper is `@unchecked Sendable`.
 public final class EngineDatabase: @unchecked Sendable {
     public let pool: DatabasePool

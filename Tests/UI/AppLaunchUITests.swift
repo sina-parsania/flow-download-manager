@@ -2,7 +2,7 @@
 
 import XCTest
 
-/// Primary-workflow UI automation (`03-design-system-ui-ux.md` §16). Requires an
+/// Primary-workflow UI automation. Requires an
 /// interactive, automation-permitted session; it is wired into the UI plan and run
 /// on a physical/VM UI lane, not the headless fast gate.
 @MainActor

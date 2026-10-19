@@ -4,8 +4,8 @@ import Foundation
 import XCTest
 import XPCContracts
 
-/// Secure-coding round-trips and size-limit enforcement for the XPC DTOs
-/// (`04-domain-and-data-contracts.md` §9). These also cover the `@unchecked
+/// Secure-coding round-trips and size-limit enforcement for the XPC DTOs.
+/// These also cover the `@unchecked
 /// Sendable` DTOs' encode/decode invariant referenced in their declarations.
 final class XPCCodingTests: XCTestCase {
     private func roundTrip<T: NSObject & NSSecureCoding>(_ value: T, as type: T.Type) throws -> T? {
